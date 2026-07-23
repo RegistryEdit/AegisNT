@@ -1,0 +1,22 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="Drivers/MonitorDrv/MonitorDrv.vcxproj">
+    <Deploy />
+  </Project>
+  <Project Path="Drivers/MultiDrv/MultiDrv.vcxproj" Id="4c2e3c6c-f4c7-217d-0b18-36fc0cb3802e">
+    <Deploy />
+  </Project>
+  <Project Path="ModulesProject/ARPDefence/ARPDefence.vcxproj" Id="458bc1f8-d370-4cc0-8f3f-42f596e54681" />
+  <Project Path="ModulesProject/ARPDepend/ARPDepend.vcxproj" Id="1c9b0e05-0eb0-441c-b152-c814f69de7ff" />
+  <Project Path="ModulesProject/ARPFlood/ARPFlood.vcxproj" Id="2400ac20-b7df-4799-9964-257f73949888" />
+  <Project Path="ModulesProject/ARPMitm/ARPMitm.vcxproj" Id="5bcac219-2e9f-453a-8f80-9907bbf01800" />
+  <Project Path="ModulesProject/ARPSniff/ARPSniff.vcxproj" Id="3f81c590-9f4a-4a19-91c1-016ac1f2a585" />
+  <Project Path="ModulesProject/ARPSpoof/ARPSpoof.vcxproj" Id="12e3d66b-a9cc-43f3-98b3-702f658360f3" />
+  <Project Path="ModulesProject/Http2Bomb/Http2Bomb.vcxproj" Id="050af7c9-dfed-4900-9433-880b50285a62" />
+  <Project Path="ModulesProject/Payload/PixelSmash/PixelSmash.vcxproj" Id="1a3f3ea3-5b6a-493c-83a7-123d7f8f5cee" />
+  <Project Path="ModulesProject/Payload/Reverse_tcp/reverse_tcp.vcxproj" Id="f814031a-0939-47bf-b5f3-4cb668b07049" />
+  <Project Path="ModulesProject/Payload/Server/RemoteServer.vcxproj" Id="a1b2c3d4-e5f6-7890-abcd-ef1234567890" />
+  <Project Path="AegisNT.vcxproj" Id="5b98a043-9b4f-4515-a626-a4dbcfd98954" />
+</Solution>

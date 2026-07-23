@@ -1,0 +1,76 @@
+{
+    "Application": {
+        "FPS": 90,
+        "Height": 1000,
+        "Opacity": 1,
+        "Title": "Windows Tool",
+        "Version": "2.0.0-pre1",
+        "Width": 1600
+    },
+    "Drivers": {
+        "AutoLoad": true,
+        "Paths": [
+            "./Drivers"
+        ]
+    },
+    "Modules": {
+        "AutoLoad": true,
+        "Paths": [
+            "./Modules"
+        ]
+    },
+    "Payload": {
+        "Encoder": [
+            "1",
+            "2",
+            "3"
+        ],
+        "Nop": [
+            "1",
+            "4"
+        ]
+    },
+    "PayloadShell": {
+        "Host": "127.0.0.1",
+        "Hosts": [
+            {
+                "Host": "127.0.0.1",
+                "Port": "4444"
+            }
+        ],
+        "Port": "4444",
+        "SelectedHost": 0
+    },
+    "Theme": {
+        "AccentColor": "#2E6CFF",
+        "AccentHoverColor": "#3E7BFF",
+        "AccentPressedColor": "#2458D9",
+        "BackgroundColor": "#F4F6FA",
+        "BackgroundMaterial": 0,
+        "BorderColor": "#D7DDE8",
+        "CardSurfaceColor": "#FFFFFF",
+        "CornerRadius": 4,
+        "DangerColor": "#C53D32",
+        "DarkMode": false,
+        "Density": 99,
+        "DividerColor": "#E6EBF2",
+        "EnablePageTransition": true,
+        "FontScale": 100,
+        "InputSurfaceColor": "#FFFFFF",
+        "MutedTextColor": "#667287",
+        "PageBackgroundColor": "#F4F6FA",
+        "PopupSurfaceColor": "#FFFFFF",
+        "SelectionTextColor": "#FFFFFF",
+        "SuccessColor": "#1E8A5D",
+        "SurfaceColor": "#FFFFFF",
+        "SurfaceElevatedColor": "#F8FAFD",
+        "SurfaceSunkenColor": "#EDF1F7",
+        "TableSurfaceColor": "#FFFFFF",
+        "TextColor": "#18212F",
+        "UseMonoForTechnicalFields": true,
+        "WallpaperMode": 0,
+        "WallpaperOpacity": 28,
+        "WallpaperPath": "",
+        "WarningColor": "#D98A14"
+    }
+}

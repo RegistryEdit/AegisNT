@@ -1,0 +1,8 @@
+
+/.vs/
+/Bin/
+/x64/
+/AegisNT/
+/Drivers/
+*.ps1
+/.agents/
