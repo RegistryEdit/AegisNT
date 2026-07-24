@@ -5385,7 +5385,8 @@ class TaskManagerPage final : public QWidget
         PathLayout->addWidget(BrowseButton);
         auto *MethodLabel = MakeLabel("Injection method", 11, KTextPrimary, QFont::DemiBold);
         auto *Method = new ComboBox;
-        Method->addItems({"CreateRemoteThread", "NtCreateThreadEx", "QueueUserAPC", "SetWindowsHookEx"});
+        Method->addItems({"R3CreateRemoteThread", "R3NtCreateThreadEx", "R3QueueUserAPC",
+                          "R3SetWindowsHookEx", "R0DllInjectApc", "R0DllInjectThread"});
         Method->setCurrentIndex(0);
         Dialog->viewLayout()->addWidget(Title);
         Dialog->viewLayout()->addWidget(Description);
@@ -5419,6 +5420,8 @@ class TaskManagerPage final : public QWidget
             case 1: Result = Inject_NtCreateThreadEx(Pid, WidePath); break;
             case 2: Result = Inject_QueueUserAPC(Pid, WidePath); break;
             case 3: Result = Inject_SetWindowsHookEx(Pid, WidePath); break;
+            case 4: Result = DllInjectApc(Pid, WidePath.c_str()); break;
+            case 5: Result = DllInjectThread(Pid, WidePath.c_str()); break;
             default: break;
             }
             Dialog->accept();
@@ -5652,7 +5655,8 @@ class MonitorManagerPage final : public QWidget
         ProcessTarget = new LineEdit;
         ProcessTarget->setPlaceholderText("Process PID or name");
         ProcessMethod = new ComboBox;
-        ProcessMethod->addItems({"CreateRemoteThread", "NtCreateThreadEx", "QueueUserAPC", "SetWindowsHookEx"});
+        ProcessMethod->addItems({"R3CreateRemoteThread", "R3NtCreateThreadEx", "R3QueueUserAPC",
+                                 "R3SetWindowsHookEx", "R0DllInjectApc", "R0DllInjectThread"});
         ProcessMethod->setCurrentIndex(0);
         ProcessStart = MakeButton("Start", true);
         ProcessStop = MakeButton("Stop");
@@ -5972,6 +5976,8 @@ class MonitorManagerPage final : public QWidget
         case 1: Result = Inject_NtCreateThreadEx(Pid, DllPath.wstring()); break;
         case 2: Result = Inject_QueueUserAPC(Pid, DllPath.wstring()); break;
         case 3: Result = Inject_SetWindowsHookEx(Pid, DllPath.wstring()); break;
+        case 4: Result = DllInjectApc(Pid, DllPath.wstring().c_str()); break;
+        case 5: Result = DllInjectThread(Pid, DllPath.wstring().c_str()); break;
         }
         if (!Result) { Dll->Stop(); Dll.reset(); ShowErrorNotice(this, "Monitor", "MonitorHook.dll injection failed."); return; }
         ProcessRunning = true; ProcessTarget->setEnabled(false); ProcessMethod->setEnabled(false);

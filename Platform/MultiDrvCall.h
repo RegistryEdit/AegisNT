@@ -67,6 +67,8 @@
 #define IOCTL_KERNEL_WRITE_MEMORY    CTL_CODE(0x8000, 0x83D, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_DISABLE_DSE            CTL_CODE(0x8000, 0x83E, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_RESTORE_DSE            CTL_CODE(0x8000, 0x83F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DLL_INJECT_APC         CTL_CODE(0x8000, 0x840, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DLL_INJECT_THREAD      CTL_CODE(0x8000, 0x841, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define CALLBACK_TYPE_OB_PROCESS   0
 #define CALLBACK_TYPE_OB_THREAD    1
@@ -181,6 +183,11 @@ typedef struct _TERMINATE_THREAD_INPUT {
 
 #define ACCOUNT_TYPE_SYSTEM           0
 #define ACCOUNT_TYPE_TRUSTEDINSTALLER 1
+
+typedef struct _DLL_INJECT_INPUT {
+	ULONG  ProcessId;
+	WCHAR  DllPath[260];
+} DLL_INJECT_INPUT;
 
 typedef struct _LAUNCH_AS_INPUT {
 	ULONG  AccountType;
@@ -1004,6 +1011,44 @@ BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId)
 	G_LastMultiDrvError = WAIT_TIMEOUT;
 	wprintf(L"[!] TID=%u did not terminate within the verification window.\n", ThreadId);
 	return FALSE;
+}
+
+BOOLEAN DllInjectApc(ULONG ProcessId, const WCHAR* DllPath)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	if (DllPath == NULL || DllPath[0] == L'\0')
+	{
+		G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+		return FALSE;
+	}
+
+	DLL_INJECT_INPUT Input = { 0 };
+	Input.ProcessId = ProcessId;
+	wcsncpy_s(Input.DllPath, 260, DllPath, _TRUNCATE);
+
+	const BOOLEAN Success = SendIoctl(IOCTL_DLL_INJECT_APC, &Input, sizeof(Input));
+	if (Success)
+		wprintf(L"[+] APC DLL injection queued to PID=%u: %s\n", ProcessId, DllPath);
+	return Success;
+}
+
+BOOLEAN DllInjectThread(ULONG ProcessId, const WCHAR* DllPath)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	if (DllPath == NULL || DllPath[0] == L'\0')
+	{
+		G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+		return FALSE;
+	}
+
+	DLL_INJECT_INPUT Input = { 0 };
+	Input.ProcessId = ProcessId;
+	wcsncpy_s(Input.DllPath, 260, DllPath, _TRUNCATE);
+
+	const BOOLEAN Success = SendIoctl(IOCTL_DLL_INJECT_THREAD, &Input, sizeof(Input));
+	if (Success)
+		wprintf(L"[+] Remote thread DLL injection launched in PID=%u: %s\n", ProcessId, DllPath);
+	return Success;
 }
 
 VOID EnumProcesses()
