@@ -8856,15 +8856,22 @@ class WindowManagerPage final : public QWidget
         DWORD TargetPid = 0;
         GetWindowThreadProcessId(Handle, &TargetPid);
         const bool IsOwnWindow = TargetPid == GetCurrentProcessId();
+        const bool IsProtected = IsTrackedProtectedWindow((ULONG64)(ULONG_PTR)Handle);
         auto *Menu = new RoundMenu(QString(), this);
-        const auto AddAction = [this, Menu, Handle](const QString &Text, const std::function<bool(HWND)> &Action) {
+        const auto AddAction = [this, Menu, Handle, IsProtected](const QString &Text, const std::function<bool(HWND)> &Action) {
             auto *Item = new QAction(Text, Menu);
             Menu->addAction(Item);
             ConnectMenuAction(Item, this, [this, Handle, Text, Action] {
+                if (IsTrackedProtectedWindow((ULONG64)(ULONG_PTR)Handle))
+                {
+                    ShowWarningNotice(this, "Window", "This window is protected. Unprotect it first.");
+                    return;
+                }
                 if (Action(Handle)) ShowSuccessNotice(this, "Window", Text + " completed.");
                 else ShowErrorNotice(this, "Window", Text + " failed.");
                 QTimer::singleShot(150, this, [this] { Refresh(); });
             });
+            if (IsProtected && Text != "Ping") Item->setEnabled(false);
         };
         AddAction("Show / Activate", [](HWND H) { ShowWindow(H, SW_SHOW); return SetForegroundWindow(H) != FALSE; });
         if (!IsOwnWindow) AddAction("Hide", [](HWND H) { ShowWindow(H, SW_HIDE); return IsWindow(H) != FALSE; });
@@ -8903,7 +8910,7 @@ class WindowManagerPage final : public QWidget
                     BOOL Result = FALSE;
                     if (G_DeviceHandle != INVALID_HANDLE_VALUE)
                         Result = KernelOp();
-                    if (!Result && UserOp)
+                    else if (UserOp)
                         Result = UserOp(Handle);
                     if (Result) ShowSuccessNotice(this, "Window", Text + " completed.");
                     else ShowErrorNotice(this, "Window", Text + " failed.");
@@ -8992,6 +8999,16 @@ class WindowManagerPage final : public QWidget
                 auto *Item = new QAction(Text, Menu);
                 Menu->addAction(Item);
                 ConnectMenuAction(Item, this, [this, Text, Action] {
+                    const QModelIndex Current = WindowTable->currentIndex();
+                    if (Current.isValid())
+                    {
+                        const auto Hwnd = WindowTable->item(Current.row(), 0)->data(Qt::UserRole).toULongLong();
+                        if (IsTrackedProtectedWindow(Hwnd))
+                        {
+                            ShowWarningNotice(this, "Window", "This window is protected. Unprotect it first.");
+                            return;
+                        }
+                    }
                     if (Action()) ShowSuccessNotice(this, "Window", Text + " completed.");
                     else ShowErrorNotice(this, "Window", Text + " failed.");
                     QTimer::singleShot(150, this, [this] { Refresh(); });
@@ -9032,35 +9049,61 @@ class WindowManagerPage final : public QWidget
     struct ProtectedWin { ULONG64 Hwnd; ULONG Pid; QString Title; ULONG Flags; };
     std::vector<ProtectedWin> ProtectedWindows;
 
+    bool IsTrackedProtectedWindow(ULONG64 Hwnd) const
+    {
+        return std::any_of(ProtectedWindows.begin(), ProtectedWindows.end(),
+            [Hwnd](const ProtectedWin &Entry) { return Entry.Hwnd == Hwnd; });
+    }
+
     void ProtectWindowEntry(ULONG Pid, ULONG64 Hwnd, const QString &Title)
     {
-        for (const auto &P : ProtectedWindows)
-            if (P.Hwnd == Hwnd) return;
-        if (G_DeviceHandle != INVALID_HANDLE_VALUE)
-            ProtectWindowKernel(Pid, Hwnd, WINPROT_ALL);
+        if (IsTrackedProtectedWindow(Hwnd))
+        {
+            ShowWarningNotice(this, "Window", "This window is already protected.");
+            return;
+        }
+        if (G_DeviceHandle == INVALID_HANDLE_VALUE)
+        {
+            ShowErrorNotice(this, "Window", "Kernel driver is not available.");
+            return;
+        }
+        if (!ProtectWindowKernel(Pid, Hwnd, WINPROT_ALL))
+        {
+            ShowErrorNotice(this, "Window",
+                QString("Protect failed. Error: %1").arg(G_LastMultiDrvError));
+            return;
+        }
         ProtectedWindows.push_back({Hwnd, Pid, Title, WINPROT_ALL});
         RefreshProtectedTable();
+        ShowSuccessNotice(this, "Window", "Window protected.");
     }
 
     void UnprotectSelected()
     {
         std::vector<ProtectedWin> ToRemove;
+        QStringList Failures;
         for (const QModelIndex &Idx : ProtectedTable->selectionModel()->selectedRows(0))
         {
             ULONG64 Hwnd = Idx.data(Qt::UserRole).toULongLong();
             ULONG Pid = Idx.data(Qt::UserRole + 1).toUInt();
             for (const auto &P : ProtectedWindows)
                 if (P.Hwnd == Hwnd) { ToRemove.push_back(P); break; }
-            if (G_DeviceHandle != INVALID_HANDLE_VALUE)
-                UnprotectWindowKernel(Pid, Hwnd);
+            if (G_DeviceHandle == INVALID_HANDLE_VALUE || !UnprotectWindowKernel(Pid, Hwnd))
+                Failures.append(QString("0x%1").arg(Hwnd, 0, 16));
         }
         for (const auto &P : ToRemove)
         {
+            if (Failures.contains(QString("0x%1").arg(P.Hwnd, 0, 16), Qt::CaseInsensitive))
+                continue;
             auto It = std::find_if(ProtectedWindows.begin(), ProtectedWindows.end(),
                 [&P](const ProtectedWin &W) { return W.Hwnd == P.Hwnd; });
             if (It != ProtectedWindows.end()) ProtectedWindows.erase(It);
         }
         RefreshProtectedTable();
+        if (Failures.isEmpty())
+            ShowSuccessNotice(this, "Window", "Selected window protection removed.");
+        else
+            ShowErrorNotice(this, "Window", "Failed to unprotect:\n" + Failures.join('\n'));
     }
 
     void RefreshProtectedTable()
