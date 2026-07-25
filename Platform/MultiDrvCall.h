@@ -69,6 +69,9 @@
 #define IOCTL_RESTORE_DSE            CTL_CODE(0x8000, 0x83F, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_DLL_INJECT_APC         CTL_CODE(0x8000, 0x840, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_DLL_INJECT_THREAD      CTL_CODE(0x8000, 0x841, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENABLE_DEBUG           CTL_CODE(0x8000, 0x842, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DISABLE_DEBUG          CTL_CODE(0x8000, 0x843, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_DEBUG_STATE      CTL_CODE(0x8000, 0x844, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define CALLBACK_TYPE_OB_PROCESS   0
 #define CALLBACK_TYPE_OB_THREAD    1
@@ -267,6 +270,29 @@ typedef struct _DSE_CONTROL_OUTPUT {
 	ULONG     CurrentValue;
 	ULONG     Status;
 } DSE_CONTROL_OUTPUT, * PDSE_CONTROL_OUTPUT;
+
+#define DEBUG_VAR_COUNT 6
+
+typedef struct _DEBUG_VAR_ENTRY {
+	ULONG_PTR Address;
+	WCHAR     Name[32];
+	UCHAR     OriginalValue;
+	UCHAR     CurrentValue;
+	UCHAR     DesiredEnabledValue;
+	BOOLEAN   Found;
+	UCHAR     _Pad[4];
+} DEBUG_VAR_ENTRY, * PDEBUG_VAR_ENTRY;
+
+static_assert(sizeof(DEBUG_VAR_ENTRY) == 80, "DEBUG_VAR_ENTRY ABI mismatch");
+
+typedef struct _DEBUG_STATE_OUTPUT {
+	ULONG           TotalFound;
+	ULONG           PatchedSuccessCount;
+	BOOLEAN         IsPatched;
+	UCHAR           _Pad1[3];
+	ULONG           Status;
+	DEBUG_VAR_ENTRY Vars[DEBUG_VAR_COUNT];
+} DEBUG_STATE_OUTPUT, * PDEBUG_STATE_OUTPUT;
 
 typedef struct _SYSTEM_TABLES_OUTPUT {
 	ULONG_PTR IdtBase;
@@ -1856,6 +1882,38 @@ BOOLEAN RestoreDse(PDSE_CONTROL_OUTPUT Output = NULL)
 	if (Success && Result.Status != 0)
 	{
 		G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.Status);
+		return FALSE;
+	}
+
+	return Success;
+}
+
+BOOLEAN EnableDebug()
+{
+	return SendIoctl(IOCTL_ENABLE_DEBUG, NULL, 0);
+}
+
+BOOLEAN DisableDebug()
+{
+	return SendIoctl(IOCTL_DISABLE_DEBUG, NULL, 0);
+}
+
+BOOLEAN QueryDebugState(PDEBUG_STATE_OUTPUT Output)
+{
+	if (Output == NULL)
+	{
+		G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+		return FALSE;
+	}
+
+	ZeroMemory(Output, sizeof(*Output));
+	DWORD BytesReturned = 0;
+	BOOLEAN Success = SendIoctlWithOutput(IOCTL_QUERY_DEBUG_STATE, NULL, 0,
+		Output, sizeof(*Output), &BytesReturned);
+
+	if (Success && Output->Status != 0)
+	{
+		G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
 		return FALSE;
 	}
 

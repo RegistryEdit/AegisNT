@@ -10204,6 +10204,13 @@ QWidget *CreateKernelInspectorPage()
         QTableWidget *Table = nullptr;
         BodyLabel *Count = nullptr;
     };
+    struct DebugWidgets {
+        BodyLabel *Summary = nullptr;
+        BodyLabel *Count = nullptr;
+        QTableWidget *Table = nullptr;
+        PushButton *Enable = nullptr;
+        PushButton *Disable = nullptr;
+    };
     auto *Page = new QWidget;
     auto *Layout = new QVBoxLayout(Page);
     ConfigurePageLayout(Layout);
@@ -10250,6 +10257,41 @@ QWidget *CreateKernelInspectorPage()
     Layout->addWidget(Tabs);
     Layout->addWidget(Pages, 1);
     auto State = std::make_shared<std::vector<InspectorTab>>();
+    auto DebugStateUi = std::make_shared<DebugWidgets>();
+    {
+        auto *TabPage = new QWidget;
+        auto *TabLayout = new QVBoxLayout(TabPage);
+        TabLayout->setContentsMargins(0, 0, 0, 0);
+        TabLayout->setSpacing(8);
+
+        auto *MetaLayout = new QHBoxLayout;
+        MetaLayout->setContentsMargins(2, 0, 2, 0);
+        DebugStateUi->Summary = new BodyLabel("Current debug state: Unknown");
+        DebugStateUi->Count = new BodyLabel("0 variables");
+        DebugStateUi->Enable = new PushButton("EnableDebug");
+        DebugStateUi->Disable = new PushButton("DisableDebug");
+        MetaLayout->addWidget(DebugStateUi->Summary);
+        MetaLayout->addStretch();
+        MetaLayout->addWidget(DebugStateUi->Count);
+        MetaLayout->addWidget(DebugStateUi->Enable);
+        MetaLayout->addWidget(DebugStateUi->Disable);
+        TabLayout->addLayout(MetaLayout);
+
+        DebugStateUi->Table = MakeTable({"Variable", "Found", "Address", "Original", "Current", "Desired", "State"});
+        DebugStateUi->Table->setSortingEnabled(true);
+        DebugStateUi->Table->setTextElideMode(Qt::ElideRight);
+        DebugStateUi->Table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        DebugStateUi->Table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        DebugStateUi->Table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        DebugStateUi->Table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+        DebugStateUi->Table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+        DebugStateUi->Table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+        DebugStateUi->Table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Stretch);
+        TabLayout->addWidget(DebugStateUi->Table, 1);
+
+        Tabs->addTab("kernel-debug", "Debug", Fluent::IconType::DEVELOPER_TOOLS);
+        Pages->addWidget(TabPage);
+    }
     const std::array<std::tuple<DWORD, const char*, const wchar_t*, Fluent::IconType>, 8> Definitions{{
         {IOCTL_QUERY_MEMORY_V2, "Memory", L"", Fluent::IconType::TILES},
         {IOCTL_ENUM_BIG_POOL_V2, "Big Pool", L"", Fluent::IconType::LAYOUT},
@@ -10290,8 +10332,14 @@ QWidget *CreateKernelInspectorPage()
     }
     QObject::connect(Tabs, &TabBar::currentChanged, Pages, &QStackedWidget::setCurrentIndex);
     QObject::connect(Pages, &QStackedWidget::currentChanged, Tabs, &TabBar::setCurrentIndex);
-    const auto ApplyFilter = [Search, State] {
+    const auto ApplyFilter = [Search, State, DebugStateUi] {
         const QString Query = Search->text().trimmed();
+        for (int Row = 0; Row < DebugStateUi->Table->rowCount(); ++Row) {
+            QString RowText;
+            for (int Column = 0; Column < DebugStateUi->Table->columnCount(); ++Column)
+                if (const QTableWidgetItem *Item = DebugStateUi->Table->item(Row, Column)) RowText += Item->text() + ' ';
+            DebugStateUi->Table->setRowHidden(Row, !Query.isEmpty() && !RowText.contains(Query, Qt::CaseInsensitive));
+        }
         for (const InspectorTab &Tab : *State) {
             for (int Row = 0; Row < Tab.Table->rowCount(); ++Row) {
                 QString RowText;
@@ -10302,23 +10350,33 @@ QWidget *CreateKernelInspectorPage()
         }
     };
     QObject::connect(Search, &QLineEdit::textChanged, Page, [ApplyFilter] { ApplyFilter(); });
-    QObject::connect(Refresh, &QPushButton::clicked, Page, [Page, Refresh, Status, Loading, State, ApplyFilter] {
+    QObject::connect(Refresh, &QPushButton::clicked, Page, [Page, Refresh, Status, Loading, State, DebugStateUi, ApplyFilter] {
         Refresh->setEnabled(false);
+        DebugStateUi->Enable->setEnabled(false);
+        DebugStateUi->Disable->setEnabled(false);
         Refresh->setText("Refreshing...");
         Status->setText("Reading kernel inventory...");
         Loading->show();
         Loading->start();
         QPointer<QWidget> SafePage(Page);
-        std::thread([SafePage, Refresh, Status, Loading, State, ApplyFilter] {
+        std::thread([SafePage, Refresh, Status, Loading, State, DebugStateUi, ApplyFilter] {
+            struct DebugResult {
+                bool Success = false;
+                DWORD ErrorCode = ERROR_SUCCESS;
+                DEBUG_STATE_OUTPUT State{};
+            };
             struct Result { MDV2_LIST_HEADER Header{}; std::vector<MDV2_RECORD> Records; };
+            DebugResult DebugResultData;
+            DebugResultData.Success = QueryDebugState(&DebugResultData.State);
+            DebugResultData.ErrorCode = G_LastMultiDrvError;
             std::vector<Result> Results(State->size());
             for (size_t Index = 0; Index < State->size(); ++Index) {
                 MDV2_QUERY_INPUT Request{}; Request.MaxEntries = MDV2_MAX_PAGE_RECORDS;
                 if (!(*State)[Index].Path.isEmpty()) wcsncpy_s(Request.Path, (*State)[Index].Path.toStdWString().c_str(), _TRUNCATE);
                 QueryMultiDrvRecordsV2((*State)[Index].Ioctl, Request, Results[Index].Records, &Results[Index].Header);
             }
-            QMetaObject::invokeMethod(qApp, [SafePage, Refresh, Status, Loading, State, ApplyFilter,
-                                             Results = std::move(Results)]() mutable {
+            QMetaObject::invokeMethod(qApp, [SafePage, Refresh, Status, Loading, State, DebugStateUi, ApplyFilter,
+                                             DebugResultData, Results = std::move(Results)]() mutable {
                 if (!SafePage) return;
                 const auto Hex = [](qulonglong Value) { return QString("0x%1").arg(Value, 0, 16).toUpper(); };
                 const auto SourceName = [](ULONG Source) {
@@ -10331,7 +10389,50 @@ QWidget *CreateKernelInspectorPage()
                     static const std::array<const char *, 4> Names{"Unavailable", "Low", "Medium", "High"};
                     return Confidence < Names.size() ? QString::fromLatin1(Names[Confidence]) : QString("Level %1").arg(Confidence);
                 };
+                const auto ByteValue = [](UCHAR Value) { return QString("0x%1").arg(Value, 2, 16, QLatin1Char('0')).toUpper(); };
                 size_t TotalRecords = 0;
+                DebugStateUi->Table->setSortingEnabled(false);
+                DebugStateUi->Table->clearContents();
+                DebugStateUi->Table->setRowCount(0);
+                if (DebugResultData.Success) {
+                    int EnabledCount = 0;
+                    for (int Index = 0; Index < DEBUG_VAR_COUNT; ++Index) {
+                        const DEBUG_VAR_ENTRY &Entry = DebugResultData.State.Vars[Index];
+                        const bool IsEnabled = Entry.Found && Entry.CurrentValue == Entry.DesiredEnabledValue;
+                        if (IsEnabled)
+                            ++EnabledCount;
+                        const int Row = DebugStateUi->Table->rowCount();
+                        DebugStateUi->Table->insertRow(Row);
+                        const QStringList Values{
+                            QString::fromWCharArray(Entry.Name),
+                            Entry.Found ? "Yes" : "No",
+                            Entry.Address ? Hex(Entry.Address) : "-",
+                            ByteValue(Entry.OriginalValue),
+                            ByteValue(Entry.CurrentValue),
+                            ByteValue(Entry.DesiredEnabledValue),
+                            !Entry.Found ? "Not found" : (IsEnabled ? "Enabled target applied" : "Disabled / mismatched")
+                        };
+                        for (int Column = 0; Column < Values.size(); ++Column)
+                            DebugStateUi->Table->setItem(Row, Column, new QTableWidgetItem(Values[Column]));
+                        DebugStateUi->Table->setRowHeight(Row, 36);
+                    }
+                    const QString OverallState =
+                        DebugResultData.State.TotalFound == 0 ? "Unavailable" :
+                        (EnabledCount == static_cast<int>(DebugResultData.State.TotalFound) ? "Enabled" :
+                         (EnabledCount == 0 ? "Disabled" : "Partial"));
+                    DebugStateUi->Summary->setText(QString("Current debug state: %1").arg(OverallState));
+                    DebugStateUi->Count->setText(QString("%1/%2 variables found, %3 patched")
+                        .arg(DebugResultData.State.TotalFound)
+                        .arg(DEBUG_VAR_COUNT)
+                        .arg(DebugResultData.State.PatchedSuccessCount));
+                } else {
+                    DebugStateUi->Table->insertRow(0);
+                    DebugStateUi->Table->setItem(0, 0, new QTableWidgetItem("Debug state query failed"));
+                    DebugStateUi->Table->setItem(0, 6, new QTableWidgetItem(QString("Win32 error %1").arg(DebugResultData.ErrorCode)));
+                    DebugStateUi->Summary->setText("Current debug state: Query failed");
+                    DebugStateUi->Count->setText("0 variables");
+                }
+                DebugStateUi->Table->setSortingEnabled(true);
                 for (size_t Index = 0; Index < State->size(); ++Index) {
                     QTableWidget *Table = (*State)[Index].Table; Table->setSortingEnabled(false); Table->clearContents(); Table->setRowCount(0);
                     for (const auto &Record : Results[Index].Records) {
@@ -10363,11 +10464,45 @@ QWidget *CreateKernelInspectorPage()
                 Loading->stop();
                 Loading->hide();
                 Refresh->setEnabled(true);
+                DebugStateUi->Enable->setEnabled(true);
+                DebugStateUi->Disable->setEnabled(true);
                 Refresh->setText("Refresh");
                 Status->setText(QString("%1 records").arg(TotalRecords));
             }, Qt::QueuedConnection);
         }).detach();
     });
+    const auto RunDebugAction = [Page, Refresh, Status, Loading, DebugStateUi](bool Enable) {
+        DebugStateUi->Enable->setEnabled(false);
+        DebugStateUi->Disable->setEnabled(false);
+        Refresh->setEnabled(false);
+        Status->setText(Enable ? "Enabling kernel debug..." : "Disabling kernel debug...");
+        Loading->show();
+        Loading->start();
+        QPointer<QWidget> SafePage(Page);
+        std::thread([SafePage, Refresh, Status, Loading, DebugStateUi, Enable] {
+            const bool Success = Enable ? EnableDebug() : DisableDebug();
+            const DWORD ErrorCode = G_LastMultiDrvError;
+            QMetaObject::invokeMethod(qApp, [SafePage, Refresh, Status, Loading, DebugStateUi, Enable, Success, ErrorCode] {
+                if (!SafePage) return;
+                Loading->stop();
+                Loading->hide();
+                Refresh->setEnabled(true);
+                DebugStateUi->Enable->setEnabled(true);
+                DebugStateUi->Disable->setEnabled(true);
+                if (!Success) {
+                    Status->setText(QString("%1 failed").arg(Enable ? "EnableDebug" : "DisableDebug"));
+                    ShowErrorNotice(SafePage, "Kernel Inspector",
+                        QString("%1 failed (error %2).").arg(Enable ? "EnableDebug" : "DisableDebug").arg(ErrorCode));
+                } else {
+                    ShowSuccessNotice(SafePage, "Kernel Inspector",
+                        Enable ? "EnableDebug completed." : "DisableDebug completed.");
+                    QTimer::singleShot(0, Refresh, &QPushButton::click);
+                }
+            }, Qt::QueuedConnection);
+        }).detach();
+    };
+    QObject::connect(DebugStateUi->Enable, &QPushButton::clicked, Page, [RunDebugAction] { RunDebugAction(true); });
+    QObject::connect(DebugStateUi->Disable, &QPushButton::clicked, Page, [RunDebugAction] { RunDebugAction(false); });
     QTimer::singleShot(0, Refresh, &QPushButton::click);
     return Page;
 }
