@@ -352,6 +352,104 @@ bool EnumerateFirewallRulesFallback(std::vector<std::tuple<QString, ULONG, ULONG
     return Added > 0;
 }
 
+bool WithFirewallPolicy(const std::function<bool(INetFwPolicy2 *)> &Callback)
+{
+    const HRESULT InitHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool CoInitialized = SUCCEEDED(InitHr);
+    const bool ComReady = SUCCEEDED(InitHr) || InitHr == RPC_E_CHANGED_MODE;
+    if (!ComReady)
+        return false;
+    INetFwPolicy2 *Policy = nullptr;
+    const HRESULT Hr = CoCreateInstance(__uuidof(NetFwPolicy2), nullptr, CLSCTX_INPROC_SERVER,
+        __uuidof(INetFwPolicy2), reinterpret_cast<void **>(&Policy));
+    if (FAILED(Hr) || Policy == nullptr)
+    {
+        if (CoInitialized)
+            CoUninitialize();
+        return false;
+    }
+    const bool Result = Callback(Policy);
+    Policy->Release();
+    if (CoInitialized)
+        CoUninitialize();
+    return Result;
+}
+
+bool AddFirewallRuleFallback(const QString &Name, ULONG Action, ULONG Protocol, ULONG Port)
+{
+    return WithFirewallPolicy([&](INetFwPolicy2 *Policy) {
+        INetFwRules *Rules = nullptr;
+        if (FAILED(Policy->get_Rules(&Rules)) || Rules == nullptr)
+            return false;
+
+        INetFwRule *Rule = nullptr;
+        const HRESULT CreateHr = CoCreateInstance(__uuidof(NetFwRule), nullptr, CLSCTX_INPROC_SERVER,
+            __uuidof(INetFwRule), reinterpret_cast<void **>(&Rule));
+        if (FAILED(CreateHr) || Rule == nullptr)
+        {
+            Rules->Release();
+            return false;
+        }
+
+        const std::wstring RuleName = Name.toStdWString();
+        const std::wstring PortText = std::to_wstring(Port);
+        BSTR NameBstr = SysAllocString(RuleName.c_str());
+        BSTR PortBstr = SysAllocString(PortText.c_str());
+        BSTR DescriptionBstr = SysAllocString(L"AegisNT firewall rule");
+        Rule->put_Name(NameBstr);
+        Rule->put_Description(DescriptionBstr);
+        Rule->put_Protocol(static_cast<long>(Protocol));
+        Rule->put_LocalPorts(PortBstr);
+        Rule->put_Action(Action == 0 ? NET_FW_ACTION_BLOCK : NET_FW_ACTION_ALLOW);
+        Rule->put_Direction(NET_FW_RULE_DIR_IN);
+        Rule->put_Profiles(NET_FW_PROFILE2_ALL);
+        Rule->put_Enabled(VARIANT_TRUE);
+        const HRESULT AddHr = Rules->Add(Rule);
+
+        SysFreeString(NameBstr);
+        SysFreeString(PortBstr);
+        SysFreeString(DescriptionBstr);
+        Rule->Release();
+        Rules->Release();
+        return SUCCEEDED(AddHr);
+    });
+}
+
+bool RemoveFirewallRuleFallback(const QString &Name)
+{
+    return WithFirewallPolicy([&](INetFwPolicy2 *Policy) {
+        INetFwRules *Rules = nullptr;
+        if (FAILED(Policy->get_Rules(&Rules)) || Rules == nullptr)
+            return false;
+        const std::wstring RuleName = Name.toStdWString();
+        BSTR NameBstr = SysAllocString(RuleName.c_str());
+        const HRESULT Hr = Rules->Remove(NameBstr);
+        SysFreeString(NameBstr);
+        Rules->Release();
+        return SUCCEEDED(Hr);
+    });
+}
+
+bool SetFirewallRuleEnabledFallback(const QString &Name, bool Enabled)
+{
+    return WithFirewallPolicy([&](INetFwPolicy2 *Policy) {
+        INetFwRules *Rules = nullptr;
+        if (FAILED(Policy->get_Rules(&Rules)) || Rules == nullptr)
+            return false;
+        const std::wstring RuleName = Name.toStdWString();
+        BSTR NameBstr = SysAllocString(RuleName.c_str());
+        INetFwRule *Rule = nullptr;
+        const HRESULT ItemHr = Rules->Item(NameBstr, &Rule);
+        SysFreeString(NameBstr);
+        Rules->Release();
+        if (FAILED(ItemHr) || Rule == nullptr)
+            return false;
+        const HRESULT Hr = Rule->put_Enabled(Enabled ? VARIANT_TRUE : VARIANT_FALSE);
+        Rule->Release();
+        return SUCCEEDED(Hr);
+    });
+}
+
 bool QueryDirectorySyncObjects(const wchar_t *Path, ULONG DirectoryId,
                                std::vector<std::tuple<QString, QString, ULONG>> &Entries)
 {
@@ -1310,6 +1408,48 @@ std::string Utf8Bytes(const QString &Text)
 {
     const QByteArray Bytes = Text.toUtf8();
     return std::string(Bytes.constData(), static_cast<size_t>(Bytes.size()));
+}
+
+QString DecodeMultiByteText(UINT CodePage, DWORD Flags, const QByteArray &Bytes)
+{
+    if (Bytes.isEmpty())
+        return {};
+    const int WideLength = MultiByteToWideChar(CodePage, Flags, Bytes.constData(), Bytes.size(), nullptr, 0);
+    if (WideLength <= 0)
+        return {};
+    std::wstring Wide(static_cast<size_t>(WideLength), L'\0');
+    if (MultiByteToWideChar(CodePage, Flags, Bytes.constData(), Bytes.size(), Wide.data(), WideLength) <= 0)
+        return {};
+    return QString::fromWCharArray(Wide.data(), WideLength);
+}
+
+QString DecodeConsoleProcessOutput(const QByteArray &Bytes)
+{
+    if (Bytes.isEmpty())
+        return {};
+
+    if (Bytes.size() >= 2)
+    {
+        const uchar B0 = static_cast<uchar>(Bytes[0]);
+        const uchar B1 = static_cast<uchar>(Bytes[1]);
+        if ((B0 == 0xFF && B1 == 0xFE) || (B0 == 0xFE && B1 == 0xFF))
+            return QString::fromUtf16(reinterpret_cast<const char16_t *>(Bytes.constData() + 2),
+                                      (Bytes.size() - 2) / 2);
+    }
+
+    int ZeroCount = 0;
+    for (char Byte : Bytes)
+        ZeroCount += (Byte == '\0');
+    if (ZeroCount >= Bytes.size() / 4)
+        return QString::fromUtf16(reinterpret_cast<const char16_t *>(Bytes.constData()), Bytes.size() / 2);
+
+    if (const QString Utf8 = DecodeMultiByteText(CP_UTF8, MB_ERR_INVALID_CHARS, Bytes); !Utf8.isEmpty())
+        return Utf8;
+    if (const QString Oem = DecodeMultiByteText(CP_OEMCP, 0, Bytes); !Oem.isEmpty())
+        return Oem;
+    if (const QString Ansi = DecodeMultiByteText(CP_ACP, 0, Bytes); !Ansi.isEmpty())
+        return Ansi;
+    return QString::fromLatin1(Bytes);
 }
 
 void AppendConsoleOutput(const QString &Text)
@@ -5785,6 +5925,15 @@ struct MonitorEventRow
     QString Detail;
 };
 
+struct MonitorHistoryRow
+{
+    QString Timestamp;
+    QString Type;
+    DWORD Pid = 0;
+    QString Process;
+    QString Detail;
+};
+
 struct MonitorStreamState
 {
     std::mutex Mutex;
@@ -5795,9 +5944,36 @@ struct MonitorStreamState
 struct MonitorSharedState
 {
     std::array<MonitorStreamState, 5> Streams;
+    std::mutex HistoryMutex;
+    std::vector<MonitorHistoryRow> HistoryRows;
+    std::atomic_uint64_t HistoryVersion = 0;
 };
 
 std::weak_ptr<MonitorSharedState> G_ActiveMonitorState;
+
+MonitorHistoryRow BuildMonitorHistoryRow(const QString &Text, const QString &Detail)
+{
+    MonitorHistoryRow Row;
+    Row.Detail = Detail.isEmpty() ? Text : Detail;
+    const QStringList Parts = Text.split(" | ");
+    if (!Parts.isEmpty())
+        Row.Timestamp = Parts[0].trimmed();
+    if (Parts.size() > 1)
+        Row.Type = Parts[1].trimmed();
+    if (Parts.size() > 2)
+        Row.Process = Parts[2].trimmed();
+    static const QRegularExpression PidPattern(R"(\bPID\s+(\d+)\b)", QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch Match = PidPattern.match(Text);
+    if (Match.hasMatch())
+        Row.Pid = Match.captured(1).toULong();
+    if (Row.Process.isEmpty())
+        Row.Process = Row.Pid ? QString("PID %1").arg(Row.Pid) : "-";
+    if (Row.Type.isEmpty())
+        Row.Type = "Event";
+    if (Row.Timestamp.isEmpty())
+        Row.Timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz");
+    return Row;
+}
 
 void PushMonitorEvent(const std::shared_ptr<MonitorSharedState> &State, int StreamIndex,
                       QString Text, QString Detail = QString())
@@ -5810,6 +5986,14 @@ void PushMonitorEvent(const std::shared_ptr<MonitorSharedState> &State, int Stre
     if (Stream.Rows.size() > 500)
         Stream.Rows.resize(500);
     Stream.Version.fetch_add(1, std::memory_order_relaxed);
+    if (StreamIndex < 4)
+    {
+        std::lock_guard<std::mutex> HistoryLock(State->HistoryMutex);
+        State->HistoryRows.insert(State->HistoryRows.begin(), BuildMonitorHistoryRow(Stream.Rows.front().Text, Stream.Rows.front().Detail));
+        if (State->HistoryRows.size() > 4000)
+            State->HistoryRows.resize(4000);
+        State->HistoryVersion.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 QString MonitorTimestamp(const FILETIME &Timestamp)
@@ -5895,12 +6079,26 @@ class MonitorManagerPage final : public QWidget
                     Populate(Index);
                 }
             }
+            else if (Index == 4)
+            {
+                const uint64_t Version = SharedState->HistoryVersion.load(std::memory_order_relaxed);
+                if (DisplayedHistoryVersion != Version)
+                {
+                    DisplayedHistoryVersion = Version;
+                    PopulateHistory(HistorySearchEdit ? HistorySearchEdit->text().trimmed() : QString());
+                }
+            }
         });
         QObject::connect(Pages, &QStackedWidget::currentChanged, this, [this](int Index) {
             if (Index >= 0 && Index < 4)
             {
                 DisplayedVersions[Index] = SharedState->Streams[Index].Version.load(std::memory_order_relaxed);
                 Populate(Index);
+            }
+            else if (Index == 4)
+            {
+                DisplayedHistoryVersion = SharedState->HistoryVersion.load(std::memory_order_relaxed);
+                PopulateHistory(HistorySearchEdit ? HistorySearchEdit->text().trimmed() : QString());
             }
         });
         UpdateTimer->start(150);
@@ -6042,12 +6240,12 @@ class MonitorManagerPage final : public QWidget
         auto *CtrlBar = new QHBoxLayout;
         auto *ExportBtn = MakeButton("Export CSV");
         auto *ClearBtn = MakeButton("Clear");
-        auto *SearchEdit = new SearchLineEdit;
-        SearchEdit->setPlaceholderText("Search events by type, PID, process, or detail");
-        SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(400);
+        HistorySearchEdit = new SearchLineEdit;
+        HistorySearchEdit->setPlaceholderText("Search events by type, PID, process, or detail");
+        HistorySearchEdit->setClearButtonEnabled(true);
+        HistorySearchEdit->setMaximumWidth(400);
         HistoryStatus = new BodyLabel("Persistent event history");
-        CtrlBar->addWidget(SearchEdit);
+        CtrlBar->addWidget(HistorySearchEdit);
         CtrlBar->addStretch();
         CtrlBar->addWidget(ExportBtn);
         CtrlBar->addWidget(ClearBtn);
@@ -6058,14 +6256,19 @@ class MonitorManagerPage final : public QWidget
         HistoryTable->setProperty("DetailDialogTitle", "Event details");
         Layout->addWidget(HistoryTable, 1);
 
-        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this, SearchEdit] {
-            PopulateHistory(SearchEdit->text().trimmed());
+        QObject::connect(HistorySearchEdit, &QLineEdit::textChanged, this, [this] {
+            PopulateHistory(HistorySearchEdit->text().trimmed());
         });
         QObject::connect(ExportBtn, &QPushButton::clicked, this, [this] {
             QString Path = QFileDialog::getSaveFileName(this, "Export Events", "events.csv", "CSV (*.csv)");
             if (!Path.isEmpty()) {
                 QFile File(Path);
                 if (File.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    std::vector<MonitorHistoryRow> HistoryRows;
+                    {
+                        std::lock_guard<std::mutex> Lock(SharedState->HistoryMutex);
+                        HistoryRows = SharedState->HistoryRows;
+                    }
                     QTextStream Out(&File);
                     Out << "Timestamp,Type,PID,Process,Detail\n";
                     for (const auto &Evt : HistoryRows)
@@ -6074,7 +6277,11 @@ class MonitorManagerPage final : public QWidget
             }
         });
         QObject::connect(ClearBtn, &QPushButton::clicked, this, [this] {
-            HistoryRows.clear();
+            {
+                std::lock_guard<std::mutex> Lock(SharedState->HistoryMutex);
+                SharedState->HistoryRows.clear();
+                SharedState->HistoryVersion.fetch_add(1, std::memory_order_relaxed);
+            }
             PopulateHistory(QString());
         });
 
@@ -6511,14 +6718,21 @@ class MonitorManagerPage final : public QWidget
     std::array<TableWidget *, 4> Tables{};
     std::array<BodyLabel *, 4> Statuses{};
     std::array<uint64_t, 4> DisplayedVersions{};
+    uint64_t DisplayedHistoryVersion = 0;
     QTimer *UpdateTimer = nullptr;
 
-    struct HistoryEvent { QString Timestamp; QString Type; DWORD Pid; QString Process; QString Detail; };
-    std::vector<HistoryEvent> HistoryRows;
+    SearchLineEdit *HistorySearchEdit = nullptr;
     TableWidget *HistoryTable = nullptr;
     BodyLabel *HistoryStatus = nullptr;
     void PopulateHistory(const QString &Query)
     {
+        if (!HistoryTable)
+            return;
+        std::vector<MonitorHistoryRow> HistoryRows;
+        {
+            std::lock_guard<std::mutex> Lock(SharedState->HistoryMutex);
+            HistoryRows = SharedState->HistoryRows;
+        }
         HistoryTable->clearContents();
         HistoryTable->setRowCount(0);
         for (const auto &Evt : HistoryRows)
@@ -7216,12 +7430,10 @@ class RegistryManagerPage final : public QWidget
             const QString ChildName = Name->text().trimmed();
             if (ChildName.isEmpty()) { ShowWarningNotice(this, "Registry", "Enter a key name."); return; }
             const QString Path = Location.SubKey.isEmpty() ? ChildName : Location.SubKey + "\\" + ChildName;
-            HKEY Key = nullptr; DWORD Disposition = 0;
-            const LSTATUS Status = RegCreateKeyExW(Location.Root, reinterpret_cast<LPCWSTR>(Path.utf16()), 0,
-                nullptr, 0, KEY_READ | KEY_WRITE | KEY_WOW64_64KEY, nullptr, &Key, &Disposition);
-            if (Key) RegCloseKey(Key);
+            DWORD Status = ERROR_GEN_FAILURE;
+            const bool Success = CreateRegistryKeyWithFallback(Location, Path, Status);
             Dialog->accept();
-            if (Status == ERROR_SUCCESS) { AddressEdit->setText(Location.RootName + "\\" + Path); RefreshValues(); ShowSuccessNotice(this, "Registry", "Registry key created."); }
+            if (Success) { AddressEdit->setText(Location.RootName + "\\" + Path); RefreshValues(); ShowSuccessNotice(this, "Registry", "Registry key created."); }
             else ShowErrorNotice(this, "Registry", QString("Unable to create key (error %1).").arg(Status));
         });
         QObject::connect(Dialog->cancelButton(), &QPushButton::clicked, Dialog, &QDialog::reject); Dialog->show();
@@ -7287,12 +7499,12 @@ class RegistryManagerPage final : public QWidget
         Dialog->viewLayout()->addWidget(Name); Dialog->viewLayout()->addWidget(Type); Dialog->viewLayout()->addWidget(Data);
         Dialog->yesButton()->setText(Editing ? "Save" : "Create");
         QObject::connect(Dialog->yesButton(), &QPushButton::clicked, Dialog, [this, Dialog, Name, Type, Data, Location] {
-            HKEY Key = nullptr; const LSTATUS OpenStatus = RegOpenKeyExW(Location.Root, reinterpret_cast<LPCWSTR>(Location.SubKey.utf16()), 0, KEY_SET_VALUE | KEY_WOW64_64KEY, &Key);
-            if (OpenStatus != ERROR_SUCCESS) { ShowErrorNotice(this, "Registry", QString("Unable to open key (error %1).").arg(OpenStatus)); return; }
             std::vector<BYTE> Buffer; const DWORD ValueType = TypeFromIndex(Type->currentIndex());
-            if (!EncodeValueData(ValueType, Data->toPlainText(), Buffer)) { RegCloseKey(Key); ShowWarningNotice(this, "Registry", "The value data format is invalid."); return; }
-            const QString ValueName = Name->text(); const LSTATUS Status = RegSetValueExW(Key, reinterpret_cast<LPCWSTR>(ValueName.utf16()), 0, ValueType, Buffer.data(), static_cast<DWORD>(Buffer.size())); RegCloseKey(Key); Dialog->accept();
-            if (Status == ERROR_SUCCESS) { RefreshValues(); ShowSuccessNotice(this, "Registry", "Registry value saved."); }
+            if (!EncodeValueData(ValueType, Data->toPlainText(), Buffer)) { ShowWarningNotice(this, "Registry", "The value data format is invalid."); return; }
+            DWORD Status = ERROR_GEN_FAILURE;
+            const bool Success = SetRegistryValueWithFallback(Location, Name->text(), ValueType, Buffer, Status);
+            Dialog->accept();
+            if (Success) { RefreshValues(); ShowSuccessNotice(this, "Registry", "Registry value saved."); }
             else ShowErrorNotice(this, "Registry", QString("Unable to save value (error %1).").arg(Status));
         });
         QObject::connect(Dialog->cancelButton(), &QPushButton::clicked, Dialog, &QDialog::reject); Dialog->show();
@@ -7304,9 +7516,8 @@ class RegistryManagerPage final : public QWidget
         const RegistryValueRow Value = *Selected;
         if (QMessageBox::warning(this, "Registry", QString("Delete value '%1' from %2\\%3?").arg(Value.Name.isEmpty() ? "(Default)" : Value.Name, Value.RootName, Value.KeyPath), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
         RegistryLocation Location; if (!ParseLocation(Value.RootName + "\\" + Value.KeyPath, Location)) return;
-        HKEY Key = nullptr; LSTATUS Status = RegOpenKeyExW(Location.Root, reinterpret_cast<LPCWSTR>(Location.SubKey.utf16()), 0, KEY_SET_VALUE | KEY_WOW64_64KEY, &Key);
-        if (Status == ERROR_SUCCESS) { Status = RegDeleteValueW(Key, reinterpret_cast<LPCWSTR>(Value.Name.utf16())); RegCloseKey(Key); }
-        if (Status == ERROR_SUCCESS) { RefreshValues(); ShowSuccessNotice(this, "Registry", "Registry value deleted."); }
+        DWORD Status = ERROR_GEN_FAILURE;
+        if (DeleteRegistryValueWithFallback(Location, Value.Name, Status)) { RefreshValues(); ShowSuccessNotice(this, "Registry", "Registry value deleted."); }
         else ShowErrorNotice(this, "Registry", QString("Unable to delete value (error %1).").arg(Status));
     }
 
@@ -7331,6 +7542,88 @@ class RegistryManagerPage final : public QWidget
         else return false;
         if (!Location.SubKey.isEmpty()) KernelPath += "\\" + Location.SubKey;
         return true;
+    }
+
+    bool CreateRegistryKeyWithFallback(const RegistryLocation &Location, const QString &Path, DWORD &Status)
+    {
+        QString KernelPath;
+        if (ToKernelRegistryPath(Location.RootName + "\\" + Path, KernelPath))
+        {
+            const std::wstring WidePath = KernelPath.toStdWString();
+            if (RegCreateKeyKernel(WidePath.c_str()))
+            {
+                Status = ERROR_SUCCESS;
+                return true;
+            }
+            Status = G_LastMultiDrvError;
+        }
+        HKEY Key = nullptr;
+        DWORD Disposition = 0;
+        const LSTATUS UserStatus = RegCreateKeyExW(Location.Root, reinterpret_cast<LPCWSTR>(Path.utf16()), 0,
+            nullptr, 0, KEY_READ | KEY_WRITE | KEY_WOW64_64KEY, nullptr, &Key, &Disposition);
+        if (Key)
+            RegCloseKey(Key);
+        Status = UserStatus;
+        return UserStatus == ERROR_SUCCESS;
+    }
+
+    bool SetRegistryValueWithFallback(const RegistryLocation &Location, const QString &ValueName,
+                                      DWORD ValueType, const std::vector<BYTE> &Buffer, DWORD &Status)
+    {
+        QString KernelPath;
+        if (ToKernelRegistryPath(Location.RootName + "\\" + Location.SubKey, KernelPath))
+        {
+            const std::wstring WidePath = KernelPath.toStdWString();
+            const std::wstring WideName = ValueName.toStdWString();
+            if (RegSetValueKernel(WidePath.c_str(), WideName.c_str(), ValueType,
+                                  const_cast<BYTE *>(Buffer.data()), static_cast<ULONG>(Buffer.size())))
+            {
+                Status = ERROR_SUCCESS;
+                return true;
+            }
+            Status = G_LastMultiDrvError;
+        }
+        HKEY Key = nullptr;
+        const LSTATUS OpenStatus = RegOpenKeyExW(Location.Root, reinterpret_cast<LPCWSTR>(Location.SubKey.utf16()), 0,
+            KEY_SET_VALUE | KEY_WOW64_64KEY, &Key);
+        if (OpenStatus != ERROR_SUCCESS)
+        {
+            Status = OpenStatus;
+            return false;
+        }
+        const LSTATUS UserStatus = RegSetValueExW(Key, reinterpret_cast<LPCWSTR>(ValueName.utf16()), 0, ValueType,
+            Buffer.data(), static_cast<DWORD>(Buffer.size()));
+        RegCloseKey(Key);
+        Status = UserStatus;
+        return UserStatus == ERROR_SUCCESS;
+    }
+
+    bool DeleteRegistryValueWithFallback(const RegistryLocation &Location, const QString &ValueName, DWORD &Status)
+    {
+        QString KernelPath;
+        if (ToKernelRegistryPath(Location.RootName + "\\" + Location.SubKey, KernelPath))
+        {
+            const std::wstring WidePath = KernelPath.toStdWString();
+            const std::wstring WideName = ValueName.toStdWString();
+            if (RegDeleteValueKernel(WidePath.c_str(), WideName.c_str()))
+            {
+                Status = ERROR_SUCCESS;
+                return true;
+            }
+            Status = G_LastMultiDrvError;
+        }
+        HKEY Key = nullptr;
+        const LSTATUS OpenStatus = RegOpenKeyExW(Location.Root, reinterpret_cast<LPCWSTR>(Location.SubKey.utf16()), 0,
+            KEY_SET_VALUE | KEY_WOW64_64KEY, &Key);
+        if (OpenStatus != ERROR_SUCCESS)
+        {
+            Status = OpenStatus;
+            return false;
+        }
+        const LSTATUS UserStatus = RegDeleteValueW(Key, reinterpret_cast<LPCWSTR>(ValueName.utf16()));
+        RegCloseKey(Key);
+        Status = UserStatus;
+        return UserStatus == ERROR_SUCCESS;
     }
 
     void ProtectAddress()
@@ -10847,24 +11140,32 @@ QWidget *CreateConsolePage()
         AppendConsoleOutput("console> " + Text + "\n");
         auto *Process = new QProcess(Page);
         ActiveConsoleProcess = Process;
-        Process->setProcessChannelMode(QProcess::MergedChannels);
+        Process->setProcessChannelMode(QProcess::SeparateChannels);
         Process->setProgram("cmd.exe");
-        Process->setArguments({"/d", "/c", Text});
+        Process->setArguments({"/d", "/s", "/c", QStringLiteral("chcp 65001>nul & ") + Text});
         Run->setEnabled(false);
         Interrupt->setEnabled(true);
-        QObject::connect(Process, &QProcess::readyRead, Process, [Process] {
-            const QByteArray Bytes = Process->readAll();
+        QObject::connect(Process, &QProcess::readyReadStandardOutput, Process, [Process] {
+            const QByteArray Bytes = Process->readAllStandardOutput();
             if (!Bytes.isEmpty())
-                AppendConsoleOutput(QString::fromLocal8Bit(Bytes));
+                AppendConsoleOutput(DecodeConsoleProcessOutput(Bytes));
+        });
+        QObject::connect(Process, &QProcess::readyReadStandardError, Process, [Process] {
+            const QByteArray Bytes = Process->readAllStandardError();
+            if (!Bytes.isEmpty())
+                AppendConsoleOutput(DecodeConsoleProcessOutput(Bytes));
         });
         QObject::connect(Process, &QProcess::errorOccurred, Process, [Process](QProcess::ProcessError) {
             AppendConsoleOutput("[!] " + Process->errorString() + "\n");
         });
         QObject::connect(Process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), Process,
                          [Page, Process, Run, Interrupt](int ExitCode, QProcess::ExitStatus Status) {
-            const QByteArray Remaining = Process->readAll();
-            if (!Remaining.isEmpty())
-                AppendConsoleOutput(QString::fromLocal8Bit(Remaining));
+            const QByteArray RemainingStdout = Process->readAllStandardOutput();
+            if (!RemainingStdout.isEmpty())
+                AppendConsoleOutput(DecodeConsoleProcessOutput(RemainingStdout));
+            const QByteArray RemainingStderr = Process->readAllStandardError();
+            if (!RemainingStderr.isEmpty())
+                AppendConsoleOutput(DecodeConsoleProcessOutput(RemainingStderr));
             if (Status == QProcess::CrashExit)
             {
                 AppendConsoleOutput(QString("[!] Command process terminated (exit code %1).\n").arg(ExitCode));
@@ -10873,7 +11174,10 @@ QWidget *CreateConsolePage()
             else if (ExitCode == 0)
                 ShowSuccessNotice(Page, "Console", "Command completed successfully.");
             else
+            {
+                AppendConsoleOutput(QString("[!] Command exited with code %1.\n").arg(ExitCode));
                 ShowErrorNotice(Page, "Console", QString("Command completed with exit code %1.").arg(ExitCode));
+            }
             ActiveConsoleProcess = nullptr;
             Run->setEnabled(true);
             Interrupt->setEnabled(false);
@@ -11592,6 +11896,86 @@ QWidget *CreateKernelInspectorPage()
     };
     QObject::connect(DebugStateUi->Enable, &QPushButton::clicked, Page, [RunDebugAction] { RunDebugAction(true); });
     QObject::connect(DebugStateUi->Disable, &QPushButton::clicked, Page, [RunDebugAction] { RunDebugAction(false); });
+    QObject::connect(FwAddBtn, &QPushButton::clicked, Page, [Page, Refresh] {
+        auto *Dialog = new MessageBoxBase(Page->window());
+        Dialog->setAttribute(Qt::WA_DeleteOnClose);
+        auto *NameEdit = new LineEdit;
+        NameEdit->setPlaceholderText("Rule name");
+        auto *ActionCombo = new ComboBox;
+        ActionCombo->addItems({"Block", "Allow"});
+        auto *ProtocolCombo = new ComboBox;
+        ProtocolCombo->addItems({"TCP", "UDP"});
+        auto *PortEdit = new LineEdit;
+        PortEdit->setPlaceholderText("Local port");
+        Dialog->viewLayout()->addWidget(MakeLabel("Add firewall rule", 18, KTextPrimary, QFont::DemiBold));
+        Dialog->viewLayout()->addWidget(NameEdit);
+        Dialog->viewLayout()->addWidget(ActionCombo);
+        Dialog->viewLayout()->addWidget(ProtocolCombo);
+        Dialog->viewLayout()->addWidget(PortEdit);
+        Dialog->yesButton()->setText("Add");
+        QObject::connect(Dialog->yesButton(), &QPushButton::clicked, Dialog, [Page, Dialog, NameEdit, ActionCombo, ProtocolCombo, PortEdit, Refresh] {
+            const QString Name = NameEdit->text().trimmed();
+            bool Ok = false;
+            const ULONG Port = PortEdit->text().trimmed().toULong(&Ok);
+            if (Name.isEmpty() || !Ok || Port == 0 || Port > 65535)
+            {
+                ShowWarningNotice(Page, "Kernel Inspector", "Enter a valid rule name and port.");
+                return;
+            }
+            const bool Success = AddFirewallRuleFallback(Name, ActionCombo->currentIndex() == 0 ? 0u : 1u,
+                ProtocolCombo->currentIndex() == 0 ? 6u : 17u, Port);
+            if (!Success)
+            {
+                ShowErrorNotice(Page, "Kernel Inspector", "Unable to add firewall rule.");
+                return;
+            }
+            Dialog->accept();
+            ShowSuccessNotice(Page, "Kernel Inspector", "Firewall rule added.");
+            QTimer::singleShot(0, Refresh, &QPushButton::click);
+        });
+        QObject::connect(Dialog->cancelButton(), &QPushButton::clicked, Dialog, &QDialog::reject);
+        Dialog->show();
+    });
+    QObject::connect(FwTable, &QWidget::customContextMenuRequested, Page, [Page, FwTable, Refresh](const QPoint &Position) {
+        const QModelIndex Index = FwTable->indexAt(Position);
+        if (!Index.isValid())
+            return;
+        FwTable->selectRow(Index.row());
+        QTableWidgetItem *NameItem = FwTable->item(Index.row(), 0);
+        QTableWidgetItem *StateItem = FwTable->item(Index.row(), 4);
+        if (!NameItem || !StateItem)
+            return;
+        const QString RuleName = NameItem->text().trimmed();
+        const bool Enabled = StateItem->text().contains("Enabled", Qt::CaseInsensitive);
+        auto *Menu = new RoundMenu(QString(), Page);
+        auto *ToggleAction = new QAction(Enabled ? "Disable rule" : "Enable rule", Menu);
+        auto *DeleteAction = new QAction("Delete rule", Menu);
+        auto *RefreshAction = new QAction("Refresh", Menu);
+        Menu->addAction(ToggleAction);
+        Menu->addAction(DeleteAction);
+        Menu->addAction(RefreshAction);
+        ConnectMenuAction(ToggleAction, Page, [Page, RuleName, Enabled, Refresh] {
+            if (!SetFirewallRuleEnabledFallback(RuleName, !Enabled))
+            {
+                ShowErrorNotice(Page, "Kernel Inspector", QString("Unable to %1 firewall rule.").arg(Enabled ? "disable" : "enable"));
+                return;
+            }
+            ShowSuccessNotice(Page, "Kernel Inspector", QString("Firewall rule %1.").arg(Enabled ? "disabled" : "enabled"));
+            QTimer::singleShot(0, Refresh, &QPushButton::click);
+        });
+        ConnectMenuAction(DeleteAction, Page, [Page, RuleName, Refresh] {
+            if (!RemoveFirewallRuleFallback(RuleName))
+            {
+                ShowErrorNotice(Page, "Kernel Inspector", "Unable to delete firewall rule.");
+                return;
+            }
+            ShowSuccessNotice(Page, "Kernel Inspector", "Firewall rule deleted.");
+            QTimer::singleShot(0, Refresh, &QPushButton::click);
+        });
+        ConnectMenuAction(RefreshAction, Page, [Refresh] { QTimer::singleShot(0, Refresh, &QPushButton::click); });
+        ReleaseMenuAfterClose(Menu);
+        Menu->exec(FwTable->viewport()->mapToGlobal(Position));
+    });
     QTimer::singleShot(0, Refresh, &QPushButton::click);
     return Page;
 }

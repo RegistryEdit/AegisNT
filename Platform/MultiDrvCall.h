@@ -2239,6 +2239,10 @@ FORCEINLINE BOOL RegDeleteKey(PCWSTR KeyPath)
 { return RegistryKernelOp(KeyPath, 1, NULL, 0, NULL, 0, NULL, 0, NULL); }
 FORCEINLINE BOOL RegSetValueKernel(PCWSTR KeyPath, PCWSTR ValName, ULONG Type, PVOID Data, ULONG Size)
 { return RegistryKernelOp(KeyPath, 2, ValName, Type, Data, Size, NULL, 0, NULL); }
+FORCEINLINE BOOL RegCreateKeyKernel(PCWSTR KeyPath)
+{ return RegistryKernelOp(KeyPath, 3, NULL, 0, NULL, 0, NULL, 0, NULL); }
+FORCEINLINE BOOL RegDeleteValueKernel(PCWSTR KeyPath, PCWSTR ValName)
+{ return RegistryKernelOp(KeyPath, 4, ValName, 0, NULL, 0, NULL, 0, NULL); }
 
 /* ---- Session ---- */
 BOOL SessionKernelOp(ULONG SessionId, ULONG Op, PVOID OutBuf, ULONG OutSize, PULONG Returned)
