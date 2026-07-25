@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <detours/detours.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -91,7 +91,7 @@ static thread_local int G_FileRecursionGuard = 0;
         else        DetourDetach(&(PVOID&)True_##Func, Hook_##Func); \
     }
 
-/* ──── Process / Thread hooks ──── */
+
 DEFINE_HOOK_BASE(process, "CreateProcessW", BOOL, CreateProcessW, (LPCWSTR lpAppName, LPWSTR lpCmdLine, LPSECURITY_ATTRIBUTES lpProcAttr, LPSECURITY_ATTRIBUTES lpThreadAttr, BOOL bInherit, DWORD dwFlags, LPVOID lpEnv, LPCWSTR lpCurDir, LPSTARTUPINFOW lpSI, LPPROCESS_INFORMATION lpPI), (lpAppName, lpCmdLine, lpProcAttr, lpThreadAttr, bInherit, dwFlags, lpEnv, lpCurDir, lpSI, lpPI))
     DEFINE_HOOK_BASE(process, "CreateProcessA", BOOL, CreateProcessA, (LPCSTR lpAppName, LPSTR lpCmdLine, LPSECURITY_ATTRIBUTES lpProcAttr, LPSECURITY_ATTRIBUTES lpThreadAttr, BOOL bInherit, DWORD dwFlags, LPVOID lpEnv, LPCSTR lpCurDir, LPSTARTUPINFOA lpSI, LPPROCESS_INFORMATION lpPI), (lpAppName, lpCmdLine, lpProcAttr, lpThreadAttr, bInherit, dwFlags, lpEnv, lpCurDir, lpSI, lpPI))
     DEFINE_HOOK_BASE(process, "CreateThread", HANDLE, CreateThread, (LPSECURITY_ATTRIBUTES lpAttr, SIZE_T dwStack, LPTHREAD_START_ROUTINE lpStart, LPVOID lpParam, DWORD dwFlags, LPDWORD lpThreadId), (lpAttr, dwStack, lpStart, lpParam, dwFlags, lpThreadId))
@@ -101,7 +101,7 @@ DEFINE_HOOK_BASE(process, "CreateProcessW", BOOL, CreateProcessW, (LPCWSTR lpApp
     DEFINE_HOOK_BASE(process, "TerminateProcess", BOOL, TerminateProcess, (HANDLE hProcess, UINT uExitCode), (hProcess, uExitCode))
     DEFINE_HOOK_NO_LOG(process, VOID, ExitProcess, (UINT uExitCode), (uExitCode))
 
-    /* ──── File I/O hooks ──── */
+    
     DEFINE_HOOK_FILE("CreateFileW", HANDLE, CreateFileW, (LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecAttr, DWORD dwCreationDisp, DWORD dwFlagsAndAttr, HANDLE hTemplateFile), (lpFileName, dwDesiredAccess, dwShareMode, lpSecAttr, dwCreationDisp, dwFlagsAndAttr, hTemplateFile))
     DEFINE_HOOK_FILE("CreateFileA", HANDLE, CreateFileA, (LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecAttr, DWORD dwCreationDisp, DWORD dwFlagsAndAttr, HANDLE hTemplateFile), (lpFileName, dwDesiredAccess, dwShareMode, lpSecAttr, dwCreationDisp, dwFlagsAndAttr, hTemplateFile))
     DEFINE_HOOK_FILE("ReadFile", BOOL, ReadFile, (HANDLE hFile, LPVOID lpBuf, DWORD nToRead, LPDWORD lpRead, LPOVERLAPPED lpOverlapped), (hFile, lpBuf, nToRead, lpRead, lpOverlapped))
@@ -111,7 +111,7 @@ DEFINE_HOOK_BASE(process, "CreateProcessW", BOOL, CreateProcessW, (LPCWSTR lpApp
     DEFINE_HOOK_FILE("MoveFileW", BOOL, MoveFileW, (LPCWSTR lpExisting, LPCWSTR lpNew), (lpExisting, lpNew))
     DEFINE_HOOK_FILE("CopyFileW", BOOL, CopyFileW, (LPCWSTR lpExisting, LPCWSTR lpNew, BOOL bFailIfExists), (lpExisting, lpNew, bFailIfExists))
 
-    /* ──── Registry hooks ──── */
+    
     DEFINE_HOOK_BASE(registry, "RegOpenKeyExW", LSTATUS, RegOpenKeyExW, (HKEY hKey, LPCWSTR lpSubKey, DWORD ulOptions, REGSAM samDesired, PHKEY phkResult), (hKey, lpSubKey, ulOptions, samDesired, phkResult))
     DEFINE_HOOK_BASE(registry, "RegOpenKeyExA", LSTATUS, RegOpenKeyExA, (HKEY hKey, LPCSTR lpSubKey, DWORD ulOptions, REGSAM samDesired, PHKEY phkResult), (hKey, lpSubKey, ulOptions, samDesired, phkResult))
     DEFINE_HOOK_BASE(registry, "RegCreateKeyExW", LSTATUS, RegCreateKeyExW, (HKEY hKey, LPCWSTR lpSubKey, DWORD Reserved, LPWSTR lpClass, DWORD dwOptions, REGSAM samDesired, LPSECURITY_ATTRIBUTES lpSecAttr, PHKEY phkResult, LPDWORD lpdwDisposition), (hKey, lpSubKey, Reserved, lpClass, dwOptions, samDesired, lpSecAttr, phkResult, lpdwDisposition))
@@ -123,7 +123,7 @@ DEFINE_HOOK_BASE(process, "CreateProcessW", BOOL, CreateProcessW, (LPCWSTR lpApp
     DEFINE_HOOK_BASE(registry, "RegDeleteValueW", LSTATUS, RegDeleteValueW, (HKEY hKey, LPCWSTR lpValueName), (hKey, lpValueName))
     DEFINE_HOOK_BASE(registry, "RegCloseKey", LSTATUS, RegCloseKey, (HKEY hKey), (hKey))
 
-    /* ──── Network hooks ──── */
+    
     DEFINE_HOOK_BASE(network, "socket", SOCKET, socket, (int af, int type, int protocol), (af, type, protocol))
     DEFINE_HOOK_BASE(network, "connect", int, connect, (SOCKET s, const struct sockaddr* name, int namelen), (s, name, namelen))
     DEFINE_HOOK_BASE(network, "send", int, send, (SOCKET s, const char* buf, int len, int flags), (s, buf, len, flags))
@@ -149,7 +149,7 @@ void Attach_network_getaddrinfo(BOOL Attach) {
     else        DetourDetach(&(PVOID&)True_getaddrinfo, Hook_getaddrinfo);
 }
 
-/* ──── Memory hooks ──── */
+
 DEFINE_HOOK_BASE(memory, "VirtualAlloc", LPVOID, VirtualAlloc, (LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect), (lpAddress, dwSize, flAllocationType, flProtect))
     DEFINE_HOOK_BASE(memory, "VirtualAllocEx", LPVOID, VirtualAllocEx, (HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect), (hProcess, lpAddress, dwSize, flAllocationType, flProtect))
     DEFINE_HOOK_BASE(memory, "VirtualFree", BOOL, VirtualFree, (LPVOID lpAddress, SIZE_T dwSize, DWORD dwFreeType), (lpAddress, dwSize, dwFreeType))
@@ -159,14 +159,14 @@ DEFINE_HOOK_BASE(memory, "VirtualAlloc", LPVOID, VirtualAlloc, (LPVOID lpAddress
     DEFINE_HOOK_BASE(memory, "WriteProcessMemory", BOOL, WriteProcessMemory, (HANDLE hProcess, LPVOID lpBaseAddress, LPCVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesWritten), (hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten))
     DEFINE_HOOK_BASE(memory, "ReadProcessMemory", BOOL, ReadProcessMemory, (HANDLE hProcess, LPCVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesRead), (hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesRead))
 
-    /* ──── DLL hooks ──── */
+    
     DEFINE_HOOK_BASE(dll, "LoadLibraryW", HMODULE, LoadLibraryW, (LPCWSTR lpLibFileName), (lpLibFileName))
     DEFINE_HOOK_BASE(dll, "LoadLibraryA", HMODULE, LoadLibraryA, (LPCSTR lpLibFileName), (lpLibFileName))
     DEFINE_HOOK_BASE(dll, "LoadLibraryExW", HMODULE, LoadLibraryExW, (LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags), (lpLibFileName, hFile, dwFlags))
     DEFINE_HOOK_BASE(dll, "FreeLibrary", BOOL, FreeLibrary, (HMODULE hLibModule), (hLibModule))
     DEFINE_HOOK_BASE(dll, "GetProcAddress", FARPROC, GetProcAddress, (HMODULE hModule, LPCSTR lpProcName), (hModule, lpProcName))
 
-    /* ──── Sync hooks ──── */
+    
     DEFINE_HOOK_BASE(sync, "CreateMutexW", HANDLE, CreateMutexW, (LPSECURITY_ATTRIBUTES lpMutexAttributes, BOOL bInitialOwner, LPCWSTR lpName), (lpMutexAttributes, bInitialOwner, lpName))
     DEFINE_HOOK_BASE(sync, "CreateMutexA", HANDLE, CreateMutexA, (LPSECURITY_ATTRIBUTES lpMutexAttributes, BOOL bInitialOwner, LPCSTR lpName), (lpMutexAttributes, bInitialOwner, lpName))
     DEFINE_HOOK_BASE(sync, "CreateEventW", HANDLE, CreateEventW, (LPSECURITY_ATTRIBUTES lpEventAttributes, BOOL bManualReset, BOOL bInitialState, LPCWSTR lpName), (lpEventAttributes, bManualReset, bInitialState, lpName))
@@ -175,7 +175,7 @@ DEFINE_HOOK_BASE(memory, "VirtualAlloc", LPVOID, VirtualAlloc, (LPVOID lpAddress
     DEFINE_HOOK_BASE(sync, "WaitForSingleObject", DWORD, WaitForSingleObject, (HANDLE hHandle, DWORD dwMilliseconds), (hHandle, dwMilliseconds))
     DEFINE_HOOK_BASE(sync, "SetEvent", BOOL, SetEvent, (HANDLE hEvent), (hEvent))
 
-    /* ──── Window hooks ──── */
+    
     DEFINE_HOOK_BASE(win, "CreateWindowExW", HWND, CreateWindowExW, (DWORD dwExStyle, LPCWSTR lpClassName, LPCWSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam), (dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam))
     DEFINE_HOOK_BASE(win, "CreateWindowExA", HWND, CreateWindowExA, (DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam), (dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam))
     DEFINE_HOOK_BASE(win, "SetWindowsHookExW", HHOOK, SetWindowsHookExW, (int idHook, HOOKPROC lpfn, HINSTANCE hmod, DWORD dwThreadId), (idHook, lpfn, hmod, dwThreadId))
@@ -194,7 +194,7 @@ void Attach_win_GetMessageW(BOOL Attach) {
 
 DEFINE_HOOK_BASE(win, "SetWindowLongPtrW", LONG_PTR, SetWindowLongPtrW, (HWND hWnd, int nIndex, LONG_PTR dwNewLong), (hWnd, nIndex, dwNewLong))
 
-    /* ──── Service hooks ──── */
+    
     DEFINE_HOOK_BASE(service, "OpenSCManagerW", SC_HANDLE, OpenSCManagerW, (LPCWSTR lpMachineName, LPCWSTR lpDatabaseName, DWORD dwDesiredAccess), (lpMachineName, lpDatabaseName, dwDesiredAccess))
     DEFINE_HOOK_BASE(service, "OpenSCManagerA", SC_HANDLE, OpenSCManagerA, (LPCSTR lpMachineName, LPCSTR lpDatabaseName, DWORD dwDesiredAccess), (lpMachineName, lpDatabaseName, dwDesiredAccess))
     DEFINE_HOOK_BASE(service, "CreateServiceW", SC_HANDLE, CreateServiceW, (SC_HANDLE hSCManager, LPCWSTR lpServiceName, LPCWSTR lpDisplayName, DWORD dwDesiredAccess, DWORD dwServiceType, DWORD dwStartType, DWORD dwErrorControl, LPCWSTR lpBinaryPathName, LPCWSTR lpLoadOrderGroup, LPDWORD lpdwTagId, LPCWSTR lpDependencies, LPCWSTR lpServiceStartName, LPCWSTR lpPassword), (hSCManager, lpServiceName, lpDisplayName, dwDesiredAccess, dwServiceType, dwStartType, dwErrorControl, lpBinaryPathName, lpLoadOrderGroup, lpdwTagId, lpDependencies, lpServiceStartName, lpPassword))
@@ -202,7 +202,7 @@ DEFINE_HOOK_BASE(win, "SetWindowLongPtrW", LONG_PTR, SetWindowLongPtrW, (HWND hW
     DEFINE_HOOK_BASE(service, "ControlService", BOOL, ControlService, (SC_HANDLE hService, DWORD dwControl, LPSERVICE_STATUS lpServiceStatus), (hService, dwControl, lpServiceStatus))
     DEFINE_HOOK_BASE(service, "DeleteService", BOOL, DeleteService, (SC_HANDLE hService), (hService))
 
-    /* ──── External declarations needed by AttachAll/DetachAll ──── */
+    
     extern void Attach_process_CreateProcessW(BOOL);
 extern void Attach_process_CreateProcessA(BOOL);
 extern void Attach_process_CreateThread(BOOL);
@@ -284,7 +284,7 @@ extern void Attach_service_StartServiceW(BOOL);
 extern void Attach_service_ControlService(BOOL);
 extern void Attach_service_DeleteService(BOOL);
 
-/* ──── Hook manager ──── */
+
 static BOOL HookManager_AttachAll() {
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
@@ -393,7 +393,7 @@ static BOOL HookManager_DetachAll() {
     return Err == NO_ERROR;
 }
 
-/* ──── DLL Entry Point ──── */
+
 BOOL WINAPI DllMain(HINSTANCE HinstDll, DWORD Reason, LPVOID Reserved) {
     (void)HinstDll;
     (void)Reserved;

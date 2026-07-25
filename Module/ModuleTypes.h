@@ -19,7 +19,7 @@ struct ModuleEntry {
     std::string Category;
     std::string Description;
     std::string Author;
-    std::string ServiceName; // for .sys driver services (no extension)
+    std::string ServiceName; 
     HMODULE Handle = nullptr;
     void* ModuleInstance = nullptr;
     bool Loaded = false;

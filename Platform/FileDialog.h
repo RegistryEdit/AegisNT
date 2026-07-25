@@ -121,4 +121,4 @@ inline std::string OpenFolderDialog(GLFWwindow* Window) {
     return Result;
 }
 
-} // namespace Platform
+} 

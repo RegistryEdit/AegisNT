@@ -1,35 +1,35 @@
 #pragma once
-// ============================================================================
-// netmon.h — Header-only WinDivert Network Activity Monitor
-//
-// Requires:  WinDivert SDK (windivert.h)
-// Link with: iphlpapi.lib, ws2_32.lib
-// Compile:   /utf-8 /DWIN32_LEAN_AND_MEAN /std:c++17
-// Run:       WinDivert64.sys must be installed and started externally.
-//
-// PID resolution via IP Helper API (GetExtendedTcpTable / GetExtendedUdpTable).
-// For TCP, real remote addresses come from the connection table (fixes the
-// "destination shows as gateway" problem that occurs with NETWORK-layer
-// capture on NAT'd or proxy-rerouted connections).
-// No dependency on WINDIVERT_LAYER_FLOW.
-//
-// API:
-//   NetMon_LoadWinDivertDllFromDirectory(Path) — load WinDivert.dll explicitly
-//   NetMon_Start(Callback)  — begin capturing in background thread
-//   NetMon_Stop()           — stop and cleanup
-//   NetMon_IsRunning()      — query state
-//
-// Callback receives a NetMon_ParsedPacket* (valid only during callback).
-// Payload is a std::vector<uint8_t> with no length limit.
-//
-// NetMon_ParsedPacket fields:
-//   LocalAddr[4] / LocalPort  — local endpoint (corrected via TCP table)
-//   RemoteAddr[4] / RemotePort — remote endpoint (corrected via TCP table)
-//   Pid / ProcessName         — owning process
-//   Protocol                  — IPPROTO_TCP / IPPROTO_UDP / etc.
-//   Outbound                  — true = outgoing, false = incoming
-//   Payload                   — raw payload bytes
-// ============================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #include <cstdint>
 #include <cstring>
@@ -47,17 +47,17 @@
 #include <iphlpapi.h>
 #include <windows.h>
 
-// WinDivert functions are resolved explicitly after the caller chooses a DLL
-// directory.  Avoid dllimport declarations so this executable has no static
-// dependency on WinDivert.dll.
+
+
+
 #define WINDIVERTEXPORT extern
 #if __has_include("windivert.h")
 #include "windivert.h"
 #else
-// Runtime-only fallback. The application ships WinDivert.dll in ExtraDLL
-// and does not link against the SDK import library. Keep these declarations
-// ABI-compatible with WinDivert 2.2 so the SDK header is optional at build
-// time.
+
+
+
+
 typedef enum {
     WINDIVERT_LAYER_NETWORK = 0
 } WINDIVERT_LAYER;
@@ -88,11 +88,11 @@ WINDIVERTEXPORT BOOL WINAPI WinDivertClose(HANDLE Handle);
 }
 #endif
 
-// ── Constants ──────────────────────────────────────────────────────────────
-constexpr uint16_t NETMON_MAX_PACKET_SIZE = 0xFFFF;
-constexpr uint32_t NETMON_CACHE_TTL_MS    = 2000;  // PID/address cache TTL
 
-// ── Packet structure definitions (packed, all fields in network byte order) ─
+constexpr uint16_t NETMON_MAX_PACKET_SIZE = 0xFFFF;
+constexpr uint32_t NETMON_CACHE_TTL_MS    = 2000;  
+
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -137,7 +137,7 @@ typedef struct {
 
 #pragma pack(pop)
 
-// ── Parsed packet data delivered to the callback ──────────────────────────
+
 typedef struct {
     uint8_t  Protocol;
     bool     Outbound;
@@ -147,9 +147,9 @@ typedef struct {
     uint16_t SrcPort;
     uint16_t DstPort;
 
-    // Corrected endpoints (for TCP the remote address comes from the
-    // connection table rather than the packet header, which avoids the
-    // "destination is gateway" issue on NAT/proxy networks).
+    
+    
+    
     uint32_t LocalAddr[4];
     uint32_t RemoteAddr[4];
     uint16_t LocalPort;
@@ -162,18 +162,18 @@ typedef struct {
     std::vector<uint8_t> Payload;
 } NetMon_ParsedPacket;
 
-// ── Callback signature ────────────────────────────────────────────────────
+
 typedef void (*NetMon_Callback)(const NetMon_ParsedPacket* Pkt);
 
-// ============================================================================
-// Internal implementation — namespace NetMon_Detail
-// ============================================================================
+
+
+
 namespace NetMon_Detail {
 
-// ---------------------------------------------------------------------------
-// Cache key — ports + protocol only (no addresses), so that a packet whose
-// header shows the gateway IP still matches the correct TCP table entry.
-// ---------------------------------------------------------------------------
+
+
+
+
 struct PidKey {
     uint16_t LocalPort;
     uint16_t RemotePort;
@@ -199,14 +199,14 @@ struct PidKeyHash {
     }
 };
 
-// ---------------------------------------------------------------------------
-// PidCache — caches { ports+protocol → PID + corrected addresses }
-// ---------------------------------------------------------------------------
+
+
+
 class PidCache {
 public:
-    // Look up PID and optionally correct addresses.  For TCP the TCP table
-    // is always queried (by ports only) so that the real remote address is
-    // used even when the packet header shows a gateway/proxy IP.
+    
+    
+    
     uint32_t Lookup(uint32_t* InOutLocal,  uint32_t* InOutRemote,
                     uint16_t* InOutLocalPort, uint16_t* InOutRemotePort,
                     uint8_t Protocol, bool IsIpv6)
@@ -219,13 +219,13 @@ public:
 
         uint64_t Now = GetTickCount64();
 
-        // ── Check cache ──────────────────────────────────────────────
+        
         {
             std::lock_guard<std::mutex> Lock(Mutex_);
             auto It = Cache_.find(K);
             if (It != Cache_.end() && (Now - It->second.Timestamp) < NETMON_CACHE_TTL_MS)
             {
-                // Restore corrected addresses from cache
+                
                 std::memcpy(InOutLocal,  It->second.CorrectedLocal,
                            IsIpv6 ? 16 : 4);
                 std::memcpy(InOutRemote, It->second.CorrectedRemote,
@@ -236,11 +236,11 @@ public:
             }
         }
 
-        // ── Miss — query IP Helper API ───────────────────────────────
+        
         if (Protocol == IPPROTO_TCP)
         {
-            // TCP: always query fresh (avoid cache poisoning when the
-            // table entry doesn't exist yet for the very first SYN).
+            
+            
             uint32_t Pid = QueryTcpTable(
                 InOutLocal, InOutRemote,
                 *InOutLocalPort, *InOutRemotePort, IsIpv6,
@@ -262,7 +262,7 @@ public:
                 InOutLocal, *InOutLocalPort, IsIpv6);
         }
 
-        // Store in cache (for UDP only)
+        
         {
             std::lock_guard<std::mutex> Lock(Mutex_);
             Cache_[K] = E;
@@ -284,15 +284,15 @@ private:
     std::unordered_map<PidKey, Entry, PidKeyHash> Cache_;
     std::mutex Mutex_;
 
-    // ── Query TCP table, match by ports only, return corrected
-    //    addresses and PID.
+    
+    
     static uint32_t QueryTcpTable(
         const uint32_t* PktLocal, const uint32_t* PktRemote,
         uint16_t PktLocalPort, uint16_t PktRemotePort, bool IsIpv6,
         uint32_t* OutLocal, uint32_t* OutRemote,
         uint16_t* OutLocalPort, uint16_t* OutRemotePort)
     {
-        // ── Try IPv4 ─────────────────────────────────────────────
+        
         if (!IsIpv6)
         {
             DWORD Size = 0;
@@ -305,9 +305,9 @@ private:
                 if (::GetExtendedTcpTable(Table, &Size, FALSE, AF_INET,
                                           TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR)
                 {
-                    // Match by ports only, then use table's addresses.
-                    // Table addresses/ports are in NETWORK byte order;
-                    // packet addresses are also in network byte order.
+                    
+                    
+                    
                     uint16_t LocalNbo  = htons(PktLocalPort);
                     uint16_t RemoteNbo = htons(PktRemotePort);
 
@@ -317,9 +317,9 @@ private:
                         if (Row.dwLocalPort == LocalNbo &&
                             Row.dwRemotePort == RemoteNbo)
                         {
-                            // Found — use table addresses as the ground truth.
-                            // Keep the network-order bytes: they are also the
-                            // representation used by the captured IP header.
+                            
+                            
+                            
                             OutLocal[0]  = Row.dwLocalAddr;
                             OutRemote[0] = Row.dwRemoteAddr;
                             *OutLocalPort  = PktLocalPort;
@@ -328,8 +328,8 @@ private:
                         }
                     }
 
-                    // Fallback: match by local port only (useful when the
-                    // table's remote port is 0, e.g. LISTEN states).
+                    
+                    
                     for (DWORD I = 0; I < Table->dwNumEntries; I++)
                     {
                         auto& Row = Table->table[I];
@@ -348,7 +348,7 @@ private:
             }
         }
 
-        // ── Try IPv6 ───────────────────────────────────────────────
+        
         if (!IsIpv6)
             return 0;
 
@@ -365,7 +365,7 @@ private:
                                       TCP_TABLE_OWNER_PID_ALL, 0) != NO_ERROR)
                 return 0;
 
-            // Compare local port and remote port
+            
             uint16_t LocalNbo  = htons(PktLocalPort);
             uint16_t RemoteNbo = htons(PktRemotePort);
 
@@ -387,11 +387,11 @@ private:
         return 0;
     }
 
-    // ── Query UDP table, match by local address + port ─────────────
+    
     static uint32_t QueryUdpTable(const uint32_t* PktLocal,
                                    uint16_t PktLocalPort, bool IsIpv6)
     {
-        // IPv4
+        
         if (!IsIpv6)
         {
             DWORD Size = 0;
@@ -450,9 +450,9 @@ private:
     }
 };
 
-// ---------------------------------------------------------------------------
-// Packet parser
-// ---------------------------------------------------------------------------
+
+
+
 inline bool ParsePacket(const uint8_t* Data, unsigned int Len,
                         NetMon_ParsedPacket* Pkt)
 {
@@ -590,10 +590,10 @@ inline bool ParsePacket(const uint8_t* Data, unsigned int Len,
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Normalise endpoints — set Local/Remote from Src/Dst based on direction,
-// then let PidCache correct them from the TCP table if needed.
-// ---------------------------------------------------------------------------
+
+
+
+
 inline void NormaliseEndpoints(NetMon_ParsedPacket* Pkt)
 {
     if (Pkt->Outbound)
@@ -612,9 +612,9 @@ inline void NormaliseEndpoints(NetMon_ParsedPacket* Pkt)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Process name resolution
-// ---------------------------------------------------------------------------
+
+
+
 inline void GetProcessName(uint32_t Pid, char* OutBuf, size_t OutSize)
 {
     OutBuf[0] = '\0';
@@ -641,9 +641,9 @@ inline void GetProcessName(uint32_t Pid, char* OutBuf, size_t OutSize)
         std::strcpy(OutBuf, "???");
 }
 
-// ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
+
+
+
 inline std::string IpToString(const uint32_t* Addr, bool IsIpv6)
 {
     char Buf[64] = {};
@@ -693,11 +693,11 @@ inline const char* ProtoToString(uint8_t Protocol)
     }
 }
 
-} // namespace NetMon_Detail
+} 
 
-// ============================================================================
-// Public API
-// ============================================================================
+
+
+
 
 namespace {
 
@@ -753,11 +753,11 @@ inline bool& GetWinDivertApiReserved()
     return Reserved;
 }
 
-} // anonymous namespace
+} 
 
-// Load the exact DLL selected by the caller before any WinDivert import is
-// resolved.  The DLL remains loaded for the process lifetime because the
-// delay-import thunks retain references to it.
+
+
+
 inline bool NetMon_LoadWinDivertDllFromDirectory(const wchar_t* Directory)
 {
     if (!Directory || !*Directory || GetWinDivertApiReserved())
@@ -808,8 +808,8 @@ inline bool NetMon_IsWinDivertDriverRunning()
     if (!Scm)
         return false;
 
-    // WinDivert releases use both names depending on how the driver was
-    // installed. Prefer the normal name, but also accept WinDivert64.
+    
+    
     const wchar_t* Names[] = { L"WinDivert", L"WinDivert64" };
     DWORD LastError = ERROR_SERVICE_DOES_NOT_EXIST;
     for (const wchar_t* Name : Names)
@@ -842,7 +842,7 @@ inline bool NetMon_IsWinDivertDriverRunning()
     return false;
 }
 
-// ── NETWORK thread — captures packets, resolves PID, calls callback ──────
+
 inline DWORD WINAPI NetMon_NetworkThread(LPVOID)
 {
     if (!NetMon_IsWinDivertDriverRunning())
@@ -885,8 +885,8 @@ inline DWORD WINAPI NetMon_NetworkThread(LPVOID)
         Pkt.Outbound = Addr.Outbound ? true : false;
         NetMon_Detail::NormaliseEndpoints(&Pkt);
 
-        // Lookup PID and correct addresses (for TCP the remote address
-        // is taken from the connection table, not the packet header).
+        
+        
         Pkt.Pid = GetPidCache().Lookup(
             Pkt.LocalAddr, Pkt.RemoteAddr,
             &Pkt.LocalPort, &Pkt.RemotePort,
@@ -904,7 +904,7 @@ inline DWORD WINAPI NetMon_NetworkThread(LPVOID)
     return 0;
 }
 
-// ── Start monitoring ─────────────────────────────────────────────────────
+
 inline bool NetMon_Start(NetMon_Callback Callback)
 {
     auto& Running = GetRunningFlag();
@@ -931,7 +931,7 @@ inline bool NetMon_Start(NetMon_Callback Callback)
     return true;
 }
 
-// ── Stop monitoring ──────────────────────────────────────────────────────
+
 inline void NetMon_Stop()
 {
     auto& Running = GetRunningFlag();
@@ -952,7 +952,7 @@ inline void NetMon_Stop()
     GetWinDivertApiReserved() = false;
 }
 
-// ── Query running state ──────────────────────────────────────────────────
+
 inline bool NetMon_IsRunning()
 {
     return GetRunningFlag();

@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 
-/* ──── Mirror of kernel driver structs (keep in sync with driver.cpp) ──── */
+
 #pragma pack(push, 1)
 enum MonitorEventType : ULONG {
     EventNone = 0,

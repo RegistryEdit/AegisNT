@@ -72,6 +72,20 @@
 #define IOCTL_ENABLE_DEBUG           CTL_CODE(0x8000, 0x842, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_DISABLE_DEBUG          CTL_CODE(0x8000, 0x843, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_QUERY_DEBUG_STATE      CTL_CODE(0x8000, 0x844, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_WINDOWS           CTL_CODE(0x8000, 0x845, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_WINDOW_OPERATION       CTL_CODE(0x8000, 0x846, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GET_COMMAND_LINE       CTL_CODE(0x8000, 0x847, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SERVICE_OPERATION      CTL_CODE(0x8000, 0x848, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REG_OPERATION          CTL_CODE(0x8000, 0x849, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SESSION_OPERATION      CTL_CODE(0x8000, 0x84A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MITIGATION_QUERY       CTL_CODE(0x8000, 0x84B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MITIGATION_SET         CTL_CODE(0x8000, 0x84C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_SYNC_OBJECTS      CTL_CODE(0x8000, 0x84D, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_FIREWALL_OPERATION     CTL_CODE(0x8000, 0x84E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ADD_WINDOW_PROTECT     CTL_CODE(0x8000, 0x84F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_WINDOW_PROTECT  CTL_CODE(0x8000, 0x850, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ADD_INJECTION_PROTECTION     CTL_CODE(0x8000, 0x851, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_INJECTION_PROTECTION  CTL_CODE(0x8000, 0x852, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define CALLBACK_TYPE_OB_PROCESS   0
 #define CALLBACK_TYPE_OB_THREAD    1
@@ -444,6 +458,142 @@ static_assert(sizeof(MDV2_LIST_HEADER) == 48, "MultiDrv V2 header ABI mismatch")
 static_assert(sizeof(MDV2_RECORD) == 1528, "MultiDrv V2 record ABI mismatch");
 static_assert(sizeof(MDV2_CAPABILITIES_OUTPUT) == 80, "MultiDrv V2 capabilities ABI mismatch");
 
+#define WINDOW_OP_CLOSE              0
+#define WINDOW_OP_HIDE               1
+#define WINDOW_OP_SHOW               2
+#define WINDOW_OP_SET_TITLE          3
+#define WINDOW_OP_MINIMIZE           4
+#define WINDOW_OP_RESTORE            5
+#define WINDOW_OP_SET_POSITION       6
+#define WINDOW_OP_SET_SIZE           7
+#define WINDOW_OP_ENABLE             8
+#define WINDOW_OP_DISABLE            9
+#define WINDOW_OP_SET_TOPMOST        10
+#define WINDOW_OP_REMOVE_TOPMOST     11
+#define WINDOW_OP_FLASH              12
+#define WINDOW_OP_REDRAW             13
+
+#define WINDOW_FLAG_DIRECT           0x00000001
+#define WINDOW_FLAG_FORCE            0x00000002
+
+#define WINDOW_FLAG_VISIBLE          (1ul << 0)
+#define WINDOW_FLAG_ENABLED          (1ul << 1)
+#define WINDOW_FLAG_HUNG             (1ul << 2)
+#define WINDOW_FLAG_MINIMIZED        (1ul << 3)
+#define WINDOW_FLAG_MAXIMIZED        (1ul << 4)
+#define WINDOW_FLAG_TOPMOST          (1ul << 5)
+#define WINDOW_FLAG_LAYERED          (1ul << 6)
+#define WINDOW_FLAG_TOOLWINDOW       (1ul << 7)
+#define WINDOW_FLAG_POPUP            (1ul << 8)
+#define WINDOW_FLAG_CHILD            (1ul << 9)
+#define WINDOW_FLAG_UNICODE          (1ul << 10)
+#define WINDOW_FLAG_MDI              (1ul << 11)
+#define WINDOW_FLAG_APPWINDOW        (1ul << 12)
+#define WINDOW_FLAG_ACTIVE           (1ul << 13)
+
+typedef struct _KERNEL_WINDOW_ENUM_ENTRY {
+	UINT64   Hwnd;
+	UINT64   ParentHwnd;
+	UINT64   OwnerHwnd;
+	UINT64   WndProc;
+	ULONG    ProcessId;
+	ULONG    ThreadId;
+	UINT64   DesktopId;
+	UINT64   WinstaId;
+	ULONG    Style;
+	ULONG    ExStyle;
+	ULONG    State;
+	ULONG    ShowCmd;
+	LONG     Left, Top, Right, Bottom;
+	LONG     ClientLeft, ClientTop, ClientRight, ClientBottom;
+	UCHAR    Alpha;
+	UCHAR    Padding1[3];
+	USHORT   ClassAtom;
+	USHORT   CbWndExtra;
+	ULONG    Flags;
+	UINT64   FirstChild;
+	UINT64   NextSibling;
+	UINT64   MenuHandle;
+	UINT64   ThreadInfoId;
+	ULONG    MessageCount;
+	ULONG    Padding2;
+	USHORT   TitleLength;
+	USHORT   ClassLength;
+} KERNEL_WINDOW_ENUM_ENTRY, * PKERNEL_WINDOW_ENUM_ENTRY;
+
+typedef struct _KERNEL_WINDOW_ENUM_OUTPUT {
+	ULONG                  Count;
+	KERNEL_WINDOW_ENUM_ENTRY Entries[1];
+} KERNEL_WINDOW_ENUM_OUTPUT, * PKERNEL_WINDOW_ENUM_OUTPUT;
+
+typedef struct _KERNEL_WINDOW_OPERATION_INPUT {
+	ULONG    ProcessId;
+	UINT64   Hwnd;
+	ULONG    Operation;
+	ULONG    Flags;
+	WCHAR    NewTitle[256];
+	LONG     NewX;
+	LONG     NewY;
+	LONG     NewWidth;
+	LONG     NewHeight;
+} KERNEL_WINDOW_OPERATION_INPUT, * PKERNEL_WINDOW_OPERATION_INPUT;
+
+typedef struct _COMMAND_LINE_INPUT {
+	ULONG ProcessId;
+} COMMAND_LINE_INPUT, * PCOMMAND_LINE_INPUT;
+
+typedef struct _REG_OPERATION_INPUT {
+	ULONG Operation;
+	WCHAR KeyPath[260];
+	WCHAR ValueName[128];
+	ULONG ValueType;
+	ULONG ValueDataSize;
+} REG_OPERATION_INPUT, * PREG_OPERATION_INPUT;
+
+typedef struct _SERVICE_OPERATION_INPUT {
+	ULONG Operation;
+	WCHAR ServiceName[128];
+	ULONG ServiceType;
+} SERVICE_OPERATION_INPUT, * PSERVICE_OPERATION_INPUT;
+
+typedef struct _SESSION_OPERATION_INPUT {
+	ULONG SessionId;
+	ULONG Operation;
+} SESSION_OPERATION_INPUT, * PSESSION_OPERATION_INPUT;
+
+typedef struct _MITIGATION_SET_INPUT {
+	ULONG ProcessId;
+	ULONG PolicyId;
+	ULONG64 Flags;
+} MITIGATION_SET_INPUT, * PMITIGATION_SET_INPUT;
+
+typedef struct _FIREWALL_OPERATION_INPUT {
+	ULONG Operation;
+	WCHAR RuleName[128];
+	ULONG Action;
+	ULONG RemotePort;
+	ULONG Protocol;
+} FIREWALL_OPERATION_INPUT, * PFIREWALL_OPERATION_INPUT;
+
+typedef struct _WINDOW_PROTECT_INPUT {
+	ULONG    ProcessId;
+	ULONG64  Hwnd;
+	ULONG    Flags;
+} WINDOW_PROTECT_INPUT, * PWINDOW_PROTECT_INPUT;
+
+#define WINPROT_CLOSE    0x00000001
+#define WINPROT_HIDE     0x00000002
+#define WINPROT_TITLE    0x00000004
+#define WINPROT_DISABLE  0x00000008
+#define WINPROT_MOVE     0x00000010
+#define WINPROT_RESIZE   0x00000020
+#define WINPROT_TOPMOST  0x00000040
+#define WINPROT_ALL      0xFFFFFFFF
+
+typedef struct _INJECTION_PROTECT_INPUT {
+	ULONG ProcessId;
+} INJECTION_PROTECT_INPUT, * PINJECTION_PROTECT_INPUT;
+
 HANDLE G_DeviceHandle = INVALID_HANDLE_VALUE;
 inline DWORD G_LastMultiDrvError = ERROR_SUCCESS;
 inline std::wstring G_LastMultiDrvDetails;
@@ -577,7 +727,7 @@ BOOLEAN OpenDevice()
 	return OpenDeviceInternal(FALSE);
 }
 
-// OpenDeviceSilent - same as OpenDevice() but without wprintf output (for UI polling).
+
 BOOLEAN OpenDeviceSilent()
 {
 	return OpenDeviceInternal(TRUE);
@@ -1918,4 +2068,263 @@ BOOLEAN QueryDebugState(PDEBUG_STATE_OUTPUT Output)
 	}
 
 	return Success;
+}
+
+BOOL EnumerateWindowsKernel(
+	_Out_writes_bytes_all_(BufferSize) PVOID Buffer,
+	_In_ ULONG BufferSize,
+	_Out_ PULONG EntriesReturned)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	if (Buffer == NULL || BufferSize < sizeof(KERNEL_WINDOW_ENUM_OUTPUT) || EntriesReturned == NULL)
+	{
+		G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+		return FALSE;
+	}
+
+	DWORD BytesReturned = 0;
+	BOOL Success = SendIoctlWithOutput(
+		IOCTL_ENUM_WINDOWS, NULL, 0,
+		Buffer, BufferSize, &BytesReturned);
+
+	if (Success)
+	{
+		PKERNEL_WINDOW_ENUM_OUTPUT Out = (PKERNEL_WINDOW_ENUM_OUTPUT)Buffer;
+		*EntriesReturned = Out->Count;
+	}
+
+	return Success;
+}
+
+BOOL WindowOperationKernel(
+	ULONG ProcessId, ULONG64 Hwnd, ULONG Operation,
+	_In_opt_ PCWSTR NewTitle,
+	LONG NewX, LONG NewY, LONG NewWidth, LONG NewHeight,
+	ULONG Flags)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	KERNEL_WINDOW_OPERATION_INPUT Input = {};
+	Input.ProcessId = ProcessId;
+	Input.Hwnd = Hwnd;
+	Input.Operation = Operation;
+	Input.Flags = Flags;
+	Input.NewX = NewX;
+	Input.NewY = NewY;
+	Input.NewWidth = NewWidth;
+	Input.NewHeight = NewHeight;
+	if (NewTitle != NULL)
+		wcsncpy_s(Input.NewTitle, 256, NewTitle, 255);
+
+	return SendIoctl(IOCTL_WINDOW_OPERATION, &Input, sizeof(Input));
+}
+
+FORCEINLINE BOOL WindowKill(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_CLOSE, NULL, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowHide(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_HIDE, NULL, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowShow(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_SHOW, NULL, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowMinimize(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_MINIMIZE, NULL, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowRestore(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_RESTORE, NULL, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowEnable(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_ENABLE, NULL, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowDisable(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_DISABLE, NULL, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowSetTitle(ULONG Pid, ULONG64 Hwnd, PCWSTR Title, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_SET_TITLE, Title, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowSetTopmost(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_SET_TOPMOST, NULL, 0, 0, 0, 0, Flags);
+}
+
+FORCEINLINE BOOL WindowRemoveTopmost(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0)
+{
+	return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_REMOVE_TOPMOST, NULL, 0, 0, 0, 0, Flags);
+}
+
+/* ---- Command Line ---- */
+BOOL GetProcessCommandLine(ULONG ProcessId, PWCHAR Buffer, ULONG MaxLen)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	if (Buffer == NULL || MaxLen < 2) { G_LastMultiDrvError = ERROR_INVALID_PARAMETER; return FALSE; }
+	Buffer[0] = L'\0';
+
+	COMMAND_LINE_INPUT Input = { ProcessId };
+	ULONG OutSize = sizeof(COMMAND_LINE_INPUT) + MaxLen;
+	PBYTE OutBuf = new BYTE[OutSize];
+	RtlZeroMemory(OutBuf, OutSize);
+
+	DWORD BytesReturned = 0;
+	BOOL Success = SendIoctlWithOutput(IOCTL_GET_COMMAND_LINE, &Input, sizeof(Input),
+		OutBuf, OutSize, &BytesReturned);
+	if (Success)
+	{
+		ULONG CopyLen = (BytesReturned > 0 && BytesReturned <= MaxLen - 2) ? BytesReturned : 0;
+		if (CopyLen > 0)
+			RtlCopyMemory(Buffer, OutBuf, CopyLen);
+	}
+	delete[] OutBuf;
+	return Success;
+}
+
+/* ---- Service ---- */
+BOOL ServiceKernelOp(PCWSTR Name, ULONG Op, ULONG SvcType)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	SERVICE_OPERATION_INPUT Input = {};
+	Input.Operation = Op;
+	Input.ServiceType = SvcType;
+	wcsncpy_s(Input.ServiceName, 128, Name, 127);
+	return SendIoctl(IOCTL_SERVICE_OPERATION, &Input, sizeof(Input));
+}
+
+FORCEINLINE BOOL ServiceStart(PCWSTR Name, ULONG Type = 1) { return ServiceKernelOp(Name, 0, Type); }
+FORCEINLINE BOOL ServiceStop(PCWSTR Name, ULONG Type = 1) { return ServiceKernelOp(Name, 1, Type); }
+FORCEINLINE BOOL ServiceDisable(PCWSTR Name) { return ServiceKernelOp(Name, 2, 0); }
+FORCEINLINE BOOL ServiceEnable(PCWSTR Name) { return ServiceKernelOp(Name, 3, 0); }
+FORCEINLINE BOOL ServiceDelete(PCWSTR Name) { return ServiceKernelOp(Name, 4, 0); }
+
+/* ---- Registry ---- */
+BOOL RegistryKernelOp(PCWSTR KeyPath, ULONG Op, PCWSTR ValueName, ULONG ValueType,
+	PVOID ValueData, ULONG ValueSize, PVOID OutBuf, ULONG OutSize, PULONG Returned)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	ULONG InSize = sizeof(REG_OPERATION_INPUT) + ValueSize;
+	PBYTE InBuf = new BYTE[InSize];
+	RtlZeroMemory(InBuf, InSize);
+	PREG_OPERATION_INPUT RegIn = (PREG_OPERATION_INPUT)InBuf;
+	RegIn->Operation = Op;
+	wcsncpy_s(RegIn->KeyPath, 260, KeyPath, 259);
+	if (ValueName) wcsncpy_s(RegIn->ValueName, 128, ValueName, 127);
+	RegIn->ValueType = ValueType;
+	RegIn->ValueDataSize = ValueSize;
+	if (ValueData && ValueSize) RtlCopyMemory(InBuf + sizeof(REG_OPERATION_INPUT), ValueData, ValueSize);
+
+	DWORD BytesReturned = 0;
+	BOOL Success = SendIoctlWithOutput(IOCTL_REG_OPERATION, InBuf, InSize, OutBuf, OutSize, &BytesReturned);
+	if (Returned) *Returned = BytesReturned;
+	delete[] InBuf;
+	return Success;
+}
+
+FORCEINLINE BOOL RegEnumSubkeys(PCWSTR KeyPath, PVOID OutBuf, ULONG OutSize, PULONG Returned)
+{ return RegistryKernelOp(KeyPath, 0, NULL, 0, NULL, 0, OutBuf, OutSize, Returned); }
+FORCEINLINE BOOL RegDeleteKey(PCWSTR KeyPath)
+{ return RegistryKernelOp(KeyPath, 1, NULL, 0, NULL, 0, NULL, 0, NULL); }
+FORCEINLINE BOOL RegSetValueKernel(PCWSTR KeyPath, PCWSTR ValName, ULONG Type, PVOID Data, ULONG Size)
+{ return RegistryKernelOp(KeyPath, 2, ValName, Type, Data, Size, NULL, 0, NULL); }
+
+/* ---- Session ---- */
+BOOL SessionKernelOp(ULONG SessionId, ULONG Op, PVOID OutBuf, ULONG OutSize, PULONG Returned)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	SESSION_OPERATION_INPUT Input = { SessionId, Op };
+	DWORD BytesReturned = 0;
+	BOOL Success = SendIoctlWithOutput(IOCTL_SESSION_OPERATION, &Input, sizeof(Input),
+		OutBuf, OutSize, &BytesReturned);
+	if (Returned) *Returned = BytesReturned;
+	return Success;
+}
+
+FORCEINLINE BOOL EnumSessions(PVOID OutBuf, ULONG OutSize, PULONG Returned)
+{ return SessionKernelOp(0, 0, OutBuf, OutSize, Returned); }
+FORCEINLINE BOOL LogoffSession(ULONG SessionId)
+{ return SessionKernelOp(SessionId, 1, NULL, 0, NULL); }
+
+/* ---- Mitigation ---- */
+BOOL QueryMitigationKernel(ULONG Pid, PVOID OutBuf, ULONG OutSize, PULONG Returned)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	DWORD BytesReturned = 0;
+	BOOL Success = SendIoctlWithOutput(IOCTL_MITIGATION_QUERY, &Pid, sizeof(ULONG),
+		OutBuf, OutSize, &BytesReturned);
+	if (Returned) *Returned = BytesReturned;
+	return Success;
+}
+
+BOOL SetMitigationKernel(ULONG Pid, ULONG PolicyId, ULONG64 Flags)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	MITIGATION_SET_INPUT Input = { Pid, PolicyId, Flags };
+	return SendIoctl(IOCTL_MITIGATION_SET, &Input, sizeof(Input));
+}
+
+/* ---- Sync Objects ---- */
+BOOL EnumSyncObjectsKernel(PVOID OutBuf, ULONG OutSize, PULONG Count)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	DWORD BytesReturned = 0;
+	BOOL Success = SendIoctlWithOutput(IOCTL_ENUM_SYNC_OBJECTS, NULL, 0,
+		OutBuf, OutSize, &BytesReturned);
+	if (Count) *Count = BytesReturned;
+	return Success;
+}
+
+/* ---- Firewall ---- */
+BOOL FirewallKernelOp(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port, ULONG Protocol)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	FIREWALL_OPERATION_INPUT Input = {};
+	Input.Operation = Op;
+	Input.Action = Action;
+	Input.RemotePort = Port;
+	Input.Protocol = Protocol;
+	wcsncpy_s(Input.RuleName, 128, RuleName ? RuleName : L"", 127);
+	return SendIoctl(IOCTL_FIREWALL_OPERATION, &Input, sizeof(Input));
+}
+
+/* ---- Window Protect ---- */
+BOOL ProtectWindowKernel(ULONG Pid, ULONG64 Hwnd, ULONG Flags)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	WINDOW_PROTECT_INPUT Input = { Pid, Hwnd, Flags ? Flags : WINPROT_ALL };
+	return SendIoctl(IOCTL_ADD_WINDOW_PROTECT, &Input, sizeof(Input));
+}
+
+BOOL UnprotectWindowKernel(ULONG Pid, ULONG64 Hwnd)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	WINDOW_PROTECT_INPUT Input = { Pid, Hwnd, 0 };
+	return SendIoctl(IOCTL_REMOVE_WINDOW_PROTECT, &Input, sizeof(Input));
+}
+
+/* ---- Injection Protection (no PPL) ---- */
+BOOL AddInjectionProtectKernel(ULONG Pid)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	INJECTION_PROTECT_INPUT Input = { Pid };
+	return SendIoctl(IOCTL_ADD_INJECTION_PROTECTION, &Input, sizeof(Input));
+}
+
+BOOL RemoveInjectionProtectKernel(ULONG Pid)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	INJECTION_PROTECT_INPUT Input = { Pid };
+	return SendIoctl(IOCTL_REMOVE_INJECTION_PROTECTION, &Input, sizeof(Input));
 }

@@ -6,7 +6,7 @@
 #include <atomic>
 #include <string>
 
-/* ──── Event type ──── */
+
 struct DllEvent {
     std::string  Category;
     DWORD        ProcessId;
@@ -14,7 +14,7 @@ struct DllEvent {
     ULONGLONG    Timestamp;
 };
 
-/* ──── Constants (must match hook_dll/dllmain.cpp) ──── */
+
 #define DLL_PIPE_NAME        L"\\\\.\\pipe\\ApiMonitorPipe"
 #define DLL_PIPE_BUFFER_SIZE 4096
 
@@ -38,8 +38,8 @@ public:
         M_Running = true;
         M_Thread = std::thread(&DllMonitor::PipeLoop, this);
 
-        // Do not inject until the named-pipe server exists. Without this
-        // handshake the DLL could load before CreateNamedPipe completed.
+        
+        
         for (int I = 0; I < 40 && !M_Ready; ++I) Sleep(25);
         if (!M_Ready || M_CreateFailed) {
             Stop();

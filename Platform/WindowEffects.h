@@ -23,4 +23,4 @@ inline void ApplyWindowOpacity(GLFWwindow* Window, double Opacity) {
     SetLayeredWindowAttributes(Hwnd, 0, Alpha, LWA_ALPHA);
 }
 
-} // namespace Platform
+} 

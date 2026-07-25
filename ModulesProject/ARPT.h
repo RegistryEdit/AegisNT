@@ -61,7 +61,7 @@ inline void WaitForStop() {
         Sleep(80);
     }
 }
-} // namespace ArptControl
+} 
 
 inline std::string WinErrorText(DWORD Code) {
     if (Code == 0) return "0";
@@ -94,7 +94,7 @@ inline std::string ResolveArpDependPath(const char* Requested) {
     if (Requested && Requested[0]) {
         return std::string(Requested);
     }
-    // Default: <exeDir>\Modules\ARPDepend.dll (works regardless of cwd)
+    
     return ExeDir() + "Modules\\ARPDepend.dll";
 }
 

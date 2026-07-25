@@ -22,7 +22,7 @@ typedef BOOL(WINAPI* T_EndTask)
 
 T_EndTask pfnEndTask = nullptr;
 
-//PatchThreadKillProcess
+
 void PatchThread(DWORD Ptid)
 {
 	static auto exitAddr = (DWORDLONG)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "ExitProcess");
@@ -31,7 +31,7 @@ void PatchThread(DWORD Ptid)
 	SuspendThread(hThread);
 
 	CONTEXT Context;
-	Context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; // 设置我们需要访问的上下文部分
+	Context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; 
 
 	BOOL bRet = GetThreadContext(hThread, &Context);
 	if (!bRet) {
@@ -84,7 +84,7 @@ void PatchThreadRun(DWORD Pid) {
 		printf("[*]Operation done!\n");
 	}
 }
-//NtTerminateProcess
+
 bool NtTerminate(DWORD Pid) {
 	HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, Pid);
 	bool bRes = false;
@@ -98,7 +98,7 @@ bool NtTerminate(DWORD Pid) {
 	}
 	return bRes;
 }
-//KillProcessThreads
+
 bool KillProcessForce(DWORD dwProcessID)
 {
 	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, dwProcessID);
@@ -117,7 +117,7 @@ bool KillProcessForce(DWORD dwProcessID)
 		return Return;
 	}
 }
-//InjectExit
+
 DWORD WINAPI RemoteThreadProc_Suicide(LPVOID lpParam)
 {
 	PPACKAGE_SUICIDE pack = (PPACKAGE_SUICIDE)lpParam;
@@ -140,7 +140,7 @@ bool InjectSuicide(HANDLE hProc)
 		printf("GetProcAddress Failed\n");
 		return false;
 	}
-	LPVOID lpData = VirtualAllocEx(hProc, NULL, sizeof pack, MEM_COMMIT/* | MEM_RELEASE*/, PAGE_READWRITE);
+	LPVOID lpData = VirtualAllocEx(hProc, NULL, sizeof pack, MEM_COMMIT, PAGE_READWRITE);
 	if (!lpData)
 	{
 		printf("VirtualAllocEx 1 Failed\n");

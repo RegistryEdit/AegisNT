@@ -645,7 +645,7 @@ public:
             FALSE, Pid);
         if (!HProcess) return FALSE;
 
-        // 1. Get PEB address
+        
         PROCESS_BASIC_INFORMATION Pbi{};
         HMODULE HNtdll = GetModuleHandleW(L"ntdll.dll");
         if (!HNtdll) { CloseHandle(HProcess); return FALSE; }
@@ -658,7 +658,7 @@ public:
             return FALSE;
         }
 
-        // 2. Read local PEB copy
+        
         ToolPeb Peb{};
         if (!ReadProcessMemory(HProcess, Pbi.PebBaseAddress, &Peb, sizeof(Peb), nullptr)) {
             CloseHandle(HProcess);
@@ -671,20 +671,20 @@ public:
         printf("Ldr:                %p\n", Peb.Ldr);
         printf("ProcessParameters:  %p\n", Peb.ProcessParameters);
 
-        // 3. ProcessParameters
+        
         RTL_USER_PROCESS_PARAMETERS Params{};
         if (ReadProcessMemory(HProcess, Peb.ProcessParameters, &Params, sizeof(Params), nullptr)) {
             WCHAR Buffer[1024];
             SIZE_T ReadSize;
 
-            // CommandLine
+            
             ReadSize = min(Params.CommandLine.Length, (USHORT)(sizeof(Buffer) - 2));
             if (ReadProcessMemory(HProcess, Params.CommandLine.Buffer, Buffer, ReadSize, nullptr)) {
                 Buffer[ReadSize / sizeof(WCHAR)] = L'\0';
                 printf("CommandLine:        %ws\n", Buffer);
             }
 
-            // ImagePath
+            
             ReadSize = min(Params.ImagePathName.Length, (USHORT)(sizeof(Buffer) - 2));
             if (ReadProcessMemory(HProcess, Params.ImagePathName.Buffer, Buffer, ReadSize, nullptr)) {
                 Buffer[ReadSize / sizeof(WCHAR)] = L'\0';
@@ -692,7 +692,7 @@ public:
             }
         }
 
-        // 4. Module list via Ldr
+        
         ToolPebLdrData Ldr{};
         if (ReadProcessMemory(HProcess, Peb.Ldr, &Ldr, sizeof(Ldr), nullptr)) {
             printf("\n--- Loaded Modules ---\n");

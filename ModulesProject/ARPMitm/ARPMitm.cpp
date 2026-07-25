@@ -62,7 +62,7 @@ public:
 };
 
 
-// StopModule - graceful stop via GetProcAddress
+
 extern "C" __declspec(dllexport) void StopModule() { ArptControl::RequestStop(); }
 BOOL APIENTRY DllMain(HMODULE, DWORD Reason, LPVOID)
 {

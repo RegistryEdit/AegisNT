@@ -1,18 +1,18 @@
-﻿#include "../../Module/ModuleBase.h"
+#include "../../Module/ModuleBase.h"
 #include "../../Utils/Color.h"
 #include <iostream>
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <iphlpapi.h>
 #include <windows.h>
-#include <iomanip>//
-#include <string>//
+#include <iomanip>
+#include <string>
 #include <map>
 #include <sstream>
 #include <vector>
-#include <cstring>//
+#include <cstring>
 #include <csignal>
-#include <chrono>//
+#include <chrono>
 #include <thread>
 #include <conio.h>
 

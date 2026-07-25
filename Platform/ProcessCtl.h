@@ -94,13 +94,13 @@ inline DWORD GetIntegrityLevel(HANDLE hToken) {
     DWORD RID = *GetSidSubAuthority(pTML->Label.Sid,
         (DWORD)(UCHAR)(*GetSidSubAuthorityCount(pTML->Label.Sid) - 1));
     LocalFree(pTML);
-    return RID;  //0x1000=Low, 0x2000=Medium, 0x3000=High, 0x4000=System
+    return RID;  
 }
 
 
-//S-1-16-0	Untrusted	不可信
-//S - 1 - 16 - 1	Low	低(如 IE 保护模式)
-//S - 1 - 16 - 2	Medium	中(默认)
-//S - 1 - 16 - 3	High	高(管理员)
-//S - 1 - 16 - 4	System	系统
-//S - 1 - 16 - 5	Protected	受保护进程
+
+
+
+
+
+

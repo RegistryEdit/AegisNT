@@ -42,8 +42,8 @@ inline bool CopyUtf8ToClipboardText(const std::string& Text) {
         return false;
     }
     CloseClipboard();
-    // Ownership of Mem transfers to the clipboard on success.
+    
     return true;
 }
 
-} // namespace Platform
+} 

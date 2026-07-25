@@ -64,7 +64,7 @@ struct OutputNormalizer {
                 continue;
             }
 
-            // CSI sequence: ignore until final byte 0x40..0x7E
+            
             if (Ch >= 0x40 && Ch <= 0x7E) {
                 CurrentState = State::Normal;
             }
@@ -167,8 +167,8 @@ inline std::string CaptureOutputStreaming(
         const int Fd = _fileno(Stream);
         if (Fd >= 0) return true;
 
-        // GUI apps (/SUBSYSTEM:WINDOWS) often start without a valid CRT stdout/stderr.
-        // Bind them to NUL so _dup/_dup2 redirection works without opening a console.
+        
+        
         if (freopen("NUL", "w", Stream) != nullptr) {
             return _fileno(Stream) >= 0;
         }
@@ -216,7 +216,7 @@ inline std::string CaptureOutputStreaming(
     SetStdHandle(STD_OUTPUT_HANDLE, WritePipe);
     SetStdHandle(STD_ERROR_HANDLE, WritePipe);
     if (_dup2(WriteFd, StdoutFd) != 0 || _dup2(WriteFd, StderrFd) != 0) {
-        // Restore handles we changed, then fallback to iostream capture.
+        
         SetStdHandle(STD_OUTPUT_HANDLE, OldStdout);
         SetStdHandle(STD_ERROR_HANDLE, OldStderr);
         _close(WriteFd);
@@ -228,7 +228,7 @@ inline std::string CaptureOutputStreaming(
         return FallbackIostream("dup2(stdout/stderr) failed");
     }
 
-    // Reduce buffering so long-running modules flush into the pipe.
+    
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
     std::cout.setf(std::ios::unitbuf);
@@ -269,9 +269,9 @@ inline std::string CaptureOutputStreaming(
     _close(OldStderrFd);
     SetStdHandle(STD_OUTPUT_HANDLE, OldStdout);
     SetStdHandle(STD_ERROR_HANDLE, OldStderr);
-    _close(WriteFd); // closes WritePipe too
+    _close(WriteFd); 
 
-    // Wait for reader to drain remaining data.
+    
     if (Reader.joinable()) {
         Reader.join();
     }
@@ -285,4 +285,4 @@ inline std::string CaptureOutput(const std::function<void()>& Func) {
     return CaptureOutputStreaming(Func, {});
 }
 
-} // namespace Module
+} 

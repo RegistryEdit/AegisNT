@@ -285,7 +285,7 @@ inline std::vector<std::string> ModuleNameList(int CategoryIndex) {
     return Names;
 }
 
-} // namespace ModuleLoader
+} 
 
 namespace AppState {
 
@@ -308,4 +308,4 @@ inline void ScanDrivers() {
     }
 }
 
-} // namespace AppState
+} 

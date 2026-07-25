@@ -31,6 +31,7 @@
 #include <QProcessEnvironment>
 #include <QCryptographicHash>
 #include <QHostAddress>
+#include <QRegularExpression>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -96,6 +97,9 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <winioctl.h>
+#include <winternl.h>
+#include <wtsapi32.h>
+#include <netfw.h>
 #include <sddl.h>
 #include <tlhelp32.h>
 #include <format>
@@ -137,11 +141,285 @@
 
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "Dwmapi.lib")
+#pragma comment(lib, "Wtsapi32.lib")
+#pragma comment(lib, "Ole32.lib")
 
 namespace
 {
 
+#ifndef DIRECTORY_QUERY
+#define DIRECTORY_QUERY 0x0001
+#endif
+
+#ifndef STATUS_NO_MORE_ENTRIES
+#define STATUS_NO_MORE_ENTRIES ((NTSTATUS)0x8000001AL)
+#endif
+
+struct PublicObjectDirectoryInformation
+{
+    UNICODE_STRING Name;
+    UNICODE_STRING TypeName;
+};
+
 using SystemCallNameMap = std::map<ULONG, QString>;
+
+QString SessionStateText(ULONG State)
+{
+    switch (static_cast<WTS_CONNECTSTATE_CLASS>(State))
+    {
+    case WTSActive: return "Active";
+    case WTSConnected: return "Connected";
+    case WTSConnectQuery: return "ConnectQuery";
+    case WTSShadow: return "Shadow";
+    case WTSDisconnected: return "Disconnected";
+    case WTSIdle: return "Idle";
+    case WTSListen: return "Listen";
+    case WTSReset: return "Reset";
+    case WTSDown: return "Down";
+    case WTSInit: return "Init";
+    default: return QString("State %1").arg(State);
+    }
+}
+
+ULONG ParsePortValue(const QString &Ports)
+{
+    if (Ports.isEmpty())
+        return 0;
+    const QString FirstToken = Ports.split(',', Qt::SkipEmptyParts).value(0).trimmed();
+    if (FirstToken.isEmpty() || FirstToken == "*" || FirstToken == "RPC" || FirstToken == "IPHTTPS")
+        return 0;
+    const QString RangeStart = FirstToken.split('-', Qt::SkipEmptyParts).value(0).trimmed();
+    bool Ok = false;
+    const uint Port = RangeStart.toUInt(&Ok);
+    return Ok ? static_cast<ULONG>(Port) : 0;
+}
+
+std::map<ULONG, ULONG> BuildSessionProcessCounts()
+{
+    std::map<ULONG, ULONG> Counts;
+    HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (Snapshot == INVALID_HANDLE_VALUE)
+        return Counts;
+
+    PROCESSENTRY32W Entry{};
+    Entry.dwSize = sizeof(Entry);
+    if (Process32FirstW(Snapshot, &Entry))
+    {
+        do
+        {
+            DWORD SessionId = 0;
+            if (ProcessIdToSessionId(Entry.th32ProcessID, &SessionId))
+                ++Counts[static_cast<ULONG>(SessionId)];
+        } while (Process32NextW(Snapshot, &Entry));
+    }
+    CloseHandle(Snapshot);
+    return Counts;
+}
+
+bool EnumerateSessionsFallback(std::vector<std::tuple<ULONG, ULONG, ULONG, QString>> &Entries)
+{
+    PWTS_SESSION_INFOW Sessions = nullptr;
+    DWORD Count = 0;
+    if (!WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &Sessions, &Count))
+        return false;
+
+    const std::map<ULONG, ULONG> ProcessCounts = BuildSessionProcessCounts();
+    for (DWORD Index = 0; Index < Count; ++Index)
+    {
+        const WTS_SESSION_INFOW &Session = Sessions[Index];
+        QString WinStation = Session.pWinStationName ? QString::fromWCharArray(Session.pWinStationName) : QString();
+        if (WinStation.isEmpty())
+        {
+            LPWSTR Buffer = nullptr;
+            DWORD Bytes = 0;
+            if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, Session.SessionId, WTSWinStationName, &Buffer, &Bytes) && Buffer)
+            {
+                WinStation = QString::fromWCharArray(Buffer);
+                WTSFreeMemory(Buffer);
+            }
+        }
+        Entries.emplace_back(static_cast<ULONG>(Session.SessionId),
+                             static_cast<ULONG>(Session.State),
+                             ProcessCounts.contains(static_cast<ULONG>(Session.SessionId))
+                                 ? ProcessCounts.at(static_cast<ULONG>(Session.SessionId))
+                                 : 0,
+                             WinStation);
+    }
+    WTSFreeMemory(Sessions);
+    return true;
+}
+
+bool EnumerateFirewallRulesFallback(std::vector<std::tuple<QString, ULONG, ULONG, ULONG, QString>> &Entries)
+{
+    const HRESULT InitHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool CoInitialized = SUCCEEDED(InitHr);
+    const bool ComReady = SUCCEEDED(InitHr) || InitHr == RPC_E_CHANGED_MODE;
+    if (!ComReady)
+        return false;
+
+    INetFwPolicy2 *Policy = nullptr;
+    HRESULT Hr = CoCreateInstance(__uuidof(NetFwPolicy2), nullptr, CLSCTX_INPROC_SERVER,
+        __uuidof(INetFwPolicy2), reinterpret_cast<void **>(&Policy));
+    if (FAILED(Hr))
+    {
+        if (CoInitialized)
+            CoUninitialize();
+        return false;
+    }
+
+    INetFwRules *Rules = nullptr;
+    Hr = Policy->get_Rules(&Rules);
+    if (FAILED(Hr) || Rules == nullptr)
+    {
+        Policy->Release();
+        if (CoInitialized)
+            CoUninitialize();
+        return false;
+    }
+
+    IUnknown *EnumUnknown = nullptr;
+    Hr = Rules->get__NewEnum(&EnumUnknown);
+    if (FAILED(Hr) || EnumUnknown == nullptr)
+    {
+        Rules->Release();
+        Policy->Release();
+        if (CoInitialized)
+            CoUninitialize();
+        return false;
+    }
+
+    IEnumVARIANT *Enum = nullptr;
+    Hr = EnumUnknown->QueryInterface(IID_PPV_ARGS(&Enum));
+    EnumUnknown->Release();
+    if (FAILED(Hr) || Enum == nullptr)
+    {
+        Rules->Release();
+        Policy->Release();
+        if (CoInitialized)
+            CoUninitialize();
+        return false;
+    }
+
+    VARIANT Variant;
+    VariantInit(&Variant);
+    ULONG Added = 0;
+    while (Enum->Next(1, &Variant, nullptr) == S_OK)
+    {
+        if (Variant.vt == VT_DISPATCH && Variant.pdispVal != nullptr)
+        {
+            INetFwRule *Rule = nullptr;
+            if (SUCCEEDED(Variant.pdispVal->QueryInterface(__uuidof(INetFwRule), reinterpret_cast<void **>(&Rule))) && Rule != nullptr)
+            {
+                BSTR Name = nullptr;
+                BSTR LocalPorts = nullptr;
+                NET_FW_ACTION Action = NET_FW_ACTION_BLOCK;
+                long Protocol = 0;
+                VARIANT_BOOL Enabled = VARIANT_FALSE;
+                NET_FW_RULE_DIRECTION Direction = NET_FW_RULE_DIR_IN;
+
+                Rule->get_Name(&Name);
+                Rule->get_Action(&Action);
+                Rule->get_Protocol(&Protocol);
+                Rule->get_LocalPorts(&LocalPorts);
+                Rule->get_Enabled(&Enabled);
+                Rule->get_Direction(&Direction);
+
+                const QString NameText = Name ? QString::fromWCharArray(Name) : QString();
+                const QString PortsText = LocalPorts ? QString::fromWCharArray(LocalPorts) : QString();
+                const QString StateText = QString("%1 / %2")
+                    .arg(Enabled == VARIANT_TRUE ? "Enabled" : "Disabled")
+                    .arg(Direction == NET_FW_RULE_DIR_OUT ? "Outbound" : "Inbound");
+                Entries.emplace_back(NameText,
+                                     static_cast<ULONG>(Action == NET_FW_ACTION_ALLOW ? 1 : 0),
+                                     static_cast<ULONG>(Protocol),
+                                     ParsePortValue(PortsText),
+                                     StateText);
+                ++Added;
+
+                if (Name) SysFreeString(Name);
+                if (LocalPorts) SysFreeString(LocalPorts);
+                Rule->Release();
+            }
+        }
+        VariantClear(&Variant);
+    }
+
+    Enum->Release();
+    Rules->Release();
+    Policy->Release();
+    if (CoInitialized)
+        CoUninitialize();
+    return Added > 0;
+}
+
+bool QueryDirectorySyncObjects(const wchar_t *Path, ULONG DirectoryId,
+                               std::vector<std::tuple<QString, QString, ULONG>> &Entries)
+{
+    using NtOpenDirectoryObjectFn = NTSTATUS (NTAPI *)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+    using NtQueryDirectoryObjectFn = NTSTATUS (NTAPI *)(HANDLE, PVOID, ULONG, BOOLEAN, BOOLEAN, PULONG, PULONG);
+
+    static const NtOpenDirectoryObjectFn NtOpenDirectoryObjectPtr =
+        reinterpret_cast<NtOpenDirectoryObjectFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenDirectoryObject"));
+    static const NtQueryDirectoryObjectFn NtQueryDirectoryObjectPtr =
+        reinterpret_cast<NtQueryDirectoryObjectFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryDirectoryObject"));
+    if (NtOpenDirectoryObjectPtr == nullptr || NtQueryDirectoryObjectPtr == nullptr)
+        return false;
+
+    UNICODE_STRING DirName;
+    DirName.Buffer = const_cast<PWSTR>(Path);
+    DirName.Length = static_cast<USHORT>(wcslen(Path) * sizeof(wchar_t));
+    DirName.MaximumLength = DirName.Length + sizeof(wchar_t);
+    OBJECT_ATTRIBUTES Attributes;
+    InitializeObjectAttributes(&Attributes, &DirName, OBJ_CASE_INSENSITIVE, nullptr, nullptr);
+
+    HANDLE Directory = nullptr;
+    if (NtOpenDirectoryObjectPtr(&Directory, DIRECTORY_QUERY, &Attributes) < 0)
+        return false;
+
+    bool Added = false;
+    ULONG Context = 0;
+    BOOLEAN Restart = TRUE;
+    BYTE Buffer[8192];
+    for (;;)
+    {
+        ULONG Returned = 0;
+        const NTSTATUS Status = NtQueryDirectoryObjectPtr(Directory, Buffer, sizeof(Buffer), TRUE, Restart, &Context, &Returned);
+        if (Status == STATUS_NO_MORE_ENTRIES)
+            break;
+        if (Status < 0)
+            break;
+        Restart = FALSE;
+
+        const auto *Info = reinterpret_cast<const PublicObjectDirectoryInformation *>(Buffer);
+        if (Info->Name.Buffer == nullptr || Info->TypeName.Buffer == nullptr)
+            continue;
+
+        const QString Type = QString::fromWCharArray(Info->TypeName.Buffer, Info->TypeName.Length / sizeof(wchar_t));
+        if (!Type.startsWith("Mutant", Qt::CaseInsensitive) &&
+            !Type.startsWith("Event", Qt::CaseInsensitive) &&
+            !Type.startsWith("Semaphore", Qt::CaseInsensitive))
+            continue;
+
+        const QString Name = QString::fromWCharArray(Info->Name.Buffer, Info->Name.Length / sizeof(wchar_t));
+        Entries.emplace_back(Name, Type, DirectoryId);
+        Added = true;
+    }
+
+    CloseHandle(Directory);
+    return Added;
+}
+
+bool EnumerateSyncObjectsFallback(std::vector<std::tuple<QString, QString, ULONG>> &Entries)
+{
+    bool Success = QueryDirectorySyncObjects(L"\\BaseNamedObjects", 0, Entries);
+    DWORD SessionId = 0;
+    if (ProcessIdToSessionId(GetCurrentProcessId(), &SessionId) && SessionId != 0)
+    {
+        const std::wstring SessionPath = std::format(L"\\Sessions\\{}\\BaseNamedObjects", SessionId);
+        Success = QueryDirectorySyncObjects(SessionPath.c_str(), 1, Entries) || Success;
+    }
+    return Success;
+}
 
 SystemCallNameMap ParseSystemCallNames(HMODULE Module, const char *Prefix, bool ShadowTable = false)
 {
@@ -2327,7 +2605,7 @@ struct PageDefinition
     Fluent::IconType Icon;
 };
 
-constexpr std::array<PageDefinition, 16> KPages{{
+constexpr std::array<PageDefinition, 17> KPages{{
     {"Information", "Application overview, environment status, and system information.", Fluent::IconType::INFO},
     {"Task", "Monitor system tasks in real-time.", Fluent::IconType::PEOPLE},
     {"Monitor", "System and process activity monitoring.", Fluent::IconType::VIEW},
@@ -2344,6 +2622,7 @@ constexpr std::array<PageDefinition, 16> KPages{{
     {"Console", "Integrated command-line console for debugging.", Fluent::IconType::COMMAND_PROMPT},
     {"Settings", "Application settings and configuration options.", Fluent::IconType::SETTING},
     {"KernelInspector", "Inspect kernel memory, objects, filters, networking, and security state.", Fluent::IconType::SEARCH},
+    {"ServiceManager", "Windows services and kernel driver management.", Fluent::IconType::DEVELOPER_TOOLS},
 }};
 
 QIcon CreateFluentIcon(Fluent::IconType Icon)
@@ -4545,6 +4824,19 @@ class TaskManagerPage final : public QWidget
             }
             ReportDriverResult("UnProtect");
         });
+        ProtectMenu->addSeparator();
+        AddMenuAction(ProtectMenu, "InjectProtect", [this, SelectedPids] {
+            for (DWORD SelectedPid : SelectedPids) {
+                AddInjectionProtectKernel(SelectedPid);
+            }
+            ReportDriverResult("InjectProtect");
+        });
+        AddMenuAction(ProtectMenu, "InjectUnprotect", [this, SelectedPids] {
+            for (DWORD SelectedPid : SelectedPids) {
+                RemoveInjectionProtectKernel(SelectedPid);
+            }
+            ReportDriverResult("InjectUnprotect");
+        });
         Menu->addMenu(ProtectMenu);
 
         auto *CriticalMenu = new RoundMenu("Critical", Menu);
@@ -5158,14 +5450,36 @@ class TaskManagerPage final : public QWidget
             const bool UserHandleOk = QueryUserModeHandles(Pid, UserHandleRows, UserHandleError);
             std::string PebOutput;
             ProcessPeb::ReadPebInfoText(Pid, PebOutput);
+
+            std::vector<std::tuple<ULONG, ULONG64, QString>> MitigationEntries;
+            if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+            {
+                BYTE MitBuf[4096] = {};
+                ULONG MitReturned = 0;
+                if (QueryMitigationKernel(Pid, MitBuf, sizeof(MitBuf), &MitReturned) && MitReturned >= sizeof(ULONG))
+                {
+                    PULONG Count = (PULONG)MitBuf;
+                    PUCHAR Data = (PUCHAR)(Count + 1);
+                    for (ULONG i = 0; i < *Count; i++)
+                    {
+                        ULONG Id = *(PULONG)Data; Data += 4;
+                         ULONG64 Flags = *(ULONG64*)Data; Data += 8;
+                        QString Name = QString::fromWCharArray((PWCHAR)Data);
+                        Data += 64;
+                        MitigationEntries.emplace_back(Id, Flags, Name);
+                    }
+                }
+            }
+
             QMetaObject::invokeMethod(qApp, [SafeDialog, Summary, Token, Threads, Handles, Modules, Memory,
                                              Mitigations, PebText, Loading, LoadStatus, InspectorSearch,
                                              TokenInfo = std::move(TokenInfo), TokenOk,
                                              ProcessRows = std::move(ProcessRows), ThreadRows = std::move(ThreadRows),
                                              HandleRows = std::move(HandleRows), UserHandleRows = std::move(UserHandleRows),
                                              ModuleRows = std::move(ModuleRows), MemoryRows = std::move(MemoryRows),
-                                             ProcessHeader, HandleHeader, ModuleHeader, UserHandleOk, UserHandleError,
-                                             PebOutput = std::move(PebOutput), HasSelectedProcess]() mutable {
+                                              ProcessHeader, HandleHeader, ModuleHeader, UserHandleOk, UserHandleError,
+                                              PebOutput = std::move(PebOutput), HasSelectedProcess,
+                                              MitigationEntries = std::move(MitigationEntries), Pid]() mutable {
                 if (!SafeDialog) return;
                 const auto Add = [InspectorSearch](QTableWidget *Table, const QStringList &Values) {
                     const int Row = Table->rowCount(); Table->insertRow(Row);
@@ -5251,12 +5565,21 @@ class TaskManagerPage final : public QWidget
                         Add(Mitigations, {"Handle source", "Kernel driver", QString::number(HandleRows.size())});
                     }
                 }
-                for (const auto &R : ModuleRows) Add(Modules, {QString::fromWCharArray(R.Name), QString("0x%1").arg(R.Address, 0, 16).toUpper(),
-                    FormatBytes(R.SizeBytes), QString::fromWCharArray(R.Path), SourceName(R.Source)});
-                if (ModuleRows.empty()) Add(Modules, {"Unavailable", {}, {}, {}, QString("0x%1").arg(static_cast<quint32>(ModuleHeader.Status), 8, 16, QLatin1Char('0')).toUpper()});
-                for (const auto &R : MemoryRows) Add(Memory, {QString("0x%1").arg(R.Address, 0, 16).toUpper(), QString::number(R.SizeBytes),
-                    QString("0x%1").arg(R.Value[2], 0, 16).toUpper(), QString("0x%1").arg(R.Value[3], 0, 16).toUpper(), QString("0x%1").arg(R.Value[4], 0, 16).toUpper()});
                 Add(Mitigations, {"Kernel query", "Capability-dependent", SourceName(ProcessHeader.Source)});
+
+                if (!MitigationEntries.empty())
+                {
+                    for (const auto &[Id, Flags, Name] : MitigationEntries)
+                    {
+                        QString FlagText = QString("0x%1").arg(Flags, 16, 16, QLatin1Char('0'));
+                        QString Status = (Flags & 1) ? "Enabled" : "Disabled";
+                        Add(Mitigations, {Name, FlagText + " (" + Status + ")", QString("PID %1").arg(Pid)});
+                    }
+                }
+                else if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+                {
+                    Add(Mitigations, {"Mitigation query", "No data / unsupported", {}});
+                }
                 PebText->setPlainText(QString::fromStdString(PebOutput));
                 if (!InspectorSearch->text().trimmed().isEmpty())
                 {
@@ -5471,7 +5794,7 @@ struct MonitorStreamState
 
 struct MonitorSharedState
 {
-    std::array<MonitorStreamState, 4> Streams;
+    std::array<MonitorStreamState, 5> Streams;
 };
 
 std::weak_ptr<MonitorSharedState> G_ActiveMonitorState;
@@ -5548,12 +5871,14 @@ class MonitorManagerPage final : public QWidget
         Tabs->addTab("process", "Process", Fluent::IconType::APPLICATION);
         Tabs->addTab("network", "Network", Fluent::IconType::GLOBE);
         Tabs->addTab("http", "HTTP(S)", Fluent::IconType::LINK);
+        Tabs->addTab("history", "History", Fluent::IconType::HISTORY);
         Layout->addWidget(Tabs);
         Pages = new QStackedWidget;
         Pages->addWidget(CreateSystemPage());
         Pages->addWidget(CreateProcessPage());
         Pages->addWidget(CreateNetworkPage());
         Pages->addWidget(CreateHttpPage());
+        Pages->addWidget(CreateHistoryPage());
         Layout->addWidget(Pages, 1);
         QObject::connect(Tabs, &TabBar::currentChanged, Pages, &QStackedWidget::setCurrentIndex);
         UpdateTimer = new QTimer(this);
@@ -5705,6 +6030,55 @@ class MonitorManagerPage final : public QWidget
         QObject::connect(HttpStart, &QPushButton::clicked, this, [this] { StartHttp(); });
         QObject::connect(HttpStop, &QPushButton::clicked, this, [this] { StopHttp(true); });
         return CreateEventPage(3, Controls, "Search URL, host, method, status, SNI, process, or PID");
+    }
+
+    QWidget *CreateHistoryPage()
+    {
+        auto *Page = new QWidget;
+        auto *Layout = new QVBoxLayout(Page);
+        Layout->setContentsMargins(0, 0, 0, 0);
+        Layout->setSpacing(10);
+
+        auto *CtrlBar = new QHBoxLayout;
+        auto *ExportBtn = MakeButton("Export CSV");
+        auto *ClearBtn = MakeButton("Clear");
+        auto *SearchEdit = new SearchLineEdit;
+        SearchEdit->setPlaceholderText("Search events by type, PID, process, or detail");
+        SearchEdit->setClearButtonEnabled(true);
+        SearchEdit->setMaximumWidth(400);
+        HistoryStatus = new BodyLabel("Persistent event history");
+        CtrlBar->addWidget(SearchEdit);
+        CtrlBar->addStretch();
+        CtrlBar->addWidget(ExportBtn);
+        CtrlBar->addWidget(ClearBtn);
+        CtrlBar->addWidget(HistoryStatus);
+        Layout->addLayout(CtrlBar);
+
+        HistoryTable = MakeTable({"Timestamp", "Type", "PID", "Process", "Detail"});
+        HistoryTable->setProperty("DetailDialogTitle", "Event details");
+        Layout->addWidget(HistoryTable, 1);
+
+        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this, SearchEdit] {
+            PopulateHistory(SearchEdit->text().trimmed());
+        });
+        QObject::connect(ExportBtn, &QPushButton::clicked, this, [this] {
+            QString Path = QFileDialog::getSaveFileName(this, "Export Events", "events.csv", "CSV (*.csv)");
+            if (!Path.isEmpty()) {
+                QFile File(Path);
+                if (File.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    QTextStream Out(&File);
+                    Out << "Timestamp,Type,PID,Process,Detail\n";
+                    for (const auto &Evt : HistoryRows)
+                        Out << Evt.Timestamp << "," << Evt.Type << "," << Evt.Pid << "," << Evt.Process << ",\"" << Evt.Detail << "\"\n";
+                }
+            }
+        });
+        QObject::connect(ClearBtn, &QPushButton::clicked, this, [this] {
+            HistoryRows.clear();
+            PopulateHistory(QString());
+        });
+
+        return Page;
     }
 
     void Populate(int Index)
@@ -6138,6 +6512,34 @@ class MonitorManagerPage final : public QWidget
     std::array<BodyLabel *, 4> Statuses{};
     std::array<uint64_t, 4> DisplayedVersions{};
     QTimer *UpdateTimer = nullptr;
+
+    struct HistoryEvent { QString Timestamp; QString Type; DWORD Pid; QString Process; QString Detail; };
+    std::vector<HistoryEvent> HistoryRows;
+    TableWidget *HistoryTable = nullptr;
+    BodyLabel *HistoryStatus = nullptr;
+    void PopulateHistory(const QString &Query)
+    {
+        HistoryTable->clearContents();
+        HistoryTable->setRowCount(0);
+        for (const auto &Evt : HistoryRows)
+        {
+            if (!Query.isEmpty() && !Evt.Type.contains(Query, Qt::CaseInsensitive) &&
+                !Evt.Process.contains(Query, Qt::CaseInsensitive) &&
+                !Evt.Detail.contains(Query, Qt::CaseInsensitive) &&
+                !QString::number(Evt.Pid).contains(Query))
+                continue;
+            int R = HistoryTable->rowCount();
+            HistoryTable->insertRow(R);
+            HistoryTable->setItem(R, 0, new QTableWidgetItem(Evt.Timestamp));
+            HistoryTable->setItem(R, 1, new QTableWidgetItem(Evt.Type));
+            HistoryTable->setItem(R, 2, new QTableWidgetItem(QString::number(Evt.Pid)));
+            HistoryTable->setItem(R, 3, new QTableWidgetItem(Evt.Process));
+            HistoryTable->setItem(R, 4, new QTableWidgetItem(Evt.Detail));
+            HistoryTable->setRowHeight(R, 38);
+        }
+        HistoryStatus->setText(QString("Events: %1").arg(HistoryRows.size()));
+    }
+
     ComboBox *SystemMode = nullptr; PushButton *SystemStart = nullptr; PushButton *SystemStop = nullptr;
     LineEdit *SystemFilterPid = nullptr; LineEdit *SystemPathPrefix = nullptr; CheckBox *RegistryPreview = nullptr;
     LineEdit *ProcessTarget = nullptr; ComboBox *ProcessMethod = nullptr; PushButton *ProcessStart = nullptr; PushButton *ProcessStop = nullptr;
@@ -7957,10 +8359,25 @@ class WindowManagerPage final : public QWidget
         QString ClassName;
         QString ProcessPath;
         RECT Rect{};
+        RECT ClientRect{};
+        LONG Style = 0;
+        LONG ExStyle = 0;
+        HWND ParentHwnd = nullptr;
+        HWND OwnerHwnd = nullptr;
+        UINT Dpi = 0;
         bool Visible = false;
         bool Enabled = false;
         bool Minimized = false;
         bool Maximized = false;
+        bool IsHung = false;
+        bool IsTopmost = false;
+        bool IsLayered = false;
+        bool IsToolWindow = false;
+        bool IsPopup = false;
+        bool IsChild = false;
+        bool IsUnicode = false;
+        bool IsAppWindow = false;
+        UCHAR Alpha = 255;
     };
 
   public:
@@ -7968,6 +8385,22 @@ class WindowManagerPage final : public QWidget
     {
         auto *Layout = new QVBoxLayout(this);
         ConfigurePageLayout(Layout);
+
+        
+        auto *Tabs = new TabBar;
+        Tabs->setAddButtonVisible(false);
+        Tabs->setTabsClosable(false);
+        Tabs->setMovable(false);
+        Tabs->addTab("windows", "Windows", Fluent::IconType::BACK_TO_WINDOW);
+        Tabs->addTab("protected", "Protected", Fluent::IconType::CERTIFICATE);
+        Layout->addWidget(Tabs);
+        auto *Pages = new QStackedWidget;
+        Layout->addWidget(Pages, 1);
+
+        
+        auto *WinPage = new QWidget;
+        auto *WinLayout = new QVBoxLayout(WinPage);
+        ConfigurePageLayout(WinLayout);
         auto *Toolbar = new QHBoxLayout;
         ConfigureToolbarLayout(Toolbar);
         SearchEdit = new SearchLineEdit;
@@ -7978,19 +8411,48 @@ class WindowManagerPage final : public QWidget
         Toolbar->addWidget(SearchEdit);
         Toolbar->addStretch();
         Toolbar->addWidget(RefreshButton);
-        Layout->addLayout(Toolbar);
-        WindowTable = MakeTable({"HWND", "Title", "Class", "Process", "PID", "State", "Rect"});
+        WinLayout->addLayout(Toolbar);
+        WindowTable = MakeTable({"HWND", "Title", "Class", "Process", "PID", "Style", "State", "Rect", "Dpi"});
         WindowTable->setSelectionMode(QAbstractItemView::SingleSelection);
         WindowTable->setContextMenuPolicy(Qt::CustomContextMenu);
         WindowTable->setProperty("DetailDialogTitle", "Window details");
         WindowTable->horizontalHeader()->setStretchLastSection(false);
         for (int Column = 0; Column < WindowTable->columnCount(); ++Column)
             WindowTable->horizontalHeader()->setSectionResizeMode(Column, QHeaderView::ResizeToContents);
-        Layout->addWidget(WindowTable, 1);
+        WinLayout->addWidget(WindowTable, 1);
+
+        
+        auto *ProtPage = new QWidget;
+        auto *ProtLayout = new QVBoxLayout(ProtPage);
+        ConfigurePageLayout(ProtLayout, 10);
+        auto *ProtToolbar = new QHBoxLayout;
+        ConfigureToolbarLayout(ProtToolbar);
+        auto *ProtTitle = MakeLabel("Protected Windows", 13, KTextPrimary, QFont::DemiBold);
+        UnprotectButton = MakeButton("Unprotect", true);
+        UnprotectButton->setEnabled(false);
+        ProtToolbar->addWidget(ProtTitle);
+        ProtToolbar->addStretch();
+        ProtToolbar->addWidget(UnprotectButton);
+        ProtLayout->addLayout(ProtToolbar);
+        ProtectedTable = MakeTable({"HWND", "Title", "PID", "Flags"});
+        ProtectedTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        ProtectedTable->setProperty("DetailDialogTitle", "Protected window details");
+        ProtectedTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        ProtectedTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        ProtLayout->addWidget(ProtectedTable, 1);
+
+        Pages->addWidget(WinPage);
+        Pages->addWidget(ProtPage);
+        QObject::connect(Tabs, &TabBar::currentChanged, Pages, &QStackedWidget::setCurrentIndex);
+
         QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { Populate(); });
         QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { Refresh(); ShowSuccessNotice(this, "Window", "Window list refreshed."); });
         QObject::connect(WindowTable, &QWidget::customContextMenuRequested, this,
                          [this](const QPoint &Position) { ShowMenu(Position); });
+        QObject::connect(UnprotectButton, &QPushButton::clicked, this, &WindowManagerPage::UnprotectSelected);
+        QObject::connect(ProtectedTable, &QTableWidget::itemSelectionChanged, this, [this] {
+            UnprotectButton->setEnabled(!ProtectedTable->selectionModel()->selectedRows(0).isEmpty());
+        });
         Refresh();
     }
 
@@ -8020,7 +8482,21 @@ class WindowManagerPage final : public QWidget
             Row.Enabled = IsWindowEnabled(Handle) != FALSE;
             Row.Minimized = IsIconic(Handle) != FALSE;
             Row.Maximized = IsZoomed(Handle) != FALSE;
+            Row.IsHung = IsHungAppWindow(Handle) != FALSE;
+            Row.IsUnicode = IsWindowUnicode(Handle) != FALSE;
+            Row.Style = GetWindowLongW(Handle, GWL_STYLE);
+            Row.ExStyle = GetWindowLongW(Handle, GWL_EXSTYLE);
+            Row.IsTopmost = (Row.ExStyle & WS_EX_TOPMOST) != 0;
+            Row.IsLayered = (Row.ExStyle & WS_EX_LAYERED) != 0;
+            Row.IsToolWindow = (Row.ExStyle & WS_EX_TOOLWINDOW) != 0;
+            Row.IsAppWindow = (Row.ExStyle & WS_EX_APPWINDOW) != 0;
+            Row.IsPopup = (Row.Style & WS_POPUP) != 0;
+            Row.IsChild = (Row.Style & WS_CHILD) != 0;
+            Row.ParentHwnd = GetParent(Handle);
+            Row.OwnerHwnd = GetWindow(Handle, GW_OWNER);
+            Row.Dpi = GetDpiForWindow(Handle);
             GetWindowRect(Handle, &Row.Rect);
+            GetClientRect(Handle, &Row.ClientRect);
             HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Row.Pid);
             if (Process)
             {
@@ -8054,6 +8530,8 @@ class WindowManagerPage final : public QWidget
             QStringList States{Window.Visible ? "Visible" : "Hidden", Window.Enabled ? "Enabled" : "Disabled"};
             if (Window.Minimized) States.append("Minimized");
             if (Window.Maximized) States.append("Maximized");
+            if (Window.IsHung) States.append("HUNG");
+            if (Window.IsTopmost) States.append("Topmost");
             const int Row = WindowTable->rowCount();
             WindowTable->insertRow(Row);
             auto *HandleItem = new QTableWidgetItem(HandleText);
@@ -8063,10 +8541,13 @@ class WindowManagerPage final : public QWidget
             WindowTable->setItem(Row, 2, new QTableWidgetItem(Window.ClassName));
             WindowTable->setItem(Row, 3, new QTableWidgetItem(Window.ProcessPath));
             WindowTable->setItem(Row, 4, new QTableWidgetItem(QString::number(Window.Pid)));
-            WindowTable->setItem(Row, 5, new QTableWidgetItem(States.join(" | ")));
-            WindowTable->setItem(Row, 6, new QTableWidgetItem(QString("(%1,%2)-(%3,%4) %5x%6")
+            WindowTable->setItem(Row, 5, new QTableWidgetItem(QString("0x%1 | Ex:0x%2")
+                .arg(Window.Style, 8, 16, QChar('0')).arg(Window.ExStyle, 8, 16, QChar('0'))));
+            WindowTable->setItem(Row, 6, new QTableWidgetItem(States.join(" | ")));
+            WindowTable->setItem(Row, 7, new QTableWidgetItem(QString("(%1,%2)-(%3,%4) %5x%6")
                 .arg(Window.Rect.left).arg(Window.Rect.top).arg(Window.Rect.right).arg(Window.Rect.bottom)
                 .arg(Window.Rect.right - Window.Rect.left).arg(Window.Rect.bottom - Window.Rect.top)));
+            WindowTable->setItem(Row, 8, new QTableWidgetItem(QString::number(Window.Dpi)));
             WindowTable->setRowHeight(Row, 38);
         }
     }
@@ -8112,13 +8593,201 @@ class WindowManagerPage final : public QWidget
             AddAction("Post WM_CLOSE", [](HWND H) { return PostMessageW(H, WM_CLOSE, 0, 0) != FALSE; });
             AddAction("Send SC_CLOSE", [](HWND H) { DWORD_PTR Result = 0; return SendMessageTimeoutW(H, WM_SYSCOMMAND, SC_CLOSE, 0, SMTO_ABORTIFHUNG, 1000, &Result) != 0; });
         }
+
+        if (!IsOwnWindow && G_DeviceHandle != INVALID_HANDLE_VALUE)
+        {
+            Menu->addSeparator();
+            auto *KernelMenu = new RoundMenu("Kernel Operations", Menu);
+
+            auto AddKernelAction = [this, Menu, KernelMenu, Handle, TargetPid](
+                const QString &Text,
+                const std::function<BOOL()> &KernelOp,
+                const std::function<BOOL(HWND)> &UserOp)
+            {
+                auto *Item = new QAction(Text, KernelMenu);
+                KernelMenu->addAction(Item);
+                ConnectMenuAction(Item, this, [this, Text, Handle, KernelOp, UserOp] {
+                    BOOL Result = FALSE;
+                    if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+                        Result = KernelOp();
+                    if (!Result && UserOp)
+                        Result = UserOp(Handle);
+                    if (Result) ShowSuccessNotice(this, "Window", Text + " completed.");
+                    else ShowErrorNotice(this, "Window", Text + " failed.");
+                    QTimer::singleShot(150, this, [this] { Refresh(); });
+                });
+            };
+
+            AddKernelAction("Kill Window (Kernel)", [TargetPid, Handle]() -> BOOL {
+                return WindowKill(TargetPid, (ULONG64)(ULONG_PTR)Handle);
+            }, [](HWND H) -> BOOL {
+                return PostMessageW(H, WM_CLOSE, 0, 0);
+            });
+
+            AddKernelAction("Force Hide", [TargetPid, Handle]() -> BOOL {
+                return WindowHide(TargetPid, (ULONG64)(ULONG_PTR)Handle);
+            }, [](HWND H) -> BOOL {
+                return ShowWindow(H, SW_HIDE) != FALSE || TRUE;
+            });
+
+            AddKernelAction("Force Show", [TargetPid, Handle]() -> BOOL {
+                return WindowShow(TargetPid, (ULONG64)(ULONG_PTR)Handle);
+            }, [](HWND H) -> BOOL {
+                return ShowWindow(H, SW_SHOW) != FALSE || TRUE;
+            });
+
+            AddKernelAction("Force Disable", [TargetPid, Handle]() -> BOOL {
+                return WindowDisable(TargetPid, (ULONG64)(ULONG_PTR)Handle);
+            }, [](HWND H) -> BOOL {
+                return EnableWindow(H, FALSE);
+            });
+
+            AddKernelAction("Force Enable", [TargetPid, Handle]() -> BOOL {
+                return WindowEnable(TargetPid, (ULONG64)(ULONG_PTR)Handle);
+            }, [](HWND H) -> BOOL {
+                return EnableWindow(H, TRUE);
+            });
+
+            AddKernelAction("Force Topmost", [TargetPid, Handle]() -> BOOL {
+                return WindowSetTopmost(TargetPid, (ULONG64)(ULONG_PTR)Handle);
+            }, [](HWND H) -> BOOL {
+                return SetWindowPos(H, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE);
+            });
+
+            AddKernelAction("Force Remove Topmost", [TargetPid, Handle]() -> BOOL {
+                return WindowRemoveTopmost(TargetPid, (ULONG64)(ULONG_PTR)Handle);
+            }, [](HWND H) -> BOOL {
+                return SetWindowPos(H, HWND_NOTOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE);
+            });
+
+            AddKernelAction("Set Title...", [TargetPid, Handle, this]() -> BOOL {
+                bool Ok = false;
+                QString NewTitle = QInputDialog::getText(WindowTable, "Set Window Title",
+                    "New title:", QLineEdit::Normal, QString(), &Ok);
+                if (!Ok || NewTitle.isEmpty()) return TRUE;
+                std::wstring WideTitle(reinterpret_cast<const wchar_t*>(NewTitle.utf16()));
+                return WindowSetTitle(TargetPid, (ULONG64)(ULONG_PTR)Handle,
+                    WideTitle.c_str());
+            }, [this](HWND H) -> BOOL {
+                bool Ok = false;
+                QString NewTitle = QInputDialog::getText(WindowTable, "Set Window Title (User)",
+                    "New title:", QLineEdit::Normal, QString(), &Ok);
+                if (!Ok || NewTitle.isEmpty()) return TRUE;
+                std::wstring WideTitle(reinterpret_cast<const wchar_t*>(NewTitle.utf16()));
+                return SetWindowTextW(H, WideTitle.c_str());
+            });
+
+            KernelMenu->addSeparator();
+            AddKernelAction("Kill (Direct)", [TargetPid, Handle]() -> BOOL {
+                return WindowKill(TargetPid, (ULONG64)(ULONG_PTR)Handle, WINDOW_FLAG_DIRECT);
+            }, [](HWND H) -> BOOL {
+                return PostMessageW(H, WM_CLOSE, 0, 0);
+            });
+            AddKernelAction("Hide (Direct)", [TargetPid, Handle]() -> BOOL {
+                return WindowHide(TargetPid, (ULONG64)(ULONG_PTR)Handle, WINDOW_FLAG_DIRECT);
+            }, [](HWND H) -> BOOL {
+                return ShowWindow(H, SW_HIDE) != FALSE || TRUE;
+            });
+            Menu->addMenu(KernelMenu);
+        }
+        else if (!IsOwnWindow)
+        {
+            Menu->addSeparator();
+            const auto AddActionWithCheck = [this, Menu](const QString &Text, const std::function<bool()> &Action) {
+                auto *Item = new QAction(Text, Menu);
+                Menu->addAction(Item);
+                ConnectMenuAction(Item, this, [this, Text, Action] {
+                    if (Action()) ShowSuccessNotice(this, "Window", Text + " completed.");
+                    else ShowErrorNotice(this, "Window", Text + " failed.");
+                    QTimer::singleShot(150, this, [this] { Refresh(); });
+                });
+            };
+            AddActionWithCheck("Change Title...", [this, Handle]() -> bool {
+                bool Ok = false;
+                QString NewTitle = QInputDialog::getText(WindowTable, "Set Window Title",
+                    "New title:", QLineEdit::Normal, QString(), &Ok);
+                if (!Ok || NewTitle.isEmpty()) return true;
+                std::wstring WideTitle(reinterpret_cast<const wchar_t*>(NewTitle.utf16()));
+                return SetWindowTextW(Handle, WideTitle.c_str()) != FALSE;
+            });
+        }
+
+        
+        if (!IsOwnWindow && TargetPid != 0)
+        {
+            Menu->addSeparator();
+            auto *ProtectAction = new QAction("Protect Window", Menu);
+            Menu->addAction(ProtectAction);
+            ConnectMenuAction(ProtectAction, this, [this, Handle, TargetPid] {
+                QString Title = ReadWindowText(Handle);
+                ProtectWindowEntry(TargetPid, (ULONG64)(ULONG_PTR)Handle, Title.isEmpty() ? "(untitled)" : Title);
+            });
+        }
+
         ReleaseMenuAfterClose(Menu);
         Menu->exec(WindowTable->viewport()->mapToGlobal(Position));
     }
 
     SearchLineEdit *SearchEdit = nullptr;
     TableWidget *WindowTable = nullptr;
+    TableWidget *ProtectedTable = nullptr;
+    PushButton *UnprotectButton = nullptr;
     std::vector<WindowRow> Rows;
+
+    struct ProtectedWin { ULONG64 Hwnd; ULONG Pid; QString Title; ULONG Flags; };
+    std::vector<ProtectedWin> ProtectedWindows;
+
+    void ProtectWindowEntry(ULONG Pid, ULONG64 Hwnd, const QString &Title)
+    {
+        for (const auto &P : ProtectedWindows)
+            if (P.Hwnd == Hwnd) return;
+        if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+            ProtectWindowKernel(Pid, Hwnd, WINPROT_ALL);
+        ProtectedWindows.push_back({Hwnd, Pid, Title, WINPROT_ALL});
+        RefreshProtectedTable();
+    }
+
+    void UnprotectSelected()
+    {
+        std::vector<ProtectedWin> ToRemove;
+        for (const QModelIndex &Idx : ProtectedTable->selectionModel()->selectedRows(0))
+        {
+            ULONG64 Hwnd = Idx.data(Qt::UserRole).toULongLong();
+            ULONG Pid = Idx.data(Qt::UserRole + 1).toUInt();
+            for (const auto &P : ProtectedWindows)
+                if (P.Hwnd == Hwnd) { ToRemove.push_back(P); break; }
+            if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+                UnprotectWindowKernel(Pid, Hwnd);
+        }
+        for (const auto &P : ToRemove)
+        {
+            auto It = std::find_if(ProtectedWindows.begin(), ProtectedWindows.end(),
+                [&P](const ProtectedWin &W) { return W.Hwnd == P.Hwnd; });
+            if (It != ProtectedWindows.end()) ProtectedWindows.erase(It);
+        }
+        RefreshProtectedTable();
+    }
+
+    void RefreshProtectedTable()
+    {
+        ProtectedTable->clearContents();
+        ProtectedTable->setRowCount(static_cast<int>(ProtectedWindows.size()));
+        for (int R = 0; R < static_cast<int>(ProtectedWindows.size()); ++R)
+        {
+            const auto &P = ProtectedWindows[R];
+            auto *HwndItem = new QTableWidgetItem(QString("0x%1").arg(P.Hwnd, 0, 16));
+            HwndItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(P.Hwnd));
+            HwndItem->setData(Qt::UserRole + 1, QVariant::fromValue<quint32>(P.Pid));
+            ProtectedTable->setItem(R, 0, HwndItem);
+            ProtectedTable->setItem(R, 1, new QTableWidgetItem(P.Title));
+            ProtectedTable->setItem(R, 2, new QTableWidgetItem(QString::number(P.Pid)));
+            ProtectedTable->setItem(R, 3, new QTableWidgetItem(QString("0x%1").arg(P.Flags, 8, 16, QLatin1Char('0'))));
+            ProtectedTable->setRowHeight(R, 38);
+        }
+        UnprotectButton->setEnabled(false);
+    }
 };
 
 QWidget *CreateWindowPage() { return new WindowManagerPage; }
@@ -8140,24 +8809,73 @@ QWidget *CreateMemoryPage()
     Pid->setMaximumWidth(190); TargetLayout->addWidget(Pid); TargetLayout->addWidget(Address, 1); Layout->addLayout(TargetLayout);
     auto *ReadLayout = new QHBoxLayout; ConfigureToolbarLayout(ReadLayout); auto *ReadSize = new LineEdit; ReadSize->setText("256"); ReadSize->setPlaceholderText("Read size (1-4096)");
     auto *ReadButton = MakeButton("Read", true); ReadLayout->addWidget(ReadSize, 1); ReadLayout->addWidget(ReadButton); Layout->addLayout(ReadLayout);
-    auto *ReadOutput = new PlainTextEdit; ReadOutput->setReadOnly(true); ReadOutput->setPlaceholderText("Address, hexadecimal bytes, and ASCII"); ReadOutput->setFont(QFont("Cascadia Mono", 10)); InstallFluentScrollBar(ReadOutput, Qt::Vertical); Layout->addWidget(ReadOutput, 1);
-    auto *WriteInput = new PlainTextEdit; WriteInput->setPlaceholderText("Hex bytes to write, for example: 48 8B 05 00 FF"); WriteInput->setFont(QFont("Cascadia Mono", 10)); InstallFluentScrollBar(WriteInput, Qt::Vertical); Layout->addWidget(WriteInput, 1);
+    auto *ViewerLayout = new QHBoxLayout;
+    ConfigureToolbarLayout(ViewerLayout);
+    auto *HexPanel = new QVBoxLayout;
+    auto *AsciiPanel = new QVBoxLayout;
+    HexPanel->setContentsMargins(0, 0, 0, 0);
+    HexPanel->setSpacing(6);
+    AsciiPanel->setContentsMargins(0, 0, 0, 0);
+    AsciiPanel->setSpacing(6);
+    auto *HexLabel = MakeLabel("HEX", 11, KTextMuted);
+    auto *AsciiLabel = MakeLabel("ASCII", 11, KTextMuted);
+    auto *HexView = new PlainTextEdit;
+    auto *AsciiView = new PlainTextEdit;
+    HexView->setPlaceholderText("Hex bytes for read/write, for example: 48 8B 05 00 FF");
+    AsciiView->setPlaceholderText("ASCII view of the latest read result");
+    HexView->setFont(QFont("Cascadia Mono", 10));
+    AsciiView->setFont(QFont("Cascadia Mono", 10));
+    AsciiView->setReadOnly(true);
+    InstallFluentScrollBar(HexView, Qt::Vertical);
+    InstallFluentScrollBar(AsciiView, Qt::Vertical);
+    HexPanel->addWidget(HexLabel);
+    HexPanel->addWidget(HexView, 1);
+    AsciiPanel->addWidget(AsciiLabel);
+    AsciiPanel->addWidget(AsciiView, 1);
+    ViewerLayout->addLayout(HexPanel, 3);
+    ViewerLayout->addLayout(AsciiPanel, 2);
+    Layout->addLayout(ViewerLayout, 1);
     auto *WriteLayout = new QHBoxLayout; ConfigureToolbarLayout(WriteLayout); auto *Status = new BodyLabel("Ready"); auto *WriteButton = MakeButton("Write"); WriteLayout->addWidget(Status, 1); WriteLayout->addWidget(WriteButton); Layout->addLayout(WriteLayout);
     const auto ParseTarget = [Page, Pid, Address](ULONG &ProcessId, ULONG_PTR &TargetAddress) {
         bool PidOk = false, AddressOk = false; const qulonglong PidValue = Pid->text().trimmed().toULongLong(&PidOk, 0); const qulonglong AddressValue = Address->text().trimmed().toULongLong(&AddressOk, 0);
         if (!PidOk || PidValue > std::numeric_limits<ULONG>::max() || !AddressOk || AddressValue == 0) { ShowWarningNotice(Page, "Memory", "Enter a valid PID and address. PID 0 means kernel mode."); return false; }
         ProcessId = static_cast<ULONG>(PidValue); TargetAddress = static_cast<ULONG_PTR>(AddressValue); return true;
     };
-    QObject::connect(ReadButton, &QPushButton::clicked, Page, [Page, ReadSize, ReadOutput, Status, ParseTarget] {
+    QObject::connect(ReadButton, &QPushButton::clicked, Page, [Page, ReadSize, HexView, AsciiView, Status, ParseTarget] {
         ULONG ProcessId = 0; ULONG_PTR TargetAddress = 0; if (!ParseTarget(ProcessId, TargetAddress)) return; bool SizeOk = false; const uint Size = ReadSize->text().trimmed().toUInt(&SizeOk, 0);
         if (!SizeOk || Size == 0 || Size > 4096) { ShowWarningNotice(Page, "Memory", "Read size must be between 1 and 4096."); return; }
         std::vector<unsigned char> Buffer(Size); ULONG BytesRead = 0; if (!ReadMemory(ProcessId, TargetAddress, Buffer.data(), Size, &BytesRead)) { const QString Message = QString("Read failed (error %1)").arg(G_LastMultiDrvError); Status->setText(Message); ShowErrorNotice(Page, "Memory", Message); return; }
-        Buffer.resize(std::min<size_t>(BytesRead, Buffer.size())); QString Output; for (size_t Offset = 0; Offset < Buffer.size(); Offset += 16) { Output += QString("%1  ").arg(TargetAddress + Offset, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper(); QString Ascii;
-            for (size_t Index = 0; Index < 16; ++Index) { if (Offset + Index < Buffer.size()) { const unsigned char Value = Buffer[Offset + Index]; Output += QString("%1 ").arg(Value, 2, 16, QLatin1Char('0')).toUpper(); Ascii += std::isprint(Value) ? QChar(Value) : QChar('.'); } else Output += "   "; if (Index == 7) Output += ' '; } Output += " |" + Ascii + "|\n"; }
-        ReadOutput->setPlainText(Output); const QString Message = QString("Read %1 byte(s).").arg(Buffer.size()); Status->setText(Message); ShowSuccessNotice(Page, "Memory", Message);
+        Buffer.resize(std::min<size_t>(BytesRead, Buffer.size())); QString HexOutput; QString AsciiOutput;
+        for (size_t Offset = 0; Offset < Buffer.size(); Offset += 16)
+        {
+            QString HexLine = QString("%1  ").arg(TargetAddress + Offset, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper();
+            QString AsciiLine = QString("%1  ").arg(TargetAddress + Offset, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper();
+            for (size_t Index = 0; Index < 16; ++Index)
+            {
+                if (Offset + Index < Buffer.size())
+                {
+                    const unsigned char Value = Buffer[Offset + Index];
+                    HexLine += QString("%1 ").arg(Value, 2, 16, QLatin1Char('0')).toUpper();
+                    AsciiLine += std::isprint(static_cast<int>(Value)) ? QChar(Value) : QChar('.');
+                }
+                else
+                {
+                    HexLine += "   ";
+                }
+                if (Index == 7) HexLine += ' ';
+            }
+            HexOutput += HexLine.trimmed() + '\n';
+            AsciiOutput += AsciiLine + '\n';
+        }
+        HexView->setPlainText(HexOutput.trimmed());
+        AsciiView->setPlainText(AsciiOutput.trimmed());
+        const QString Message = QString("Read %1 byte(s).").arg(Buffer.size()); Status->setText(Message); ShowSuccessNotice(Page, "Memory", Message);
     });
-    QObject::connect(WriteButton, &QPushButton::clicked, Page, [Page, WriteInput, Status, ParseTarget] {
-        ULONG ProcessId = 0; ULONG_PTR TargetAddress = 0; if (!ParseTarget(ProcessId, TargetAddress)) return; QString Text = WriteInput->toPlainText(); Text.replace(',', ' ').replace(';', ' ').replace('\n', ' ').replace('\t', ' ');
+    QObject::connect(WriteButton, &QPushButton::clicked, Page, [Page, HexView, Status, ParseTarget] {
+        ULONG ProcessId = 0; ULONG_PTR TargetAddress = 0; if (!ParseTarget(ProcessId, TargetAddress)) return; QString Text = HexView->toPlainText();
+        Text.replace(',', ' ').replace(';', ' ').replace('\n', ' ').replace('\t', ' ').replace('\r', ' ');
+        QRegularExpression AddressPrefix("(?i)\\b[0-9a-f]+\\s{2,}");
+        Text.replace(AddressPrefix, "");
         const QStringList Tokens = Text.split(' ', Qt::SkipEmptyParts); if (Tokens.isEmpty() || Tokens.size() > 4096) { ShowWarningNotice(Page, "Memory", "Enter between 1 and 4096 hexadecimal bytes."); return; }
         std::vector<unsigned char> Bytes; Bytes.reserve(Tokens.size()); for (QString Token : Tokens) { if (Token.startsWith("0x", Qt::CaseInsensitive)) Token.remove(0, 2); bool Ok = false; const uint Value = Token.toUInt(&Ok, 16); if (!Ok || Token.size() > 2 || Value > 0xFF) { ShowWarningNotice(Page, "Memory", "Invalid hex byte: " + Token); return; } Bytes.push_back(static_cast<unsigned char>(Value)); }
         if (!WriteMemory(ProcessId, TargetAddress, Bytes.data(), static_cast<ULONG>(Bytes.size()))) { const QString Message = QString("Write failed (error %1)").arg(G_LastMultiDrvError); Status->setText(Message); ShowErrorNotice(Page, "Memory", Message); } else { const QString Message = QString("Wrote %1 byte(s).").arg(Bytes.size()); Status->setText(Message); ShowSuccessNotice(Page, "Memory", Message); }
@@ -8671,6 +9389,211 @@ class DriverManagerPage final : public QWidget
 };
 
 QWidget *CreateDriverPage() { return new DriverManagerPage; }
+
+class ServiceManagerPage final : public QWidget
+{
+    struct ServiceRow {
+        QString Name, DisplayName, State, StartType, BinaryPath;
+        DWORD Pid, Type;
+    };
+
+public:
+    explicit ServiceManagerPage(QWidget *Parent = nullptr) : QWidget(Parent)
+    {
+        auto *Layout = new QVBoxLayout(this);
+        ConfigurePageLayout(Layout);
+        auto *Toolbar = new QHBoxLayout;
+        ConfigureToolbarLayout(Toolbar);
+        RefreshButton = MakeButton("Refresh", true);
+        SearchEdit = new SearchLineEdit;
+        SearchEdit->setPlaceholderText("Search service name, display, or path");
+        SearchEdit->setClearButtonEnabled(true);
+        SearchEdit->setMaximumWidth(440);
+        Toolbar->addWidget(SearchEdit);
+        Toolbar->addStretch();
+        Toolbar->addWidget(RefreshButton);
+        Layout->addLayout(Toolbar);
+        Table = MakeTable({"Service", "Display Name", "State", "Start Type", "PID", "Path"});
+        Table->setContextMenuPolicy(Qt::CustomContextMenu);
+        Layout->addWidget(Table, 1);
+        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { Populate(); });
+        QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { Refresh(); ShowSuccessNotice(this, "Service", "Service list refreshed."); });
+        QObject::connect(Table, &QWidget::customContextMenuRequested, this, [this](const QPoint &P) { ShowMenu(P); });
+        Refresh();
+    }
+
+private:
+    void Refresh()
+    {
+        Rows.clear();
+        SC_HANDLE Scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
+        if (!Scm) return;
+        DWORD Needed = 0, Count = 0, Resume = 0;
+        EnumServicesStatusExW(Scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER,
+            SERVICE_STATE_ALL, NULL, 0, &Needed, &Count, &Resume, NULL);
+        if (Needed == 0) { CloseServiceHandle(Scm); return; }
+        std::vector<BYTE> Buf(Needed);
+        if (EnumServicesStatusExW(Scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER,
+            SERVICE_STATE_ALL, Buf.data(), Needed, &Needed, &Count, &Resume, NULL))
+        {
+            auto *Services = reinterpret_cast<LPENUM_SERVICE_STATUS_PROCESSW>(Buf.data());
+            for (DWORD i = 0; i < Count; i++)
+            {
+                ServiceRow Row;
+                Row.Name = QString::fromWCharArray(Services[i].lpServiceName);
+                Row.DisplayName = QString::fromWCharArray(Services[i].lpDisplayName);
+                Row.Pid = Services[i].ServiceStatusProcess.dwProcessId;
+                Row.Type = Services[i].ServiceStatusProcess.dwServiceType;
+
+                switch (Services[i].ServiceStatusProcess.dwCurrentState)
+                {
+                case SERVICE_RUNNING: Row.State = "Running"; break;
+                case SERVICE_STOPPED: Row.State = "Stopped"; break;
+                case SERVICE_PAUSED: Row.State = "Paused"; break;
+                case SERVICE_START_PENDING: Row.State = "Starting..."; break;
+                case SERVICE_STOP_PENDING: Row.State = "Stopping..."; break;
+                default: Row.State = QString("Unknown(%1)").arg(Services[i].ServiceStatusProcess.dwCurrentState); break;
+                }
+
+                SC_HANDLE Svc = OpenServiceW(Scm, Services[i].lpServiceName, SERVICE_QUERY_CONFIG);
+                if (Svc)
+                {
+                    DWORD CfgSize = 0;
+                    QueryServiceConfigW(Svc, NULL, 0, &CfgSize);
+                    if (CfgSize >= sizeof(QUERY_SERVICE_CONFIGW))
+                    {
+                        std::vector<BYTE> CfgBuf(CfgSize);
+                        auto *Cfg = reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(CfgBuf.data());
+                        DWORD CfgOutSize = static_cast<DWORD>(CfgBuf.size());
+                        if (QueryServiceConfigW(Svc, Cfg, CfgOutSize, &CfgSize))
+                        {
+                            Row.BinaryPath = QString::fromWCharArray(Cfg->lpBinaryPathName);
+                            switch (Cfg->dwStartType)
+                            {
+                            case SERVICE_BOOT_START: Row.StartType = "Boot"; break;
+                            case SERVICE_SYSTEM_START: Row.StartType = "System"; break;
+                            case SERVICE_AUTO_START: Row.StartType = "Auto"; break;
+                            case SERVICE_DEMAND_START: Row.StartType = "Manual"; break;
+                            case SERVICE_DISABLED: Row.StartType = "Disabled"; break;
+                            default: Row.StartType = QString::number(Cfg->dwStartType); break;
+                            }
+                        }
+                    }
+                    CloseServiceHandle(Svc);
+                }
+                else
+                {
+                    Row.BinaryPath = "-";
+                    Row.StartType = "-";
+                }
+                Rows.push_back(std::move(Row));
+            }
+        }
+        CloseServiceHandle(Scm);
+        Populate();
+    }
+
+    void Populate()
+    {
+        const QString Query = SearchEdit->text().trimmed();
+        Table->clearContents();
+        Table->setRowCount(0);
+        for (const auto &Svc : Rows)
+        {
+            if (!Query.isEmpty() &&
+                !Svc.Name.contains(Query, Qt::CaseInsensitive) &&
+                !Svc.DisplayName.contains(Query, Qt::CaseInsensitive) &&
+                !Svc.BinaryPath.contains(Query, Qt::CaseInsensitive))
+                continue;
+            int R = Table->rowCount();
+            Table->insertRow(R);
+            Table->setItem(R, 0, new QTableWidgetItem(Svc.Name));
+            Table->setItem(R, 1, new QTableWidgetItem(Svc.DisplayName));
+            Table->setItem(R, 2, new QTableWidgetItem(Svc.State));
+            Table->setItem(R, 3, new QTableWidgetItem(Svc.StartType));
+            Table->setItem(R, 4, new QTableWidgetItem(Svc.Pid ? QString::number(Svc.Pid) : "-"));
+            Table->setItem(R, 5, new QTableWidgetItem(Svc.BinaryPath));
+            Table->setRowHeight(R, 38);
+        }
+    }
+
+    void ShowMenu(const QPoint &Pos)
+    {
+        int Row = Table->indexAt(Pos).row();
+        if (Row < 0 || Row >= static_cast<int>(Rows.size())) return;
+        Table->selectRow(Row);
+        const auto &Svc = Rows[Row];
+        auto *Menu = new RoundMenu(QString(), this);
+
+        auto AddAct = [this, Menu, &Svc](const QString &Text, std::function<void()> Fn) {
+            auto *Item = new QAction(Text, Menu);
+            Menu->addAction(Item);
+            QObject::connect(Item, &QAction::triggered, this, [this, Text, Fn] {
+                Fn();
+                QTimer::singleShot(250, this, [this] { Refresh(); });
+            });
+        };
+
+        if (Svc.State == "Stopped") AddAct("Start", [&Svc] {
+            std::wstring Wide(reinterpret_cast<const wchar_t*>(Svc.Name.utf16()), Svc.Name.size());
+            SC_HANDLE Scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+            if (Scm) {
+                SC_HANDLE S = OpenServiceW(Scm, Wide.c_str(), SERVICE_START);
+                if (S) { StartServiceW(S, 0, NULL); CloseServiceHandle(S); }
+                CloseServiceHandle(Scm);
+            }
+        });
+        if (Svc.State == "Running") AddAct("Stop", [&Svc] {
+            std::wstring Wide(reinterpret_cast<const wchar_t*>(Svc.Name.utf16()), Svc.Name.size());
+            SC_HANDLE Scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+            if (Scm) {
+                SC_HANDLE S = OpenServiceW(Scm, Wide.c_str(), SERVICE_STOP);
+                if (S) { SERVICE_STATUS St; ControlService(S, SERVICE_CONTROL_STOP, &St); CloseServiceHandle(S); }
+                CloseServiceHandle(Scm);
+            }
+        });
+
+        Menu->addSeparator();
+
+        AddAct("Disable", [&Svc] {
+            std::wstring Wide(reinterpret_cast<const wchar_t*>(Svc.Name.utf16()), Svc.Name.size());
+            if (G_DeviceHandle != INVALID_HANDLE_VALUE && Svc.Type == SERVICE_KERNEL_DRIVER)
+                ServiceDisable(Wide.c_str());
+            else {
+                SC_HANDLE Scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+                if (Scm) {
+                    SC_HANDLE S = OpenServiceW(Scm, Wide.c_str(), SERVICE_CHANGE_CONFIG);
+                    if (S) { ChangeServiceConfigW(S, SERVICE_NO_CHANGE, SERVICE_DISABLED, SERVICE_NO_CHANGE, NULL, NULL, NULL, NULL, NULL, NULL, NULL); CloseServiceHandle(S); }
+                    CloseServiceHandle(Scm);
+                }
+            }
+        });
+
+        AddAct("Enable", [&Svc] {
+            std::wstring Wide(reinterpret_cast<const wchar_t*>(Svc.Name.utf16()), Svc.Name.size());
+            if (G_DeviceHandle != INVALID_HANDLE_VALUE && Svc.Type == SERVICE_KERNEL_DRIVER)
+                ServiceEnable(Wide.c_str());
+            else {
+                SC_HANDLE Scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+                if (Scm) {
+                    SC_HANDLE S = OpenServiceW(Scm, Wide.c_str(), SERVICE_CHANGE_CONFIG);
+                    if (S) { ChangeServiceConfigW(S, SERVICE_NO_CHANGE, SERVICE_AUTO_START, SERVICE_NO_CHANGE, NULL, NULL, NULL, NULL, NULL, NULL, NULL); CloseServiceHandle(S); }
+                    CloseServiceHandle(Scm);
+                }
+            }
+        });
+
+        ReleaseMenuAfterClose(Menu);
+        Menu->exec(Table->viewport()->mapToGlobal(Pos));
+    }
+
+    SearchLineEdit *SearchEdit{};
+    PushButton *RefreshButton{};
+    TableWidget *Table{};
+    std::vector<ServiceRow> Rows;
+};
+
+QWidget *CreateServiceManagerPage() { return new ServiceManagerPage; }
 
 QWidget *CreateTablePage()
 {
@@ -10330,27 +11253,82 @@ QWidget *CreateKernelInspectorPage()
         Pages->addWidget(TabPage);
         State->push_back({Ioctl, QString::fromWCharArray(Path), Table, Count});
     }
+    
+    auto *SyncTab = new QWidget;
+    auto *SyncLayout = new QVBoxLayout(SyncTab);
+    SyncLayout->setContentsMargins(0, 0, 0, 0);
+    SyncLayout->setSpacing(8);
+    auto *SyncMeta = new QHBoxLayout; SyncMeta->setContentsMargins(2, 0, 2, 0);
+    auto *SyncCount = new BodyLabel("0 objects");
+    SyncMeta->addStretch(); SyncMeta->addWidget(SyncCount);
+    SyncLayout->addLayout(SyncMeta);
+    auto *SyncTable = MakeTable({"Name", "Type", "Dir", "Extra"});
+    SyncTable->setSortingEnabled(true);
+    SyncTable->setTextElideMode(Qt::ElideRight);
+    SyncTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    SyncLayout->addWidget(SyncTable, 1);
+    Tabs->addTab("kernel-sync", "Sync Objects", Fluent::IconType::SYNC);
+    Pages->addWidget(SyncTab);
+
+    
+    auto *SessTab = new QWidget;
+    auto *SessLayout = new QVBoxLayout(SessTab);
+    SessLayout->setContentsMargins(0, 0, 0, 0);
+    SessLayout->setSpacing(8);
+    auto *SessMeta = new QHBoxLayout; SessMeta->setContentsMargins(2, 0, 2, 0);
+    auto *SessCount = new BodyLabel("0 sessions");
+    SessMeta->addStretch(); SessMeta->addWidget(SessCount);
+    SessLayout->addLayout(SessMeta);
+    auto *SessTable = MakeTable({"Session", "State", "ProcessCount", "WinStation"});
+    SessTable->setSortingEnabled(true);
+    SessTable->setTextElideMode(Qt::ElideRight);
+    SessTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    SessTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    SessTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    SessLayout->addWidget(SessTable, 1);
+    Tabs->addTab("kernel-session", "Sessions", Fluent::IconType::PEOPLE);
+    Pages->addWidget(SessTab);
+
+    
+    auto *FwTab = new QWidget;
+    auto *FwLayout = new QVBoxLayout(FwTab);
+    FwLayout->setContentsMargins(0, 0, 0, 0);
+    FwLayout->setSpacing(8);
+    auto *FwMeta = new QHBoxLayout; FwMeta->setContentsMargins(2, 0, 2, 0);
+    auto *FwCount = new BodyLabel("0 rules");
+    auto *FwAddBtn = new PushButton("Add Rule");
+    FwMeta->addStretch(); FwMeta->addWidget(FwCount); FwMeta->addWidget(FwAddBtn);
+    FwLayout->addLayout(FwMeta);
+    auto *FwTable = MakeTable({"Name", "Action", "Protocol", "Port", "State"});
+    FwTable->setSortingEnabled(true);
+    FwTable->setTextElideMode(Qt::ElideRight);
+    FwTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    FwTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    FwLayout->addWidget(FwTable, 1);
+    Tabs->addTab("kernel-fw", "Firewall", Fluent::IconType::GLOBE);
+    Pages->addWidget(FwTab);
+
     QObject::connect(Tabs, &TabBar::currentChanged, Pages, &QStackedWidget::setCurrentIndex);
     QObject::connect(Pages, &QStackedWidget::currentChanged, Tabs, &TabBar::setCurrentIndex);
-    const auto ApplyFilter = [Search, State, DebugStateUi] {
+    const auto ApplyFilter = [Search, State, DebugStateUi, SyncTable, SessTable, FwTable] {
         const QString Query = Search->text().trimmed();
-        for (int Row = 0; Row < DebugStateUi->Table->rowCount(); ++Row) {
-            QString RowText;
-            for (int Column = 0; Column < DebugStateUi->Table->columnCount(); ++Column)
-                if (const QTableWidgetItem *Item = DebugStateUi->Table->item(Row, Column)) RowText += Item->text() + ' ';
-            DebugStateUi->Table->setRowHidden(Row, !Query.isEmpty() && !RowText.contains(Query, Qt::CaseInsensitive));
-        }
-        for (const InspectorTab &Tab : *State) {
-            for (int Row = 0; Row < Tab.Table->rowCount(); ++Row) {
+        const auto FilterTable = [&Query](QTableWidget *Table) {
+            for (int Row = 0; Row < Table->rowCount(); ++Row) {
                 QString RowText;
-                for (int Column = 0; Column < Tab.Table->columnCount(); ++Column)
-                    if (const QTableWidgetItem *Item = Tab.Table->item(Row, Column)) RowText += Item->text() + ' ';
-                Tab.Table->setRowHidden(Row, !Query.isEmpty() && !RowText.contains(Query, Qt::CaseInsensitive));
+                for (int Column = 0; Column < Table->columnCount(); ++Column)
+                    if (const QTableWidgetItem *Item = Table->item(Row, Column)) RowText += Item->text() + ' ';
+                Table->setRowHidden(Row, !Query.isEmpty() && !RowText.contains(Query, Qt::CaseInsensitive));
             }
-        }
+        };
+        FilterTable(DebugStateUi->Table);
+        for (const InspectorTab &Tab : *State) FilterTable(Tab.Table);
+        FilterTable(SyncTable);
+        FilterTable(SessTable);
+        FilterTable(FwTable);
     };
     QObject::connect(Search, &QLineEdit::textChanged, Page, [ApplyFilter] { ApplyFilter(); });
-    QObject::connect(Refresh, &QPushButton::clicked, Page, [Page, Refresh, Status, Loading, State, DebugStateUi, ApplyFilter] {
+    QObject::connect(Refresh, &QPushButton::clicked, Page, [Page, Refresh, Status, Loading, State, DebugStateUi, ApplyFilter,
+        SyncTable, SyncCount, SessTable, SessCount, FwTable, FwCount] {
         Refresh->setEnabled(false);
         DebugStateUi->Enable->setEnabled(false);
         DebugStateUi->Disable->setEnabled(false);
@@ -10359,7 +11337,8 @@ QWidget *CreateKernelInspectorPage()
         Loading->show();
         Loading->start();
         QPointer<QWidget> SafePage(Page);
-        std::thread([SafePage, Refresh, Status, Loading, State, DebugStateUi, ApplyFilter] {
+        std::thread([SafePage, Refresh, Status, Loading, State, DebugStateUi, ApplyFilter,
+                     SyncTable, SyncCount, SessTable, SessCount, FwTable, FwCount] {
             struct DebugResult {
                 bool Success = false;
                 DWORD ErrorCode = ERROR_SUCCESS;
@@ -10375,8 +11354,76 @@ QWidget *CreateKernelInspectorPage()
                 if (!(*State)[Index].Path.isEmpty()) wcsncpy_s(Request.Path, (*State)[Index].Path.toStdWString().c_str(), _TRUNCATE);
                 QueryMultiDrvRecordsV2((*State)[Index].Ioctl, Request, Results[Index].Records, &Results[Index].Header);
             }
+
+            
+            std::vector<std::tuple<QString, QString, ULONG>> SyncEntries;
+            if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+            {
+                BYTE SyncBuf[65536] = {};
+                ULONG SyncReturned = 0;
+                if (EnumSyncObjectsKernel(SyncBuf, sizeof(SyncBuf), &SyncReturned) && SyncReturned >= sizeof(ULONG))
+                {
+                    PULONG Cnt = (PULONG)SyncBuf;
+                    PUCHAR D = (PUCHAR)(Cnt + 1);
+                    for (ULONG i = 0; i < *Cnt; i++)
+                    {
+                        ULONG Dir = *(PULONG)D; D += 4;
+                        USHORT NLen = *(PUSHORT)D; D += 2;
+                        QString Name = NLen ? QString::fromWCharArray((PWCHAR)D, NLen / sizeof(WCHAR)) : QString();
+                        D += NLen;
+                        USHORT TLen = *(PUSHORT)D; D += 2;
+                        QString Type = TLen ? QString::fromWCharArray((PWCHAR)D, TLen / sizeof(WCHAR)) : QString();
+                        D += TLen;
+                        D = (PUCHAR)(((ULONG_PTR)D + 3) & ~3ULL);
+                        SyncEntries.emplace_back(Name, Type, Dir);
+                    }
+                }
+            }
+
+            
+            std::vector<std::tuple<ULONG, ULONG, ULONG, QString>> SessEntries;
+            if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+            {
+                BYTE SessBuf[4096] = {};
+                ULONG SessReturned = 0;
+                if (EnumSessions(SessBuf, sizeof(SessBuf), &SessReturned) && SessReturned >= sizeof(ULONG))
+                {
+                    PULONG Cnt = (PULONG)SessBuf;
+                    PUCHAR D = (PUCHAR)(Cnt + 1);
+                    for (ULONG i = 0; i < *Cnt; i++)
+                    {
+                        ULONG Sid = *(PULONG)D; D += 4;
+                        ULONG St = *(PULONG)D; D += 4;
+                        ULONG Pc = *(PULONG)D; D += 4;
+                        QString Ws = QString::fromWCharArray((PWCHAR)D);
+                        D += 64;
+                        SessEntries.emplace_back(Sid, St, Pc, Ws);
+                    }
+                }
+            }
+            if (SessEntries.empty())
+                EnumerateSessionsFallback(SessEntries);
+
+            
+            std::vector<std::tuple<QString, ULONG, ULONG, ULONG, QString>> FwEntries;
+            if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+            {
+                BYTE FwBuf[16384] = {};
+                (void)FwBuf;
+            }
+            if (FwEntries.empty())
+                EnumerateFirewallRulesFallback(FwEntries);
+            if (FwEntries.empty())
+                FwEntries.emplace_back("Firewall enumeration unavailable", 0, 0, 0, "Not implemented");
+
+            if (SyncEntries.empty())
+                EnumerateSyncObjectsFallback(SyncEntries);
+
             QMetaObject::invokeMethod(qApp, [SafePage, Refresh, Status, Loading, State, DebugStateUi, ApplyFilter,
-                                             DebugResultData, Results = std::move(Results)]() mutable {
+                                             DebugResultData, Results = std::move(Results),
+                                             SyncTable, SyncCount, SyncEntries = std::move(SyncEntries),
+                                             SessTable, SessCount, SessEntries = std::move(SessEntries),
+                                             FwTable, FwCount, FwEntries = std::move(FwEntries)]() mutable {
                 if (!SafePage) return;
                 const auto Hex = [](qulonglong Value) { return QString("0x%1").arg(Value, 0, 16).toUpper(); };
                 const auto SourceName = [](ULONG Source) {
@@ -10460,6 +11507,48 @@ QWidget *CreateKernelInspectorPage()
                     }
                     Table->setSortingEnabled(true);
                 }
+                
+                SyncTable->setSortingEnabled(false);
+                SyncTable->clearContents(); SyncTable->setRowCount(0);
+                for (const auto &[Name, Type, Dir] : SyncEntries) {
+                    int R = SyncTable->rowCount(); SyncTable->insertRow(R);
+                    SyncTable->setItem(R, 0, new QTableWidgetItem(Name));
+                    SyncTable->setItem(R, 1, new QTableWidgetItem(Type));
+                    SyncTable->setItem(R, 2, new QTableWidgetItem(Dir == 0 ? "Global" : "Session"));
+                    SyncTable->setRowHeight(R, 36);
+                }
+                SyncCount->setText(QString("%1 objects").arg(SyncEntries.size()));
+                SyncTable->setSortingEnabled(true);
+
+                
+                SessTable->setSortingEnabled(false);
+                SessTable->clearContents(); SessTable->setRowCount(0);
+                for (const auto &[Sid, St, Pc, Ws] : SessEntries) {
+                    int R = SessTable->rowCount(); SessTable->insertRow(R);
+                    SessTable->setItem(R, 0, new QTableWidgetItem(QString::number(Sid)));
+                    SessTable->setItem(R, 1, new QTableWidgetItem(SessionStateText(St)));
+                    SessTable->setItem(R, 2, new QTableWidgetItem(QString::number(Pc)));
+                    SessTable->setItem(R, 3, new QTableWidgetItem(Ws));
+                    SessTable->setRowHeight(R, 36);
+                }
+                SessCount->setText(QString("%1 sessions").arg(SessEntries.size()));
+                SessTable->setSortingEnabled(true);
+
+                
+                FwTable->setSortingEnabled(false);
+                FwTable->clearContents(); FwTable->setRowCount(0);
+                for (const auto &[Name, Action, Proto, Port, StateText] : FwEntries) {
+                    int R = FwTable->rowCount(); FwTable->insertRow(R);
+                    FwTable->setItem(R, 0, new QTableWidgetItem(Name));
+                    FwTable->setItem(R, 1, new QTableWidgetItem(Action == 0 ? "Block" : "Allow"));
+                    FwTable->setItem(R, 2, new QTableWidgetItem(Proto == 6 ? "TCP" : Proto == 17 ? "UDP" : QString::number(Proto)));
+                    FwTable->setItem(R, 3, new QTableWidgetItem(QString::number(Port)));
+                    FwTable->setItem(R, 4, new QTableWidgetItem(StateText));
+                    FwTable->setRowHeight(R, 36);
+                }
+                FwCount->setText(QString("%1 rules").arg(FwEntries.size()));
+                FwTable->setSortingEnabled(true);
+
                 ApplyFilter();
                 Loading->stop();
                 Loading->hide();
@@ -10979,6 +12068,8 @@ QWidget *CreatePageBody(int Index)
         return CreateSettingsPage();
     case 15:
         return CreateKernelInspectorPage();
+    case 16:
+        return CreateServiceManagerPage();
     default:
         return new QWidget;
     }
@@ -11204,7 +12295,7 @@ class WindowsToolWindow final : public QWidget
             const auto &Page = KPages[Index];
             const QString Route = QString::number(Index);
             QString ParentRoute;
-            if ((Index >= 6 && Index <= 9) || Index == 15)
+            if ((Index >= 6 && Index <= 9) || Index == 15 || Index == 16)
                 ParentRoute = "kernel";
             else if (Index >= 10 && Index <= 12)
                 ParentRoute = "module";
@@ -11293,7 +12384,7 @@ class WindowsToolWindow final : public QWidget
     QPixmap CachedWallpaper;
 };
 
-} // namespace
+} 
 
 int main(int Argc, char *Argv[])
 {

@@ -10,7 +10,7 @@
 
 namespace http_capture {
 
-// ── 数据结构 ────────────────────────────────────────────────
+
 
 struct HttpHeader {
     std::string Name;
@@ -65,14 +65,14 @@ struct FlowInfo {
     bool        IsOutbound;
 };
 
-// ── 回调 ─────────────────────────────────────────────────────
+
 
 using OnHttpRequestCallback  = std::function<void(const FlowInfo&, const HttpRequest&)>;
 using OnHttpResponseCallback = std::function<void(const FlowInfo&, const HttpResponse&)>;
 using OnTlsSniCallback       = std::function<void(const FlowInfo&, const TlsSniInfo&)>;
 using OnRawPayloadCallback   = std::function<void(const FlowInfo&, const uint8_t* data, size_t len)>;
 
-// ── 配置 ─────────────────────────────────────────────────────
+
 
 struct Config {
     bool        CaptureHttp        = true;
@@ -85,7 +85,7 @@ struct Config {
     std::string WinDivertDllPath   = "WinDivert.dll";
 };
 
-// ── RawPacket ────────────────────────────────────────────────
+
 
 struct RawPacket {
     std::vector<uint8_t> Data;
@@ -105,7 +105,7 @@ struct RawPacket {
 
 using OnPacketCallback = std::function<void(RawPacket&)>;
 
-// ── FlowKey ──────────────────────────────────────────────────
+
 
 struct FlowKey {
     uint32_t SrcIp;
@@ -139,7 +139,7 @@ struct ReassembledData {
 
 using OnReassembledData = std::function<void(const ReassembledData&)>;
 
-// ── ParseState ───────────────────────────────────────────────
+
 
 enum class ParseState {
     MethodOrStatus,
@@ -149,7 +149,7 @@ enum class ParseState {
     Error,
 };
 
-// ── HttpParser ───────────────────────────────────────────────
+
 
 class HttpParser {
 public:
@@ -182,7 +182,7 @@ private:
     size_t                  ExpectedBodySize_ = 0;
 };
 
-// ── PacketCapture ────────────────────────────────────────────
+
 
 class PacketCapture {
 public:
@@ -199,7 +199,7 @@ private:
     void CaptureLoop(const std::string& filter, OnPacketCallback cb,
                      const Config& cfg);
 
-    // WinDivert 函数指针（动态加载）
+    
     struct WinDivertFuncs {
         void* (*Open)(const char*, int, int, int) = nullptr;
         bool  (*Close)(void*) = nullptr;
@@ -214,13 +214,13 @@ private:
     mutable std::mutex ErrorMutex_;
     std::string LastErrorText_;
     std::thread       Thread_;
-    void*             Module_{nullptr};  // HMODULE of WinDivert.dll
-    void*             Handle_{nullptr};  // HANDLE from WinDivertOpen
+    void*             Module_{nullptr};  
+    void*             Handle_{nullptr};  
 
     void SetError(std::string text);
 };
 
-// ── TcpReassembler ──────────────────────────────────────────
+
 
 class TcpReassembler {
 public:
@@ -254,7 +254,7 @@ private:
                                uint16_t port1, uint16_t port2) const;
 };
 
-// ── SNI 提取 / MITM ──────────────────────────────────────────
+
 
 bool ExtractSniFromClienthello(const uint8_t* data, size_t len,
                                std::string& sni_out,
@@ -280,7 +280,7 @@ private:
     std::unique_ptr<Impl> Impl_;
 };
 
-// ── 主入口 ──────────────────────────────────────────────────
+
 
 class HttpCapture {
 public:
@@ -304,10 +304,10 @@ private:
     std::unique_ptr<Impl> Impl_;
 };
 
-} // namespace http_capture
+} 
 
 
-// Integrated implementation
+
 
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
@@ -341,7 +341,7 @@ private:
 
 namespace http_capture {
 
-// ── WinDivert 类型定义（不依赖 windivert.h）───────────────
+
 
 struct WdAddress {
     int64_t  Timestamp;
@@ -387,7 +387,7 @@ struct WdTcpHdr {
     uint16_t UrgPtr;
 };
 
-// ── 驱动检查 ──────────────────────────────────────────────
+
 
 static bool IsWinDivertDriverLoaded()
 {
@@ -410,7 +410,7 @@ static bool IsWinDivertDriverLoaded()
     return loaded;
 }
 
-// ── PacketCapture ──────────────────────────────────────────
+
 
 PacketCapture::PacketCapture()  = default;
 PacketCapture::~PacketCapture() { Stop(); }
@@ -433,7 +433,7 @@ bool PacketCapture::Start(const std::string& filter, OnPacketCallback cb,
     if (Running_) return false;
     SetError({});
 
-    // 动态加载 WinDivert.dll
+    
     Module_ = LoadLibraryA(cfg.WinDivertDllPath.c_str());
     if (!Module_) {
         DWORD err = GetLastError();
@@ -464,7 +464,7 @@ bool PacketCapture::Start(const std::string& filter, OnPacketCallback cb,
         return false;
     }
 
-    // 检查驱动是否已加载（绝不自动加载）
+    
     if (!IsWinDivertDriverLoaded()) {
         std::cerr << "[PacketCapture] WinDivert driver is not running.\n"
                   << "  Start it manually: \"sc start WinDivert\"\n"
@@ -477,9 +477,9 @@ bool PacketCapture::Start(const std::string& filter, OnPacketCallback cb,
 
     HANDLE handle = (HANDLE)Funcs_.Open(
         filter.c_str(),
-        0,          // WINDIVERT_LAYER_NETWORK
-        0,          // priority
-        0x0001      // WINDIVERT_FLAG_SNIFF
+        0,          
+        0,          
+        0x0001      
     );
     if (!handle || handle == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
@@ -581,9 +581,9 @@ void PacketCapture::CaptureLoop(const std::string& filter, OnPacketCallback cb,
     }
 }
 
-// =====================================================================
-//  TcpReassembler
-// =====================================================================
+
+
+
 
 TcpReassembler::TcpReassembler(OnReassembledData cb)
     : Callback_(std::move(cb))
@@ -707,9 +707,9 @@ void TcpReassembler::CleanupIdle(uint32_t timeout_ms)
     }
 }
 
-// =====================================================================
-//  HttpParser
-// =====================================================================
+
+
+
 
 HttpParser::HttpParser() = default;
 
@@ -885,9 +885,9 @@ void HttpParser::ParseUrl(const std::string& url, std::string& host, int& port)
     }
 }
 
-// =====================================================================
-//  TLS / SNI / MITM
-// =====================================================================
+
+
+
 
 bool ExtractSniFromClienthello(const uint8_t* data, size_t len,
                                std::string& sni_out,
@@ -959,7 +959,7 @@ bool ExtractSniFromClienthello(const uint8_t* data, size_t len,
     return false;
 }
 
-// ── 证书工具 ──────────────────────────────────────────────
+
 
 static X509_NAME* MakeName(const std::string& cn,
                            const std::string& o,
@@ -1098,7 +1098,7 @@ static bool GenerateCertForDomain(X509* ca_cert, EVP_PKEY* ca_key,
     return true;
 }
 
-// ── MITM Proxy ────────────────────────────────────────────
+
 
 struct ProxyConnection {
     SOCKET       ClientSock = INVALID_SOCKET;
@@ -1586,12 +1586,12 @@ struct MitmProxy::Impl {
         uint8_t buf[16384];
         int n = 0;
 
-        // A browser configured with an HTTPS proxy first sends:
-        //   CONNECT host:443 HTTP/1.1\r\n...
-        // The old implementation treated that header as a TLS ClientHello,
-        // and also consumed the real ClientHello before SSL_accept().
-        // Detect CONNECT without consuming TLS data, acknowledge it, and
-        // then inspect the ClientHello with MSG_PEEK.
+        
+        
+        
+        
+        
+        
         uint8_t preface[16]{};
         int preface_n = recv(client_sock, (char*)preface, (int)sizeof(preface), MSG_PEEK);
         if (preface_n <= 0) {
@@ -1657,8 +1657,8 @@ struct MitmProxy::Impl {
             }
         }
 
-        // Wait until enough of the TLS ClientHello is available, but never
-        // remove it from the socket. SSL_accept() must consume it itself.
+        
+        
         uint8_t tls_peek[65536]{};
         int tls_len = 0;
         uint8_t tls_ver = 0;
@@ -1703,9 +1703,9 @@ struct MitmProxy::Impl {
 
         SSL_CTX_use_certificate(conn->ClientCtx, cert);
         SSL_CTX_use_PrivateKey(conn->ClientCtx, key);
-        // The integrated parser handles HTTP/1.x. Do not advertise HTTP/2
-        // to the browser on the MITM leg; otherwise the browser may send
-        // binary HTTP/2 frames which cannot be parsed as HTTP headers.
+        
+        
+        
         SSL_CTX_set_alpn_select_cb(conn->ClientCtx,
             [](SSL*, const unsigned char** out, unsigned char* out_len,
                const unsigned char* in, unsigned int in_len, void*) -> int {
@@ -1782,9 +1782,9 @@ struct MitmProxy::Impl {
                     FD_SET(conn->ServerSock, &read_fds);
 
                 int max_fd = (int)(std::max)((int)client_sock, (int)conn->ServerSock);
-                // select() may modify timeval. Reinitialize it on every
-                // iteration; otherwise the proxy can busy-loop or stop
-                // waiting after the first packet on Winsock.
+                
+                
+                
                 struct timeval tv{1, 0};
                 int sel = select(max_fd + 1, &read_fds, nullptr, nullptr, &tv);
                 const bool client_pending = SSL_pending(conn->ClientSsl) > 0;
@@ -1811,8 +1811,8 @@ struct MitmProxy::Impl {
                             fi.Sni        = conn->Sni;
                             fi.IsOutbound = true;
                             if (ReqCb) ReqCb(fi, req);
-                            // Keep-alive HTTPS connections carry multiple
-                            // requests. Re-arm the parser after each one.
+                            
+                            
                             conn->ClientParser.Reset();
                         }
                         SSL_write(conn->ServerSsl, buf, n);
@@ -1882,9 +1882,9 @@ bool MitmProxy::IsRunning() const   { return Impl_->IsRunning(); }
 std::string MitmProxy::LastError() const { return Impl_->GetError(); }
 void MitmProxy::OnIncomingSyn(uint32_t, uint16_t, uint32_t, uint16_t) {}
 
-// =====================================================================
-//  HttpCapture
-// =====================================================================
+
+
+
 
 static std::string IpToString(uint32_t ip)
 {
@@ -1943,10 +1943,10 @@ struct HttpCapture::Impl {
 
     void OnRawPacket(RawPacket& pkt)
     {
-        // Extract SNI directly from the first visible TLS ClientHello. This
-        // keeps HTTPS visibility even when a connection starts before the
-        // reassembler has observed its SYN or the ClientHello is delivered
-        // as the first useful segment.
+        
+        
+        
+        
         if ((pkt.SrcPort == 443 || pkt.DstPort == 443) &&
             pkt.Payload && pkt.PayloadLen > 0 && pkt.Payload[0] == 0x16 &&
             pkt.IsOutbound) {
@@ -2018,8 +2018,8 @@ struct HttpCapture::Impl {
             }
             if (!Cfg.HttpsMitm)
                 return;
-            // MITM request/response callbacks are delivered by MitmProxy.
-            // Do not feed encrypted packet bytes to the HTTP parser.
+            
+            
             return;
         }
 
@@ -2146,11 +2146,11 @@ void HttpCapture::Wait()
     }
 }
 
-} // namespace http_capture
+} 
 
-// =====================================================================
-//  Demo (guarded)
-// =====================================================================
+
+
+
 
 #ifdef CAPTURE_DEMO
 
@@ -2234,5 +2234,5 @@ int main()
     std::cout << "\n=== Capture stopped ===\n";
     return 0;
 }
-#endif // CAPTURE_DEMO
+#endif 
 
