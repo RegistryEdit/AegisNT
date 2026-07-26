@@ -3709,6 +3709,29 @@ void ShowWarningNotice(QWidget *Parent, const QString &Title, const QString &Con
     ShowNotice(Parent, InfoBar::Type::WARNING, Title, Content);
 }
 
+QString DescribeWin32ErrorMessage(DWORD ErrorCode)
+{
+    QString Message = QString("Win32 error: %1").arg(ErrorCode);
+    LPWSTR Buffer = nullptr;
+    const DWORD Length = FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        ErrorCode,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPWSTR>(&Buffer),
+        0,
+        nullptr);
+    if (Length != 0 && Buffer != nullptr)
+    {
+        const QString Reason = QString::fromWCharArray(Buffer).trimmed();
+        if (!Reason.isEmpty())
+            Message += "\nReason: " + Reason;
+    }
+    if (Buffer != nullptr)
+        LocalFree(Buffer);
+    return Message;
+}
+
 QString DescribeSetTokenError(DWORD ErrorCode)
 {
     switch (ErrorCode)
@@ -4509,24 +4532,390 @@ class TaskManagerPage final : public QWidget
         QString ObjectName;
     };
 
-    static QString QueryObjectTypeName(HANDLE Handle)
+    struct HandleAccessEntry
+    {
+        quint32 Mask = 0;
+        const char *Name = nullptr;
+    };
+
+    static constexpr quint32 KEventQueryState = 0x0001;
+    static constexpr quint32 KEventModifyState = 0x0002;
+    static constexpr quint32 KMutantQueryState = 0x0001;
+    static constexpr long KStatusUnsuccessful = static_cast<long>(0xC0000001L);
+
+    static std::vector<HandleAccessEntry> HandleAccessEntriesForType(const QString &TypeName)
+    {
+        std::vector<HandleAccessEntry> Entries{
+            {DELETE, "DELETE"},
+            {READ_CONTROL, "READ_CONTROL"},
+            {WRITE_DAC, "WRITE_DAC"},
+            {WRITE_OWNER, "WRITE_OWNER"},
+            {SYNCHRONIZE, "SYNCHRONIZE"},
+            {ACCESS_SYSTEM_SECURITY, "ACCESS_SYSTEM_SECURITY"},
+            {GENERIC_READ, "GENERIC_READ"},
+            {GENERIC_WRITE, "GENERIC_WRITE"},
+            {GENERIC_EXECUTE, "GENERIC_EXECUTE"},
+            {GENERIC_ALL, "GENERIC_ALL"},
+        };
+
+        const auto Type = TypeName.trimmed();
+        if (Type.compare("Process", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {PROCESS_TERMINATE, "PROCESS_TERMINATE"},
+                {PROCESS_CREATE_THREAD, "PROCESS_CREATE_THREAD"},
+                {PROCESS_SET_SESSIONID, "PROCESS_SET_SESSIONID"},
+                {PROCESS_VM_OPERATION, "PROCESS_VM_OPERATION"},
+                {PROCESS_VM_READ, "PROCESS_VM_READ"},
+                {PROCESS_VM_WRITE, "PROCESS_VM_WRITE"},
+                {PROCESS_DUP_HANDLE, "PROCESS_DUP_HANDLE"},
+                {PROCESS_CREATE_PROCESS, "PROCESS_CREATE_PROCESS"},
+                {PROCESS_SET_QUOTA, "PROCESS_SET_QUOTA"},
+                {PROCESS_SET_INFORMATION, "PROCESS_SET_INFORMATION"},
+                {PROCESS_QUERY_INFORMATION, "PROCESS_QUERY_INFORMATION"},
+                {PROCESS_SUSPEND_RESUME, "PROCESS_SUSPEND_RESUME"},
+                {PROCESS_QUERY_LIMITED_INFORMATION, "PROCESS_QUERY_LIMITED_INFORMATION"},
+            });
+        else if (Type.compare("Thread", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {THREAD_TERMINATE, "THREAD_TERMINATE"},
+                {THREAD_SUSPEND_RESUME, "THREAD_SUSPEND_RESUME"},
+                {THREAD_GET_CONTEXT, "THREAD_GET_CONTEXT"},
+                {THREAD_SET_CONTEXT, "THREAD_SET_CONTEXT"},
+                {THREAD_QUERY_INFORMATION, "THREAD_QUERY_INFORMATION"},
+                {THREAD_SET_INFORMATION, "THREAD_SET_INFORMATION"},
+                {THREAD_SET_THREAD_TOKEN, "THREAD_SET_THREAD_TOKEN"},
+                {THREAD_IMPERSONATE, "THREAD_IMPERSONATE"},
+                {THREAD_DIRECT_IMPERSONATION, "THREAD_DIRECT_IMPERSONATION"},
+                {THREAD_SET_LIMITED_INFORMATION, "THREAD_SET_LIMITED_INFORMATION"},
+                {THREAD_QUERY_LIMITED_INFORMATION, "THREAD_QUERY_LIMITED_INFORMATION"},
+            });
+        else if (Type.compare("File", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {FILE_READ_DATA, "FILE_READ_DATA"},
+                {FILE_WRITE_DATA, "FILE_WRITE_DATA"},
+                {FILE_APPEND_DATA, "FILE_APPEND_DATA"},
+                {FILE_READ_EA, "FILE_READ_EA"},
+                {FILE_WRITE_EA, "FILE_WRITE_EA"},
+                {FILE_EXECUTE, "FILE_EXECUTE"},
+                {FILE_DELETE_CHILD, "FILE_DELETE_CHILD"},
+                {FILE_READ_ATTRIBUTES, "FILE_READ_ATTRIBUTES"},
+                {FILE_WRITE_ATTRIBUTES, "FILE_WRITE_ATTRIBUTES"},
+            });
+        else if (Type.compare("Key", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {KEY_QUERY_VALUE, "KEY_QUERY_VALUE"},
+                {KEY_SET_VALUE, "KEY_SET_VALUE"},
+                {KEY_CREATE_SUB_KEY, "KEY_CREATE_SUB_KEY"},
+                {KEY_ENUMERATE_SUB_KEYS, "KEY_ENUMERATE_SUB_KEYS"},
+                {KEY_NOTIFY, "KEY_NOTIFY"},
+                {KEY_CREATE_LINK, "KEY_CREATE_LINK"},
+                {KEY_WOW64_32KEY, "KEY_WOW64_32KEY"},
+                {KEY_WOW64_64KEY, "KEY_WOW64_64KEY"},
+            });
+        else if (Type.compare("Section", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {SECTION_QUERY, "SECTION_QUERY"},
+                {SECTION_MAP_WRITE, "SECTION_MAP_WRITE"},
+                {SECTION_MAP_READ, "SECTION_MAP_READ"},
+                {SECTION_MAP_EXECUTE, "SECTION_MAP_EXECUTE"},
+                {SECTION_EXTEND_SIZE, "SECTION_EXTEND_SIZE"},
+                {SECTION_MAP_EXECUTE_EXPLICIT, "SECTION_MAP_EXECUTE_EXPLICIT"},
+            });
+        else if (Type.compare("Event", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {KEventQueryState, "EVENT_QUERY_STATE"},
+                {KEventModifyState, "EVENT_MODIFY_STATE"},
+            });
+        else if (Type.compare("Mutant", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {KMutantQueryState, "MUTANT_QUERY_STATE"},
+            });
+        else if (Type.compare("Token", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {TOKEN_ASSIGN_PRIMARY, "TOKEN_ASSIGN_PRIMARY"},
+                {TOKEN_DUPLICATE, "TOKEN_DUPLICATE"},
+                {TOKEN_IMPERSONATE, "TOKEN_IMPERSONATE"},
+                {TOKEN_QUERY, "TOKEN_QUERY"},
+                {TOKEN_QUERY_SOURCE, "TOKEN_QUERY_SOURCE"},
+                {TOKEN_ADJUST_PRIVILEGES, "TOKEN_ADJUST_PRIVILEGES"},
+                {TOKEN_ADJUST_GROUPS, "TOKEN_ADJUST_GROUPS"},
+                {TOKEN_ADJUST_DEFAULT, "TOKEN_ADJUST_DEFAULT"},
+                {TOKEN_ADJUST_SESSIONID, "TOKEN_ADJUST_SESSIONID"},
+            });
+        return Entries;
+    }
+
+    static QString FormatAccessMask(quint32 Mask, std::initializer_list<std::pair<quint32, const char *>> Entries)
+    {
+        QStringList Parts;
+        quint32 Remaining = Mask;
+        for (const auto &[Bit, Name] : Entries)
+        {
+            if ((Mask & Bit) == Bit)
+            {
+                Parts.append(QString::fromLatin1(Name));
+                Remaining &= ~Bit;
+            }
+        }
+        if (Remaining != 0)
+            Parts.append(QString("0x%1").arg(Remaining, 0, 16).toUpper());
+        return Parts.join(" | ");
+    }
+
+    static QString DescribeHandleAccess(const QString &TypeName, quint32 Mask)
+    {
+        QStringList Parts;
+        const QString Generic = FormatAccessMask(Mask, {
+            {DELETE, "DELETE"},
+            {READ_CONTROL, "READ_CONTROL"},
+            {WRITE_DAC, "WRITE_DAC"},
+            {WRITE_OWNER, "WRITE_OWNER"},
+            {SYNCHRONIZE, "SYNCHRONIZE"},
+            {ACCESS_SYSTEM_SECURITY, "ACCESS_SYSTEM_SECURITY"},
+            {GENERIC_READ, "GENERIC_READ"},
+            {GENERIC_WRITE, "GENERIC_WRITE"},
+            {GENERIC_EXECUTE, "GENERIC_EXECUTE"},
+            {GENERIC_ALL, "GENERIC_ALL"},
+        });
+        if (!Generic.isEmpty())
+            Parts.append(Generic);
+
+        const auto Type = TypeName.trimmed();
+        if (Type.compare("Process", Qt::CaseInsensitive) == 0)
+        {
+            Parts.append(FormatAccessMask(Mask, {
+                {PROCESS_TERMINATE, "PROCESS_TERMINATE"},
+                {PROCESS_CREATE_THREAD, "PROCESS_CREATE_THREAD"},
+                {PROCESS_SET_SESSIONID, "PROCESS_SET_SESSIONID"},
+                {PROCESS_VM_OPERATION, "PROCESS_VM_OPERATION"},
+                {PROCESS_VM_READ, "PROCESS_VM_READ"},
+                {PROCESS_VM_WRITE, "PROCESS_VM_WRITE"},
+                {PROCESS_DUP_HANDLE, "PROCESS_DUP_HANDLE"},
+                {PROCESS_CREATE_PROCESS, "PROCESS_CREATE_PROCESS"},
+                {PROCESS_SET_QUOTA, "PROCESS_SET_QUOTA"},
+                {PROCESS_SET_INFORMATION, "PROCESS_SET_INFORMATION"},
+                {PROCESS_QUERY_INFORMATION, "PROCESS_QUERY_INFORMATION"},
+                {PROCESS_SUSPEND_RESUME, "PROCESS_SUSPEND_RESUME"},
+                {PROCESS_QUERY_LIMITED_INFORMATION, "PROCESS_QUERY_LIMITED_INFORMATION"},
+            }));
+        }
+        else if (Type.compare("Thread", Qt::CaseInsensitive) == 0)
+        {
+            Parts.append(FormatAccessMask(Mask, {
+                {THREAD_TERMINATE, "THREAD_TERMINATE"},
+                {THREAD_SUSPEND_RESUME, "THREAD_SUSPEND_RESUME"},
+                {THREAD_GET_CONTEXT, "THREAD_GET_CONTEXT"},
+                {THREAD_SET_CONTEXT, "THREAD_SET_CONTEXT"},
+                {THREAD_QUERY_INFORMATION, "THREAD_QUERY_INFORMATION"},
+                {THREAD_SET_INFORMATION, "THREAD_SET_INFORMATION"},
+                {THREAD_SET_THREAD_TOKEN, "THREAD_SET_THREAD_TOKEN"},
+                {THREAD_IMPERSONATE, "THREAD_IMPERSONATE"},
+                {THREAD_DIRECT_IMPERSONATION, "THREAD_DIRECT_IMPERSONATION"},
+                {THREAD_SET_LIMITED_INFORMATION, "THREAD_SET_LIMITED_INFORMATION"},
+                {THREAD_QUERY_LIMITED_INFORMATION, "THREAD_QUERY_LIMITED_INFORMATION"},
+            }));
+        }
+        else if (Type.compare("File", Qt::CaseInsensitive) == 0)
+        {
+            Parts.append(FormatAccessMask(Mask, {
+                {FILE_READ_DATA, "FILE_READ_DATA"},
+                {FILE_WRITE_DATA, "FILE_WRITE_DATA"},
+                {FILE_APPEND_DATA, "FILE_APPEND_DATA"},
+                {FILE_READ_EA, "FILE_READ_EA"},
+                {FILE_WRITE_EA, "FILE_WRITE_EA"},
+                {FILE_EXECUTE, "FILE_EXECUTE"},
+                {FILE_DELETE_CHILD, "FILE_DELETE_CHILD"},
+                {FILE_READ_ATTRIBUTES, "FILE_READ_ATTRIBUTES"},
+                {FILE_WRITE_ATTRIBUTES, "FILE_WRITE_ATTRIBUTES"},
+            }));
+        }
+        else if (Type.compare("Key", Qt::CaseInsensitive) == 0)
+        {
+            Parts.append(FormatAccessMask(Mask, {
+                {KEY_QUERY_VALUE, "KEY_QUERY_VALUE"},
+                {KEY_SET_VALUE, "KEY_SET_VALUE"},
+                {KEY_CREATE_SUB_KEY, "KEY_CREATE_SUB_KEY"},
+                {KEY_ENUMERATE_SUB_KEYS, "KEY_ENUMERATE_SUB_KEYS"},
+                {KEY_NOTIFY, "KEY_NOTIFY"},
+                {KEY_CREATE_LINK, "KEY_CREATE_LINK"},
+                {KEY_WOW64_32KEY, "KEY_WOW64_32KEY"},
+                {KEY_WOW64_64KEY, "KEY_WOW64_64KEY"},
+            }));
+        }
+        else if (Type.compare("Section", Qt::CaseInsensitive) == 0)
+        {
+            Parts.append(FormatAccessMask(Mask, {
+                {SECTION_QUERY, "SECTION_QUERY"},
+                {SECTION_MAP_WRITE, "SECTION_MAP_WRITE"},
+                {SECTION_MAP_READ, "SECTION_MAP_READ"},
+                {SECTION_MAP_EXECUTE, "SECTION_MAP_EXECUTE"},
+                {SECTION_EXTEND_SIZE, "SECTION_EXTEND_SIZE"},
+                {SECTION_MAP_EXECUTE_EXPLICIT, "SECTION_MAP_EXECUTE_EXPLICIT"},
+            }));
+        }
+        else if (Type.compare("Event", Qt::CaseInsensitive) == 0)
+        {
+            Parts.append(FormatAccessMask(Mask, {
+                {KEventQueryState, "EVENT_QUERY_STATE"},
+                {KEventModifyState, "EVENT_MODIFY_STATE"},
+            }));
+        }
+        else if (Type.compare("Mutant", Qt::CaseInsensitive) == 0)
+        {
+            Parts.append(FormatAccessMask(Mask, {
+                {KMutantQueryState, "MUTANT_QUERY_STATE"},
+            }));
+        }
+        else if (Type.compare("Token", Qt::CaseInsensitive) == 0)
+        {
+            Parts.append(FormatAccessMask(Mask, {
+                {TOKEN_ASSIGN_PRIMARY, "TOKEN_ASSIGN_PRIMARY"},
+                {TOKEN_DUPLICATE, "TOKEN_DUPLICATE"},
+                {TOKEN_IMPERSONATE, "TOKEN_IMPERSONATE"},
+                {TOKEN_QUERY, "TOKEN_QUERY"},
+                {TOKEN_QUERY_SOURCE, "TOKEN_QUERY_SOURCE"},
+                {TOKEN_ADJUST_PRIVILEGES, "TOKEN_ADJUST_PRIVILEGES"},
+                {TOKEN_ADJUST_GROUPS, "TOKEN_ADJUST_GROUPS"},
+                {TOKEN_ADJUST_DEFAULT, "TOKEN_ADJUST_DEFAULT"},
+                {TOKEN_ADJUST_SESSIONID, "TOKEN_ADJUST_SESSIONID"},
+            }));
+        }
+
+        Parts.removeAll(QString());
+        Parts.removeDuplicates();
+        return Parts.join(" | ");
+    }
+
+    static QString FormatHandleAccessDisplay(const QString &TypeName, quint32 Mask)
+    {
+        const QString Decoded = DescribeHandleAccess(TypeName, Mask);
+        const QString Raw = QString("0x%1").arg(Mask, 0, 16).toUpper();
+        return Decoded.isEmpty() ? Raw : Raw + " | " + Decoded;
+    }
+
+    bool PromptHandleAccessMask(QWidget *Parent, const QString &TypeName, quint32 CurrentAccess,
+                                quint32 &SelectedMask, const QString &Title, const QString &Description,
+                                const QString &ApplyText = "Apply")
+    {
+        auto *Dialog = new QDialog(Parent);
+        Dialog->setAttribute(Qt::WA_DeleteOnClose);
+        Dialog->setWindowTitle(Title);
+        Dialog->setModal(true);
+        Dialog->resize(520, 520);
+
+        auto *Layout = new QVBoxLayout(Dialog);
+        Layout->setContentsMargins(20, 18, 20, 18);
+        Layout->setSpacing(10);
+
+        auto *Desc = MakeLabel(Description, 11, KTextMuted);
+        Desc->setWordWrap(true);
+        auto *Scroll = new QScrollArea;
+        Scroll->setWidgetResizable(true);
+        Scroll->setFrameShape(QFrame::NoFrame);
+        auto *Container = new QWidget;
+        auto *Options = new QVBoxLayout(Container);
+        Options->setContentsMargins(0, 0, 0, 0);
+        Options->setSpacing(8);
+
+        std::vector<QCheckBox *> Boxes;
+        const auto Entries = HandleAccessEntriesForType(TypeName);
+        for (const auto &Entry : Entries)
+        {
+            auto *Box = new CheckBox(QString::fromLatin1(Entry.Name));
+            Box->setProperty("maskValue", QVariant::fromValue<quint32>(Entry.Mask));
+            Box->setChecked((CurrentAccess & Entry.Mask) == Entry.Mask);
+            Options->addWidget(Box);
+            Boxes.push_back(Box);
+        }
+        Options->addStretch();
+        Scroll->setWidget(Container);
+
+        auto *Preview = new BodyLabel;
+        auto UpdatePreview = [Preview, Boxes, TypeName]() {
+            quint32 Mask = 0;
+            for (QCheckBox *Box : Boxes)
+                if (Box->isChecked())
+                    Mask |= Box->property("maskValue").toUInt();
+            Preview->setText("Access: " + FormatHandleAccessDisplay(TypeName, Mask));
+        };
+        for (QCheckBox *Box : Boxes)
+            QObject::connect(Box, &QCheckBox::toggled, Dialog, UpdatePreview);
+        UpdatePreview();
+
+        auto *Buttons = new QHBoxLayout;
+        ConfigureToolbarLayout(Buttons);
+        Buttons->addStretch();
+        auto *Cancel = MakeButton("Cancel");
+        auto *Apply = MakeButton(ApplyText, true);
+        Buttons->addWidget(Cancel);
+        Buttons->addWidget(Apply);
+
+        Layout->addWidget(Desc);
+        Layout->addWidget(Scroll, 1);
+        Layout->addWidget(Preview);
+        Layout->addLayout(Buttons);
+
+        QObject::connect(Cancel, &QPushButton::clicked, Dialog, &QDialog::reject);
+        QObject::connect(Apply, &QPushButton::clicked, Dialog, [Dialog]() { Dialog->accept(); });
+
+        if (Dialog->exec() != QDialog::Accepted)
+            return false;
+
+        SelectedMask = 0;
+        for (QCheckBox *Box : Boxes)
+            if (Box->isChecked())
+                SelectedMask |= Box->property("maskValue").toUInt();
+        return true;
+    }
+
+    static bool IsNtQueryObjectResizeStatus(NTSTATUS Status)
+    {
+        constexpr NTSTATUS KStatusInfoLengthMismatch = static_cast<NTSTATUS>(0xC0000004L);
+        constexpr NTSTATUS KStatusBufferOverflow = static_cast<NTSTATUS>(0x80000005L);
+        constexpr NTSTATUS KStatusBufferTooSmall = static_cast<NTSTATUS>(0xC0000023L);
+        return Status == KStatusInfoLengthMismatch ||
+               Status == KStatusBufferOverflow ||
+               Status == KStatusBufferTooSmall;
+    }
+
+    static bool QueryObjectInformationBuffer(HANDLE Handle, OBJECT_INFORMATION_CLASS InfoClass,
+                                             std::vector<BYTE> &Buffer)
     {
         using NtQueryObjectFn = NTSTATUS(NTAPI *)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
-        constexpr auto KObjectTypeInformationClass = static_cast<OBJECT_INFORMATION_CLASS>(2);
-        constexpr NTSTATUS KStatusInfoLengthMismatch = static_cast<NTSTATUS>(0xC0000004L);
         static const auto QueryObject = reinterpret_cast<NtQueryObjectFn>(
             GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject"));
         if (!QueryObject || !Handle)
-            return {};
+            return false;
 
-        ULONG Size = 0;
-        NTSTATUS Status = QueryObject(Handle, KObjectTypeInformationClass, nullptr, 0, &Size);
-        if (Status != KStatusInfoLengthMismatch || Size < sizeof(UNICODE_STRING))
-            return {};
+        ULONG Size = 0x200;
+        ULONG ReturnLength = 0;
+        NTSTATUS Status = static_cast<NTSTATUS>(KStatusUnsuccessful);
+        Buffer.resize(Size);
+        for (int Attempt = 0; Attempt < 8; ++Attempt)
+        {
+            Status = QueryObject(Handle, InfoClass, Buffer.data(), Size, &ReturnLength);
+            if (Status >= 0)
+            {
+                if (ReturnLength != 0 && ReturnLength <= Size)
+                    Buffer.resize(ReturnLength);
+                return true;
+            }
+            if (!IsNtQueryObjectResizeStatus(Status))
+                return false;
 
-        std::vector<BYTE> Buffer(Size);
-        Status = QueryObject(Handle, KObjectTypeInformationClass, Buffer.data(), Size, &Size);
-        if (Status < 0)
+            const ULONG NextSize = ReturnLength > Size ? ReturnLength + 0x100 : Size * 2;
+            Size = std::max<ULONG>(NextSize, 0x200);
+            Buffer.resize(Size);
+        }
+        return false;
+    }
+
+    static QString QueryObjectTypeName(HANDLE Handle)
+    {
+        constexpr auto KObjectTypeInformationClass = static_cast<OBJECT_INFORMATION_CLASS>(2);
+        std::vector<BYTE> Buffer;
+        if (!QueryObjectInformationBuffer(Handle, KObjectTypeInformationClass, Buffer) ||
+            Buffer.size() < sizeof(UNICODE_STRING))
             return {};
 
         const auto *Type = reinterpret_cast<const UNICODE_STRING *>(Buffer.data());
@@ -4537,22 +4926,10 @@ class TaskManagerPage final : public QWidget
 
     static QString QueryObjectName(HANDLE Handle)
     {
-        using NtQueryObjectFn = NTSTATUS(NTAPI *)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
         constexpr auto KObjectNameInformationClass = static_cast<OBJECT_INFORMATION_CLASS>(1);
-        constexpr NTSTATUS KStatusInfoLengthMismatch = static_cast<NTSTATUS>(0xC0000004L);
-        static const auto QueryObject = reinterpret_cast<NtQueryObjectFn>(
-            GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject"));
-        if (!QueryObject || !Handle)
-            return {};
-
-        ULONG Size = 0;
-        NTSTATUS Status = QueryObject(Handle, KObjectNameInformationClass, nullptr, 0, &Size);
-        if (Status != KStatusInfoLengthMismatch || Size < sizeof(UNICODE_STRING))
-            return {};
-
-        std::vector<BYTE> Buffer(Size);
-        Status = QueryObject(Handle, KObjectNameInformationClass, Buffer.data(), Size, &Size);
-        if (Status < 0)
+        std::vector<BYTE> Buffer;
+        if (!QueryObjectInformationBuffer(Handle, KObjectNameInformationClass, Buffer) ||
+            Buffer.size() < sizeof(UNICODE_STRING))
             return {};
 
         const auto *Name = reinterpret_cast<const UNICODE_STRING *>(Buffer.data());
@@ -5202,16 +5579,85 @@ class TaskManagerPage final : public QWidget
 
     void ShowTokenDialog(DWORD Pid)
     {
-        ShowChoiceDialog("SetToken", QString("Select the account token to apply to PID %1.").arg(Pid),
-                         {"SYSTEM", "TRUSTEDINSTALLER"}, [this, Pid](int Index) {
-            const ULONG AccountType = Index == 0 ? ACCOUNT_TYPE_SYSTEM : ACCOUNT_TYPE_TRUSTEDINSTALLER;
-            if (!SetTokenAs(AccountType, Pid))
+        auto *Dialog = new QDialog(this);
+        Dialog->setAttribute(Qt::WA_DeleteOnClose);
+        Dialog->setWindowTitle("SetToken");
+        Dialog->setModal(true);
+        Dialog->resize(420, 220);
+
+        auto *Layout = new QVBoxLayout(Dialog);
+        Layout->setContentsMargins(20, 18, 20, 18);
+        Layout->setSpacing(12);
+
+        auto *Description = MakeLabel(QString("Apply a token to PID %1.").arg(Pid), 11, KTextMuted);
+        Description->setWordWrap(true);
+        auto *ModeLabel = MakeLabel("Source token", 11, KTextPrimary, QFont::DemiBold);
+        auto *Mode = new ComboBox;
+        Mode->addItems({"SYSTEM", "TRUSTEDINSTALLER", "Custom"});
+        auto *CustomPidLabel = MakeLabel("Custom source PID", 11, KTextPrimary, QFont::DemiBold);
+        auto *CustomPid = new LineEdit;
+        CustomPid->setPlaceholderText("Enter source PID");
+        CustomPidLabel->setVisible(false);
+        CustomPid->setVisible(false);
+
+        auto *Buttons = new QHBoxLayout;
+        ConfigureToolbarLayout(Buttons);
+        Buttons->addStretch();
+        auto *Cancel = MakeButton("Cancel");
+        auto *Apply = MakeButton("Apply", true);
+        Buttons->addWidget(Cancel);
+        Buttons->addWidget(Apply);
+
+        Layout->addWidget(Description);
+        Layout->addWidget(ModeLabel);
+        Layout->addWidget(Mode);
+        Layout->addWidget(CustomPidLabel);
+        Layout->addWidget(CustomPid);
+        Layout->addLayout(Buttons);
+
+        QObject::connect(Mode, &ComboBox::currentTextChanged, Dialog, [CustomPidLabel, CustomPid](const QString &Text) {
+            const bool IsCustom = Text.compare("Custom", Qt::CaseInsensitive) == 0;
+            CustomPidLabel->setVisible(IsCustom);
+            CustomPid->setVisible(IsCustom);
+        });
+        QObject::connect(Cancel, &QPushButton::clicked, Dialog, &QDialog::reject);
+        QObject::connect(Apply, &QPushButton::clicked, Dialog, [this, Dialog, Mode, CustomPid, Pid] {
+            const QString Choice = Mode->currentText();
+            bool Success = false;
+            QString SuccessText;
+            if (Choice.compare("Custom", Qt::CaseInsensitive) == 0)
+            {
+                bool Ok = false;
+                const qulonglong SourcePidValue = CustomPid->text().trimmed().toULongLong(&Ok, 0);
+                if (!Ok || SourcePidValue == 0 || SourcePidValue > std::numeric_limits<ULONG>::max())
+                {
+                    ShowWarningNotice(Dialog, "SetToken", "Enter a valid source PID.");
+                    return;
+                }
+                Success = SetToken(static_cast<ULONG>(SourcePidValue), Pid);
+                SuccessText = QString("Custom token from PID %1 applied.").arg(SourcePidValue);
+            }
+            else
+            {
+                const ULONG AccountType = Choice.compare("SYSTEM", Qt::CaseInsensitive) == 0
+                    ? ACCOUNT_TYPE_SYSTEM
+                    : ACCOUNT_TYPE_TRUSTEDINSTALLER;
+                Success = SetTokenAs(AccountType, Pid);
+                SuccessText = Choice.compare("SYSTEM", Qt::CaseInsensitive) == 0
+                    ? "SYSTEM token applied."
+                    : "TrustedInstaller token applied.";
+            }
+
+            if (!Success)
                 ShowErrorNotice(this, "SetToken", DescribeSetTokenError(G_LastMultiDrvError));
             else
-                ShowSuccessNotice(this, "SetToken", Index == 0 ? "SYSTEM token applied."
-                                                                  : "TrustedInstaller token applied.");
-            QTimer::singleShot(0, this, [this] { RefreshProcesses(); });
+            {
+                ShowSuccessNotice(this, "SetToken", SuccessText);
+                Dialog->accept();
+                QTimer::singleShot(0, this, [this] { RefreshProcesses(); });
+            }
         });
+        Dialog->show();
     }
 
     void ShowApcSignalDialog(DWORD Pid)
@@ -5369,6 +5815,8 @@ class TaskManagerPage final : public QWidget
         Threads->setSelectionMode(QAbstractItemView::ExtendedSelection);
         Threads->setProperty("UseGenericDetailDialog", false);
         auto *Handles = AddTable("handles", "Handles", Fluent::IconType::LINK, {"Handle", "Object", "Type", "Access", "Attributes"});
+        Handles->setContextMenuPolicy(Qt::CustomContextMenu);
+        Handles->setSelectionMode(QAbstractItemView::SingleSelection);
         auto *Modules = AddTable("modules", "Modules", Fluent::IconType::LIBRARY, {"Name", "Base", "Size", "Path", "Source"});
         auto *Memory = AddTable("memory", "Memory", Fluent::IconType::TILES, {"Base", "Size", "State", "Protect", "Type"});
         auto *Mitigations = AddTable("mitigations", "Mitigations", Fluent::IconType::CERTIFICATE, {"Property", "Value", "Source"});
@@ -5567,6 +6015,89 @@ class TaskManagerPage final : public QWidget
             ReleaseMenuAfterClose(Menu);
             Menu->exec(Threads->viewport()->mapToGlobal(Position));
         });
+        QObject::connect(Handles, &QWidget::customContextMenuRequested, Dialog,
+                         [this, Dialog, Handles, Pid](const QPoint &Position) {
+            const QModelIndex Index = Handles->indexAt(Position);
+            if (!Index.isValid())
+                return;
+            Handles->selectRow(Index.row());
+            const QTableWidgetItem *HandleItem = Handles->item(Index.row(), 0);
+            const QTableWidgetItem *TypeItem = Handles->item(Index.row(), 2);
+            if (!HandleItem)
+                return;
+            const ULONG HandleValue = HandleItem->data(Qt::UserRole).toUInt();
+            const ULONG OwnerPid = HandleItem->data(Qt::UserRole + 1).toUInt();
+            const ACCESS_MASK CurrentAccess = static_cast<ACCESS_MASK>(HandleItem->data(Qt::UserRole + 2).toUInt());
+            const QString TypeName = TypeItem ? TypeItem->text() : QString();
+            if (HandleValue == 0 || OwnerPid == 0)
+                return;
+
+            auto *Menu = new RoundMenu(QString(), Dialog);
+            AddMenuAction(Menu, "ForceClose", [this, OwnerPid, HandleValue] {
+                if (!ForceCloseHandleKernel(OwnerPid, HandleValue))
+                    ShowErrorNotice(this, "Handle", QString("Force close failed (error %1).").arg(G_LastMultiDrvError));
+                else
+                    ShowSuccessNotice(this, "Handle", QString("Handle 0x%1 closed.").arg(HandleValue, 0, 16).toUpper());
+            });
+            AddMenuAction(Menu, "Downgrade", [this, Dialog, OwnerPid, HandleValue, CurrentAccess, TypeName] {
+                quint32 SelectedMask = CurrentAccess;
+                if (!PromptHandleAccessMask(Dialog, TypeName, CurrentAccess, SelectedMask,
+                                            "Downgrade Handle",
+                                            QString("Select the permissions to keep for handle 0x%1.")
+                                                .arg(HandleValue, 0, 16).toUpper(),
+                                            "Downgrade"))
+                    return;
+                ULONG NewHandleValue = 0;
+                if (!DowngradeHandleKernel(OwnerPid, HandleValue, static_cast<ACCESS_MASK>(SelectedMask), &NewHandleValue))
+                    ShowErrorNotice(this, "Handle", QString("Downgrade failed (error %1).").arg(G_LastMultiDrvError));
+                else
+                    ShowSuccessNotice(this, "Handle",
+                        QString("Handle downgraded. New handle: 0x%1").arg(NewHandleValue, 0, 16).toUpper());
+            });
+            AddMenuAction(Menu, "DuplicateAndDowngrade", [this, Dialog, OwnerPid, HandleValue, CurrentAccess, Pid, TypeName] {
+                bool TargetOk = false;
+                const QString TargetText = QInputDialog::getText(Dialog, "Duplicate Handle",
+                    "Target PID:", QLineEdit::Normal, QString::number(Pid), &TargetOk);
+                if (!TargetOk || TargetText.trimmed().isEmpty())
+                    return;
+                bool PidOk = false;
+                const qulonglong TargetPidValue = TargetText.trimmed().toULongLong(&PidOk, 0);
+                if (!PidOk || TargetPidValue == 0 || TargetPidValue > std::numeric_limits<ULONG>::max())
+                {
+                    ShowWarningNotice(this, "Handle", "Enter a valid target PID.");
+                    return;
+                }
+                quint32 SelectedMask = CurrentAccess;
+                if (!PromptHandleAccessMask(Dialog, TypeName, CurrentAccess, SelectedMask,
+                                            "Duplicate Handle",
+                                            QString("Select the permissions for the duplicated handle 0x%1 in PID %2.")
+                                                .arg(HandleValue, 0, 16).toUpper()
+                                                .arg(TargetPidValue),
+                                            "Duplicate"))
+                    return;
+
+                ULONG_PTR NewHandle = 0;
+                if (!DuplicateAndDowngradeHandleKernel(OwnerPid, HandleValue, static_cast<ULONG>(TargetPidValue),
+                                                       static_cast<ACCESS_MASK>(SelectedMask), &NewHandle))
+                    ShowErrorNotice(this, "Handle", QString("Duplicate failed (error %1).").arg(G_LastMultiDrvError));
+                else
+                    ShowSuccessNotice(this, "Handle",
+                        QString("Handle duplicated to PID %1 as 0x%2.")
+                            .arg(TargetPidValue)
+                            .arg(NewHandle, 0, 16).toUpper());
+            });
+            AddMenuAction(Menu, "CopyHandleInfo", [this, OwnerPid, HandleValue, TypeName, CurrentAccess] {
+                const QString Text = QString("PID=%1\nHandle=0x%2\nType=%3\nAccess=0x%4")
+                    .arg(OwnerPid)
+                    .arg(HandleValue, 0, 16)
+                    .arg(TypeName)
+                    .arg(CurrentAccess, 0, 16);
+                qApp->clipboard()->setText(Text);
+                ShowSuccessNotice(this, "Handle", "Handle information copied.");
+            });
+            ReleaseMenuAfterClose(Menu);
+            Menu->exec(Handles->viewport()->mapToGlobal(Position));
+        });
         auto *Close = new PushButton("Close", Fluent::IconType::ACCEPT);
         Layout->addWidget(Close, 0, Qt::AlignRight);
         QObject::connect(Close, &QPushButton::clicked, Dialog, &QDialog::accept);
@@ -5582,11 +6113,11 @@ class TaskManagerPage final : public QWidget
             std::vector<InspectorHandleRow> UserHandleRows;
             MDV2_LIST_HEADER ProcessHeader{}, ThreadHeader{}, HandleHeader{}, ModuleHeader{}, MemoryHeader{};
             DWORD UserHandleError = ERROR_SUCCESS;
-            QueryProcessRecordsV2(Pid, IOCTL_QUERY_PROCESS_V2, ProcessRows, &ProcessHeader);
-            QueryProcessRecordsV2(Pid, IOCTL_ENUM_THREADS_V2, ThreadRows, &ThreadHeader);
-            QueryProcessRecordsV2(Pid, IOCTL_ENUM_HANDLES_V2, HandleRows, &HandleHeader);
-            QueryProcessRecordsV2(Pid, IOCTL_ENUM_MODULES_V2, ModuleRows, &ModuleHeader);
-            QueryProcessRecordsV2(Pid, IOCTL_ENUM_MEMORY_V2, MemoryRows, &MemoryHeader);
+            const bool KernelProcessOk = QueryProcessRecordsV2(Pid, IOCTL_QUERY_PROCESS_V2, ProcessRows, &ProcessHeader);
+            const bool KernelThreadOk = QueryProcessRecordsV2(Pid, IOCTL_ENUM_THREADS_V2, ThreadRows, &ThreadHeader);
+            const bool KernelHandleOk = QueryProcessRecordsV2(Pid, IOCTL_ENUM_HANDLES_V2, HandleRows, &HandleHeader);
+            const bool KernelModuleOk = QueryProcessRecordsV2(Pid, IOCTL_ENUM_MODULES_V2, ModuleRows, &ModuleHeader);
+            const bool KernelMemoryOk = QueryProcessRecordsV2(Pid, IOCTL_ENUM_MEMORY_V2, MemoryRows, &MemoryHeader);
             const bool UserHandleOk = QueryUserModeHandles(Pid, UserHandleRows, UserHandleError);
             std::string PebOutput;
             ProcessPeb::ReadPebInfoText(Pid, PebOutput);
@@ -5618,6 +6149,7 @@ class TaskManagerPage final : public QWidget
                                              HandleRows = std::move(HandleRows), UserHandleRows = std::move(UserHandleRows),
                                              ModuleRows = std::move(ModuleRows), MemoryRows = std::move(MemoryRows),
                                               ProcessHeader, HandleHeader, ModuleHeader, UserHandleOk, UserHandleError,
+                                              KernelProcessOk, KernelThreadOk, KernelHandleOk, KernelModuleOk, KernelMemoryOk,
                                               PebOutput = std::move(PebOutput), HasSelectedProcess,
                                               MitigationEntries = std::move(MitigationEntries), Pid]() mutable {
                 if (!SafeDialog) return;
@@ -5635,7 +6167,7 @@ class TaskManagerPage final : public QWidget
                         "Process Environment", "Memory Map", "Version Profile", "Signature Scan", "Cross-view"};
                     return Source < Names.size() ? QString::fromLatin1(Names[Source]) : QString("Source %1").arg(Source);
                 };
-                if (!ProcessRows.empty()) {
+                if (KernelProcessOk && !ProcessRows.empty()) {
                     const auto &R = ProcessRows.front();
                     const QString KernelParentPid = QString::number(static_cast<quint32>(R.Value[0]));
                     const QString KernelThreads = QString::number(static_cast<quint32>(R.Value[1]));
@@ -5675,35 +6207,60 @@ class TaskManagerPage final : public QWidget
                     if (QTableWidgetItem *Item = Threads->item(Row, 0))
                         Item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(R.ThreadId));
                 }
-                if (UserHandleOk && !UserHandleRows.empty())
+                if (KernelHandleOk && HandleHeader.Status == 0)
+                {
+                    for (const auto &R : HandleRows)
+                    {
+                        const QString ObjectText = R.Path[0]
+                            ? QString::fromWCharArray(R.Path)
+                            : QString("0x%1").arg(R.Address, 0, 16).toUpper();
+                        const QString TypeText = R.TypeName[0]
+                            ? QString::fromWCharArray(R.TypeName)
+                            : (R.Detail[0] ? QString::fromWCharArray(R.Detail) : QString::number(R.Value[2]));
+                        const int HandleRow = Handles->rowCount();
+                        Add(Handles, {QString("0x%1").arg(R.Value[0], 0, 16).toUpper(),
+                                      ObjectText,
+                                      TypeText,
+                                      FormatHandleAccessDisplay(TypeText, static_cast<quint32>(R.Value[1])),
+                                      QString("0x%1").arg(R.Value[3], 0, 16).toUpper()});
+                        if (QTableWidgetItem *Item = Handles->item(HandleRow, 0))
+                        {
+                            Item->setData(Qt::UserRole, QVariant::fromValue<quint32>(static_cast<quint32>(R.Value[0])));
+                            Item->setData(Qt::UserRole + 1, QVariant::fromValue<quint32>(Pid));
+                            Item->setData(Qt::UserRole + 2, QVariant::fromValue<quint32>(static_cast<quint32>(R.Value[1])));
+                        }
+                    }
+                    if (HandleRows.empty())
+                        Add(Handles, {"No handles", {}, {}, {}, {}});
+                    Add(Mitigations, {"Handle source", "Kernel driver", QString::number(HandleRows.size())});
+                }
+                else if (UserHandleOk && !UserHandleRows.empty())
                 {
                     for (const auto &R : UserHandleRows)
+                    {
+                        const int HandleRow = Handles->rowCount();
                         Add(Handles, {QString("0x%1").arg(R.HandleValue, 0, 16).toUpper(),
                                       R.ObjectName.isEmpty() ? QString("0x%1").arg(R.ObjectAddress, 0, 16).toUpper() : R.ObjectName,
                                       R.TypeName.isEmpty() ? "Unknown" : R.TypeName,
-                                      QString("0x%1").arg(R.GrantedAccess, 0, 16).toUpper(),
+                                      FormatHandleAccessDisplay(R.TypeName, R.GrantedAccess),
                                       QString("0x%1").arg(R.Attributes, 0, 16).toUpper()});
-                    Add(Mitigations, {"Handle source", "User-mode fallback", QString::number(UserHandleRows.size())});
+                        if (QTableWidgetItem *Item = Handles->item(HandleRow, 0))
+                        {
+                            Item->setData(Qt::UserRole, QVariant::fromValue<quint32>(static_cast<quint32>(R.HandleValue)));
+                            Item->setData(Qt::UserRole + 1, QVariant::fromValue<quint32>(Pid));
+                            Item->setData(Qt::UserRole + 2, QVariant::fromValue<quint32>(R.GrantedAccess));
+                        }
+                    }
+                    Add(Mitigations, {"Handle source", "User-mode fallback",
+                        QString::number(UserHandleRows.size()) + QString(" (kernel status 0x%1)")
+                            .arg(static_cast<quint32>(HandleHeader.Status), 8, 16, QLatin1Char('0')).toUpper()});
                 }
                 else
                 {
-                    for (const auto &R : HandleRows) Add(Handles, {QString("0x%1").arg(R.Value[0], 0, 16).toUpper(),
-                        QString("0x%1").arg(R.Address, 0, 16).toUpper(), QString::number(R.Value[2]),
-                        QString("0x%1").arg(R.Value[1], 0, 16).toUpper(), QString("0x%1").arg(R.Value[3], 0, 16).toUpper()});
-                    if (HandleRows.empty())
-                    {
-                        if (HandleHeader.Status == 0 && UserHandleOk)
-                            Add(Handles, {"No handles", {}, {}, {}, {}});
-                        else if (HandleHeader.Status == 0)
-                            Add(Handles, {"Unavailable", {}, {}, {}, QString("fallback error %1").arg(UserHandleError)});
-                        else
-                            Add(Handles, {"Unavailable", {}, {}, {},
-                                QString("0x%1").arg(static_cast<quint32>(HandleHeader.Status), 8, 16, QLatin1Char('0')).toUpper()});
-                    }
-                    else
-                    {
-                        Add(Mitigations, {"Handle source", "Kernel driver", QString::number(HandleRows.size())});
-                    }
+                    Add(Handles, {"Unavailable", {}, {}, {},
+                        KernelHandleOk
+                            ? QString("0x%1").arg(static_cast<quint32>(HandleHeader.Status), 8, 16, QLatin1Char('0')).toUpper()
+                            : QString("fallback error %1").arg(UserHandleError)});
                 }
                 Add(Mitigations, {"Kernel query", "Capability-dependent", SourceName(ProcessHeader.Source)});
 
@@ -5877,6 +6434,7 @@ class TaskManagerPage final : public QWidget
             EnableDebugPrivilege();
             const std::wstring WidePath = QDir::toNativeSeparators(Path).toStdWString();
             BOOL Result = FALSE;
+            QString MethodName = Method->currentText();
             switch (Method->currentIndex())
             {
             case 0: Result = Inject_RemoteThread(Pid, WidePath); break;
@@ -5889,9 +6447,30 @@ class TaskManagerPage final : public QWidget
             }
             Dialog->accept();
             if (!Result)
+            {
+                AppendConsoleOutput(QString("[!] DLL injection failed.\n"
+                                            "    PID: %1\n"
+                                            "    Method: %2\n"
+                                            "    DLL: %3\n"
+                                            "    %4\n")
+                                        .arg(Pid)
+                                        .arg(MethodName)
+                                        .arg(QDir::toNativeSeparators(Path))
+                                        .arg(DescribeWin32ErrorMessage(G_LastMultiDrvError)
+                                                 .replace('\n', "\n    ")));
                 ShowErrorNotice(this, "InjectDLL", "DLL injection failed. See Console for details.");
+            }
             else
+            {
+                AppendConsoleOutput(QString("[+] DLL injection started.\n"
+                                            "    PID: %1\n"
+                                            "    Method: %2\n"
+                                            "    DLL: %3\n")
+                                        .arg(Pid)
+                                        .arg(MethodName)
+                                        .arg(QDir::toNativeSeparators(Path)));
                 ShowSuccessNotice(this, "InjectDLL", "DLL injection started successfully.");
+            }
         });
         QObject::connect(Dialog->cancelButton(), &QPushButton::clicked, Dialog, &QDialog::reject);
         Dialog->show();
@@ -9062,15 +9641,18 @@ class WindowManagerPage final : public QWidget
             ShowWarningNotice(this, "Window", "This window is already protected.");
             return;
         }
-        if (G_DeviceHandle == INVALID_HANDLE_VALUE)
+        if (G_DeviceHandle == INVALID_HANDLE_VALUE && !OpenDeviceSilent())
         {
-            ShowErrorNotice(this, "Window", "Kernel driver is not available.");
+            const DWORD ErrorCode = GetLastError();
+            G_LastMultiDrvError = ErrorCode;
+            ShowErrorNotice(this, "Window",
+                "Kernel driver is not available.\n" + DescribeWin32ErrorMessage(ErrorCode));
             return;
         }
         if (!ProtectWindowKernel(Pid, Hwnd, WINPROT_ALL))
         {
             ShowErrorNotice(this, "Window",
-                QString("Protect failed. Error: %1").arg(G_LastMultiDrvError));
+                QString("Protect failed.\n%1").arg(DescribeWin32ErrorMessage(G_LastMultiDrvError)));
             return;
         }
         ProtectedWindows.push_back({Hwnd, Pid, Title, WINPROT_ALL});
@@ -9088,8 +9670,8 @@ class WindowManagerPage final : public QWidget
             ULONG Pid = Idx.data(Qt::UserRole + 1).toUInt();
             for (const auto &P : ProtectedWindows)
                 if (P.Hwnd == Hwnd) { ToRemove.push_back(P); break; }
-            if (G_DeviceHandle == INVALID_HANDLE_VALUE || !UnprotectWindowKernel(Pid, Hwnd))
-                Failures.append(QString("0x%1").arg(Hwnd, 0, 16));
+            if ((G_DeviceHandle == INVALID_HANDLE_VALUE && !OpenDeviceSilent()) || !UnprotectWindowKernel(Pid, Hwnd))
+                Failures.append(QString("0x%1 (error %2)").arg(Hwnd, 0, 16).arg(G_LastMultiDrvError));
         }
         for (const auto &P : ToRemove)
         {

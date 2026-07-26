@@ -86,6 +86,9 @@
 #define IOCTL_REMOVE_WINDOW_PROTECT  CTL_CODE(0x8000, 0x850, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_ADD_INJECTION_PROTECTION     CTL_CODE(0x8000, 0x851, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_REMOVE_INJECTION_PROTECTION  CTL_CODE(0x8000, 0x852, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HANDLE_CLOSE                  CTL_CODE(0x8000, 0x853, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HANDLE_DOWNGRADE              CTL_CODE(0x8000, 0x854, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HANDLE_DUP_DOWNGRADE          CTL_CODE(0x8000, 0x855, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define CALLBACK_TYPE_OB_PROCESS   0
 #define CALLBACK_TYPE_OB_THREAD    1
@@ -593,6 +596,30 @@ typedef struct _WINDOW_PROTECT_INPUT {
 typedef struct _INJECTION_PROTECT_INPUT {
 	ULONG ProcessId;
 } INJECTION_PROTECT_INPUT, * PINJECTION_PROTECT_INPUT;
+
+typedef struct _HANDLE_CLOSE_INPUT {
+	ULONG ProcessId;
+	ULONG HandleValue;
+} HANDLE_CLOSE_INPUT, * PHANDLE_CLOSE_INPUT;
+
+typedef struct _HANDLE_DOWNGRADE_INPUT {
+	ULONG       ProcessId;
+	ULONG       HandleValue;
+	ACCESS_MASK NewAccess;
+	ULONG       NewHandleValue;
+} HANDLE_DOWNGRADE_INPUT, * PHANDLE_DOWNGRADE_INPUT;
+
+typedef struct _HANDLE_DUP_DOWNGRADE_INPUT {
+	ULONG       SourceProcessId;
+	ULONG       SourceHandle;
+	ULONG       TargetProcessId;
+	ACCESS_MASK NewAccess;
+} HANDLE_DUP_DOWNGRADE_INPUT, * PHANDLE_DUP_DOWNGRADE_INPUT;
+
+typedef struct _HANDLE_DUP_DOWNGRADE_OUTPUT {
+	ULONG_PTR NewHandle;
+	ULONG     Status;
+} HANDLE_DUP_DOWNGRADE_OUTPUT, * PHANDLE_DUP_DOWNGRADE_OUTPUT;
 
 HANDLE G_DeviceHandle = INVALID_HANDLE_VALUE;
 inline DWORD G_LastMultiDrvError = ERROR_SUCCESS;
@@ -2331,4 +2358,49 @@ BOOL RemoveInjectionProtectKernel(ULONG Pid)
 	G_LastMultiDrvError = ERROR_SUCCESS;
 	INJECTION_PROTECT_INPUT Input = { Pid };
 	return SendIoctl(IOCTL_REMOVE_INJECTION_PROTECTION, &Input, sizeof(Input));
+}
+
+/* ---- Handle Operations ---- */
+BOOL ForceCloseHandleKernel(ULONG ProcessId, ULONG HandleValue)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	HANDLE_CLOSE_INPUT Input = { ProcessId, HandleValue };
+	return SendIoctl(IOCTL_HANDLE_CLOSE, &Input, sizeof(Input));
+}
+
+BOOL DowngradeHandleKernel(ULONG ProcessId, ULONG HandleValue, ACCESS_MASK NewAccess, ULONG* OutNewHandle)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	if (OutNewHandle) *OutNewHandle = 0;
+
+	HANDLE_DOWNGRADE_INPUT Input = { ProcessId, HandleValue, NewAccess, 0 };
+	if (!SendIoctl(IOCTL_HANDLE_DOWNGRADE, &Input, sizeof(Input)))
+		return FALSE;
+
+	if (OutNewHandle)
+		*OutNewHandle = Input.NewHandleValue;
+
+	return TRUE;
+}
+
+BOOL DuplicateAndDowngradeHandleKernel(ULONG SourcePid, ULONG SourceHandle,
+	ULONG TargetPid, ACCESS_MASK NewAccess, ULONG_PTR* OutNewHandle)
+{
+	G_LastMultiDrvError = ERROR_SUCCESS;
+	if (OutNewHandle) *OutNewHandle = 0;
+
+	HANDLE_DUP_DOWNGRADE_INPUT Input = { SourcePid, SourceHandle, TargetPid, NewAccess };
+	HANDLE_DUP_DOWNGRADE_OUTPUT Output = { 0 };
+
+	if (!SendIoctlWithOutput(IOCTL_HANDLE_DUP_DOWNGRADE, &Input, sizeof(Input),
+		&Output, sizeof(Output), nullptr))
+	{
+		return FALSE;
+	}
+
+	if (OutNewHandle)
+		*OutNewHandle = Output.NewHandle;
+
+	G_LastMultiDrvError = Output.Status;
+	return NT_SUCCESS(Output.Status);
 }
