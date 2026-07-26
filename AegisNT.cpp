@@ -17,6 +17,7 @@
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QListWidget>
 #include <QLocale>
@@ -1504,15 +1505,52 @@ void TranslateObject(QObject *Object)
         if (Label->text() != Translated) Label->setText(Translated);
         TextHandled = true;
     }
-    if (auto *Button = qobject_cast<QAbstractButton *>(Object))
+    if (auto *Combo = qobject_cast<ComboBox *>(Object))
     {
+        QVariant Stored = Combo->property("LanguageOriginal_items");
+        QStringList Originals = Stored.toStringList();
+        if (Originals.size() != Combo->count())
+        {
+            Originals.clear();
+            for (int Index = 0; Index < Combo->count(); ++Index)
+                Originals.append(Combo->itemText(Index));
+            Combo->setProperty("LanguageOriginal_items", Originals);
+        }
+        const int CurrentIndex = Combo->currentIndex();
+        const QSignalBlocker Blocker(Combo);
+        for (int Index = 0; Index < Originals.size(); ++Index)
+        {
+            const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Originals[Index]) : Originals[Index];
+            if (Combo->itemText(Index) != Translated)
+                Combo->setItemText(Index, Translated);
+        }
+        int TargetIndex = CurrentIndex;
+        if (Combo->property("ApplicationLanguageSelector").toBool())
+            TargetIndex = Combo->findData(ActiveLanguage, Qt::UserRole);
+        if (TargetIndex >= 0 && TargetIndex < Combo->count())
+        {
+            Combo->setCurrentIndex(-1);
+            Combo->setCurrentIndex(TargetIndex);
+        }
+        Combo->update();
+        TextHandled = true;
+    }
+    if (!TextHandled && qobject_cast<QAbstractButton *>(Object))
+    {
+        auto *Button = qobject_cast<QAbstractButton *>(Object);
         const QString Original = OriginalText(Button, "text", Button->text());
         const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Original) : Original;
         if (Button->text() != Translated) Button->setText(Translated);
         TextHandled = true;
     }
+    // A writable text property on an editor is user data, not a translatable label.
+    // Do not rewrite it during the runtime language refresh.
+    const bool IsEditableText = qobject_cast<QLineEdit *>(Object) != nullptr ||
+                                qobject_cast<QTextEdit *>(Object) != nullptr ||
+                                qobject_cast<QPlainTextEdit *>(Object) != nullptr;
     const int TextPropertyIndex = Object->metaObject()->indexOfProperty("text");
-    if (!TextHandled && TextPropertyIndex >= 0 && Object->metaObject()->property(TextPropertyIndex).isWritable())
+    if (!TextHandled && !IsEditableText && TextPropertyIndex >= 0 &&
+        Object->metaObject()->property(TextPropertyIndex).isWritable())
     {
         const QString Current = Object->property("text").toString();
         const QString Original = OriginalText(Object, "text", Current);
@@ -1541,6 +1579,17 @@ void TranslateObject(QObject *Object)
         {
             const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Originals[Index]) : Originals[Index];
             if (Combo->itemText(Index) != Translated) Combo->setItemText(Index, Translated);
+        }
+        if (Combo->property("ApplicationLanguageSelector").toBool())
+        {
+            const int ActiveIndex = Combo->findData(ActiveLanguage, Qt::UserRole);
+            if (ActiveIndex >= 0)
+            {
+                QSignalBlocker StateBlocker(Combo);
+                Combo->setCurrentIndex(-1);
+                Combo->setCurrentIndex(ActiveIndex);
+            }
+            Combo->update();
         }
     }
     if (auto *Action = qobject_cast<QAction *>(Object))
@@ -4521,6 +4570,8 @@ QWidget *CreateInformationPage()
 class TaskManagerPage final : public QWidget
 {
     static constexpr int KProcessPinnedRole = Qt::UserRole + 1;
+    static constexpr qint64 KProcessTableRenderBudgetMs = 2;
+    static constexpr int KProcessTableRenderMaxRowsPerBatch = 12;
 
     class ProcessTableItem final : public QTableWidgetItem
     {
@@ -4565,6 +4616,28 @@ class TaskManagerPage final : public QWidget
         UCHAR PplRaw = 0;
     };
 
+    struct TableRenderState
+    {
+        struct Operation
+        {
+            enum class Type { Remove, Upsert };
+            Type OperationType = Type::Upsert;
+            DWORD Pid = 0;
+            ProcessRow Row;
+        };
+
+        quint64 Generation = 0;
+        int SortColumn = -1;
+        Qt::SortOrder SortOrder = Qt::AscendingOrder;
+        int CurrentRowCount = 0;
+        int TargetRowCount = 0;
+        int NextRow = 0;
+        QSet<DWORD> SelectedPids;
+        std::vector<ProcessRow> VisibleRows;
+        std::vector<Operation> Operations;
+        int NextOperation = 0;
+    };
+
   public:
     explicit TaskManagerPage(QWidget *Parent = nullptr)
         : QWidget(Parent)
@@ -4578,10 +4651,14 @@ class TaskManagerPage final : public QWidget
         SearchEdit->setClearButtonEnabled(true);
         SearchEdit->setMaximumWidth(320);
         StatusLabel = new BodyLabel("Ready");
+        RefreshIndicator = new IndeterminateProgressRing(this, false);
+        RefreshIndicator->setFixedSize(22, 22);
+        RefreshIndicator->hide();
         auto *RunButton = MakeButton("Run");
         RefreshButton = MakeButton("Refresh", true);
         Toolbar->addWidget(SearchEdit);
         Toolbar->addWidget(StatusLabel, 1);
+        Toolbar->addWidget(RefreshIndicator, 0, Qt::AlignVCenter);
         Toolbar->addWidget(RunButton);
         Toolbar->addWidget(RefreshButton);
         Layout->addLayout(Toolbar);
@@ -4621,7 +4698,7 @@ class TaskManagerPage final : public QWidget
         QObject::connect(RefreshTimer, &QTimer::timeout, this, [this] {
             if (isVisible()) RefreshProcesses();
         });
-        RefreshTimer->start(4000);
+        RefreshTimer->start(10000);
         RefreshProcesses();
     }
 
@@ -4690,6 +4767,62 @@ class TaskManagerPage final : public QWidget
 
         CloseHandle(Process);
         return Success != FALSE;
+    }
+
+    static void QueryProcessDetails(DWORD Pid, ProcessRow &Row, QHash<QByteArray, QString> &UserCache)
+    {
+        Row.User = "N/A";
+        Row.IntegrityRid = 0;
+        Row.HandleCount = 0;
+        Row.HandleCountError = ERROR_SUCCESS;
+        Row.HandleCountAvailable = false;
+
+        HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
+        if (!Process)
+        {
+            Row.HandleCountError = GetLastError();
+            return;
+        }
+
+        Row.HandleCountAvailable = GetProcessHandleCount(Process, &Row.HandleCount) != FALSE;
+        if (!Row.HandleCountAvailable)
+            Row.HandleCountError = GetLastError();
+
+        HANDLE Token = nullptr;
+        if (OpenProcessToken(Process, TOKEN_QUERY, &Token))
+        {
+            Row.IntegrityRid = GetIntegrityLevel(Token);
+            DWORD Size = 0;
+            GetTokenInformation(Token, TokenUser, nullptr, 0, &Size);
+            std::vector<unsigned char> Buffer(Size);
+            if (Size && GetTokenInformation(Token, TokenUser, Buffer.data(), Size, &Size))
+            {
+                const auto *TokenUserInformation = reinterpret_cast<TOKEN_USER *>(Buffer.data());
+                const QByteArray SidKey(reinterpret_cast<const char *>(TokenUserInformation->User.Sid),
+                                         GetLengthSid(TokenUserInformation->User.Sid));
+                const auto CachedUser = UserCache.constFind(SidKey);
+                if (CachedUser != UserCache.cend())
+                {
+                    Row.User = CachedUser.value();
+                    CloseHandle(Token);
+                    CloseHandle(Process);
+                    return;
+                }
+                wchar_t Name[256]{};
+                wchar_t Domain[256]{};
+                DWORD NameSize = ARRAYSIZE(Name);
+                DWORD DomainSize = ARRAYSIZE(Domain);
+                SID_NAME_USE Use = SidTypeUnknown;
+                if (LookupAccountSidW(nullptr, TokenUserInformation->User.Sid, Name, &NameSize,
+                                      Domain, &DomainSize, &Use))
+                {
+                    Row.User = QString::fromWCharArray(Domain) + "\\" + QString::fromWCharArray(Name);
+                    UserCache.insert(SidKey, Row.User);
+                }
+            }
+            CloseHandle(Token);
+        }
+        CloseHandle(Process);
     }
 
     static QString FormatTaskPointer(quint64 Value)
@@ -5011,7 +5144,7 @@ class TaskManagerPage final : public QWidget
         QDialog Dialog(Parent);
         Dialog.setWindowTitle(Title);
         Dialog.setModal(true);
-        Dialog.resize(520, 250);
+        Dialog.resize(520, 280);
 
         auto *Layout = new QVBoxLayout(&Dialog);
         Layout->setContentsMargins(20, 18, 20, 18);
@@ -5032,6 +5165,9 @@ class TaskManagerPage final : public QWidget
         }
 
         auto *Preview = new BodyLabel;
+        Preview->setWordWrap(true);
+        Preview->setMinimumHeight(38);
+        Preview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         auto UpdatePreview = [Preview, AccessCombo, TypeName]() {
             quint32 Mask = 0;
             for (const QVariant &Data : AccessCombo->selectedDatas())
@@ -5259,15 +5395,28 @@ class TaskManagerPage final : public QWidget
 
     void RefreshProcesses()
     {
+        if (Rendering || Refreshing.load())
+        {
+            RefreshPending = true;
+            return;
+        }
         if (Refreshing.exchange(true))
             return;
         RefreshButton->setEnabled(false);
         RefreshButton->setText("Refreshing...");
+        SearchEdit->setEnabled(true);
+        if (RefreshIndicator)
+        {
+            RefreshIndicator->show();
+            RefreshIndicator->start();
+        }
         QPointer<TaskManagerPage> Page(this);
         const QSet<DWORD> ProtectedSnapshot = ProtectedPids;
         std::thread([Page, ProtectedSnapshot] {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
             std::vector<ProcessRow> Result;
             std::vector<PROCESS_ENUM_ENTRY> DriverEntries;
+            QHash<QByteArray, QString> UserCache;
             const bool UsedDriver = EnumProcessEntries(DriverEntries) && !DriverEntries.empty();
             if (UsedDriver)
             {
@@ -5287,8 +5436,7 @@ class TaskManagerPage final : public QWidget
                     Row.PplRaw = Entry.PplRawLevel;
                     Row.Critical = Entry.IsCritical != FALSE;
                     Row.Hidden = Entry.IsHidden != FALSE;
-                    Row.User = QueryProcessUser(Row.Pid);
-                    Row.IntegrityRid = QueryIntegrityRid(Row.Pid);
+                    QueryProcessDetails(Row.Pid, Row, UserCache);
                     HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Row.Pid);
                     if (Process)
                     {
@@ -5303,8 +5451,6 @@ class TaskManagerPage final : public QWidget
                         }
                         CloseHandle(Process);
                     }
-                    Row.HandleCountAvailable =
-                        QueryProcessHandleCount(Row.Pid, Row.HandleCount, Row.HandleCountError);
                     Row.Eprocess = Entry.ObjectAddress;
                     Row.EprocessText = FormatTaskPointer(Row.Eprocess);
                     Result.push_back(std::move(Row));
@@ -5326,10 +5472,7 @@ class TaskManagerPage final : public QWidget
                             Row.ThreadCount = Entry.cntThreads;
                             Row.Name = QString::fromWCharArray(Entry.szExeFile);
                             ProcessIdToSessionId(Row.Pid, &Row.SessionId);
-                            Row.User = QueryProcessUser(Row.Pid);
-                            Row.IntegrityRid = QueryIntegrityRid(Row.Pid);
-                            Row.HandleCountAvailable =
-                                QueryProcessHandleCount(Row.Pid, Row.HandleCount, Row.HandleCountError);
+                            QueryProcessDetails(Row.Pid, Row, UserCache);
                             Row.EprocessText = "-";
                             Result.push_back(std::move(Row));
                         } while (Process32NextW(Snapshot, &Entry));
@@ -5386,8 +5529,6 @@ class TaskManagerPage final : public QWidget
                 Page->StatusLabel->setText(QString("%1 processes  |  %2")
                                                .arg(Page->Rows.size())
                                                .arg(UsedDriver ? "Driver enumeration" : "Toolhelp fallback"));
-                Page->RefreshButton->setText("Refresh");
-                Page->RefreshButton->setEnabled(true);
                 Page->Refreshing = false;
                 if (Page->ActiveInspectorDialogs > 0)
                     Page->ProcessTablePopulatePending = true;
@@ -5405,9 +5546,20 @@ class TaskManagerPage final : public QWidget
             return;
         }
         ProcessTablePopulatePending = false;
+
+        TableRenderState NextState;
+        NextState.Generation = ++TableRenderGeneration;
+        NextState.SortColumn = ProcessTable->horizontalHeader()->sortIndicatorSection();
+        NextState.SortOrder = ProcessTable->horizontalHeader()->sortIndicatorOrder();
+        NextState.CurrentRowCount = ProcessTable->rowCount();
+        for (const QModelIndex &Selected : ProcessTable->selectionModel()->selectedRows(0))
+        {
+            if (const QTableWidgetItem *Item = ProcessTable->item(Selected.row(), 0))
+                NextState.SelectedPids.insert(Item->data(Qt::UserRole).toUInt());
+        }
+
         const QString Query = SearchEdit->text().trimmed();
-        std::vector<const ProcessRow *> VisibleRows;
-        VisibleRows.reserve(Rows.size());
+        NextState.VisibleRows.reserve(Rows.size());
         for (const ProcessRow &Process : Rows)
         {
             if (!Query.isEmpty() && !Process.Name.contains(Query, Qt::CaseInsensitive) &&
@@ -5415,54 +5567,193 @@ class TaskManagerPage final : public QWidget
                 !Process.EprocessText.contains(Query, Qt::CaseInsensitive) &&
                 !QString::number(Process.Pid).contains(Query))
                 continue;
-            VisibleRows.push_back(&Process);
+            NextState.VisibleRows.push_back(Process);
         }
-        QSet<DWORD> SelectedPids;
-        for (const QModelIndex &Selected : ProcessTable->selectionModel()->selectedRows(0))
+        NextState.TargetRowCount = static_cast<int>(NextState.VisibleRows.size());
+        QHash<DWORD, int> ExistingRows;
+        ExistingRows.reserve(ProcessTable->rowCount());
+        for (int Row = 0; Row < ProcessTable->rowCount(); ++Row)
         {
-            if (const QTableWidgetItem *Item = ProcessTable->item(Selected.row(), 0))
-                SelectedPids.insert(Item->data(Qt::UserRole).toUInt());
+            if (const QTableWidgetItem *Item = ProcessTable->item(Row, 0))
+                ExistingRows.insert(Item->data(Qt::UserRole).toUInt(), Row);
         }
-        ProcessTable->setUpdatesEnabled(false);
-        ProcessTable->setSortingEnabled(false);
-        ProcessTable->clearContents();
-        ProcessTable->setRowCount(static_cast<int>(VisibleRows.size()));
-        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
+        for (int Row = ProcessTable->rowCount() - 1; Row >= 0; --Row)
         {
-            const ProcessRow &Process = *VisibleRows[Row];
-            const auto CreateItem = [&Process](const QString &Text) {
-                auto *Item = new ProcessTableItem(Text);
-                Item->setData(KProcessPinnedRole, Process.Hidden);
-                return Item;
-            };
-            auto *PidItem = new ProcessTableItem;
-            PidItem->setData(Qt::DisplayRole, QVariant::fromValue<qulonglong>(Process.Pid));
-            PidItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(Process.Pid));
-            PidItem->setData(KProcessPinnedRole, Process.Hidden);
-            ProcessTable->setItem(Row, 0, PidItem);
-            ProcessTable->setItem(Row, 1, CreateItem(Process.Name));
-            ProcessTable->setItem(Row, 2, CreateItem(Process.User));
-            ProcessTable->setItem(Row, 3, CreateItem(IntegrityName(Process.IntegrityRid)));
-            ProcessTable->setItem(Row, 4, CreateItem(Process.Ppl ?
-                QString("Yes (0x%1)").arg(Process.PplRaw, 2, 16, QLatin1Char('0')) : "No"));
-            ProcessTable->setItem(Row, 5, CreateItem(Process.EprocessText.isEmpty()
-                ? FormatTaskPointer(Process.Eprocess) : Process.EprocessText));
-            ProcessTable->setItem(Row, 6, CreateItem(QString::number(Process.ParentPid)));
-            ProcessTable->setRowHeight(Row, KCompactTableRowHeight);
-        }
-        ProcessTable->setSortingEnabled(true);
-        if (!SelectedPids.isEmpty())
-        {
-            for (int Row = 0; Row < ProcessTable->rowCount(); ++Row)
+            const QTableWidgetItem *Item = ProcessTable->item(Row, 0);
+            const DWORD Pid = Item ? Item->data(Qt::UserRole).toUInt() : 0;
+            const auto Match = std::find_if(NextState.VisibleRows.begin(), NextState.VisibleRows.end(),
+                                            [Pid](const ProcessRow &Process) { return Process.Pid == Pid; });
+            if (Pid == 0 || Match == NextState.VisibleRows.end())
             {
-                const QTableWidgetItem *Item = ProcessTable->item(Row, 0);
-                if (Item && SelectedPids.contains(Item->data(Qt::UserRole).toUInt()))
-                    ProcessTable->selectionModel()->select(
-                        ProcessTable->model()->index(Row, 0),
-                        QItemSelectionModel::Select | QItemSelectionModel::Rows);
+                TableRenderState::Operation Operation;
+                Operation.OperationType = TableRenderState::Operation::Type::Remove;
+                Operation.Pid = Pid;
+                NextState.Operations.push_back(std::move(Operation));
             }
         }
+        for (const ProcessRow &Process : NextState.VisibleRows)
+        {
+            const int ExistingRow = ExistingRows.value(Process.Pid, -1);
+            if (ExistingRow < 0 || !ProcessTableRowsMatch(ExistingRow, Process))
+            {
+                TableRenderState::Operation Operation;
+                Operation.OperationType = TableRenderState::Operation::Type::Upsert;
+                Operation.Pid = Process.Pid;
+                Operation.Row = Process;
+                NextState.Operations.push_back(std::move(Operation));
+            }
+        }
+        RenderState = std::move(NextState);
+        Rendering = true;
+        RefreshButton->setEnabled(false);
+        RefreshButton->setText("Rendering...");
+        ProcessTable->setSortingEnabled(false);
+        ProcessTable->setUpdatesEnabled(false);
+        ContinuePopulateTable(RenderState.Generation);
+    }
+
+    int FindProcessTableRow(DWORD Pid) const
+    {
+        for (int Row = 0; Row < ProcessTable->rowCount(); ++Row)
+        {
+            const QTableWidgetItem *Item = ProcessTable->item(Row, 0);
+            if (Item && Item->data(Qt::UserRole).toUInt() == Pid)
+                return Row;
+        }
+        return -1;
+    }
+
+    bool ProcessTableRowsMatch(int Row, const ProcessRow &Process) const
+    {
+        const QTableWidgetItem *PidItem = ProcessTable->item(Row, 0);
+        const QTableWidgetItem *NameItem = ProcessTable->item(Row, 1);
+        const QTableWidgetItem *UserItem = ProcessTable->item(Row, 2);
+        const QTableWidgetItem *IntegrityItem = ProcessTable->item(Row, 3);
+        const QTableWidgetItem *PplItem = ProcessTable->item(Row, 4);
+        const QTableWidgetItem *EprocessItem = ProcessTable->item(Row, 5);
+        const QTableWidgetItem *ParentPidItem = ProcessTable->item(Row, 6);
+        if (!PidItem || !NameItem || !UserItem || !IntegrityItem || !PplItem ||
+            !EprocessItem || !ParentPidItem)
+            return false;
+        const QString PplText = Process.Ppl
+            ? QString("Yes (0x%1)").arg(Process.PplRaw, 2, 16, QLatin1Char('0')) : "No";
+        const QString EprocessText = Process.EprocessText.isEmpty()
+            ? FormatTaskPointer(Process.Eprocess) : Process.EprocessText;
+        return PidItem->data(Qt::UserRole).toUInt() == Process.Pid &&
+               PidItem->data(KProcessPinnedRole).toBool() == Process.Hidden &&
+               NameItem->text() == Process.Name &&
+               UserItem->text() == Process.User &&
+               IntegrityItem->text() == IntegrityName(Process.IntegrityRid) &&
+               PplItem->text() == PplText &&
+               EprocessItem->text() == EprocessText &&
+               ParentPidItem->text() == QString::number(Process.ParentPid);
+    }
+
+    void ContinuePopulateTable(quint64 Generation)
+    {
+        if (!Rendering || Generation != TableRenderGeneration)
+            return;
+        if (!isVisible())
+        {
+            QTimer::singleShot(100, this, [this, Generation] { ContinuePopulateTable(Generation); });
+            return;
+        }
+
+        QElapsedTimer Timer;
+        Timer.start();
+        int RowsProcessed = 0;
+        while (Timer.elapsed() < KProcessTableRenderBudgetMs &&
+               RowsProcessed < KProcessTableRenderMaxRowsPerBatch)
+        {
+            if (RenderState.NextOperation >= static_cast<int>(RenderState.Operations.size()))
+                break;
+
+            const TableRenderState::Operation &Operation =
+                RenderState.Operations[RenderState.NextOperation++];
+            if (Operation.OperationType == TableRenderState::Operation::Type::Remove)
+            {
+                const int Row = FindProcessTableRow(Operation.Pid);
+                if (Row >= 0)
+                    ProcessTable->removeRow(Row);
+            }
+            else
+            {
+                int Row = FindProcessTableRow(Operation.Pid);
+                if (Row < 0)
+                {
+                    Row = ProcessTable->rowCount();
+                    ProcessTable->insertRow(Row);
+                }
+                FillProcessTableRow(Row, Operation.Row);
+            }
+            ++RowsProcessed;
+        }
+
+        if (Generation != TableRenderGeneration)
+            return;
+        if (RenderState.NextOperation < static_cast<int>(RenderState.Operations.size()))
+        {
+            QTimer::singleShot(1, this, [this, Generation] { ContinuePopulateTable(Generation); });
+            return;
+        }
+
+        ProcessTable->setSortingEnabled(true);
+        if (RenderState.SortColumn >= 0 && RenderState.SortColumn < ProcessTable->columnCount())
+            ProcessTable->sortItems(RenderState.SortColumn, RenderState.SortOrder);
+        ProcessTable->clearSelection();
+        for (int Row = 0; Row < ProcessTable->rowCount(); ++Row)
+        {
+            const QTableWidgetItem *Item = ProcessTable->item(Row, 0);
+            if (Item && RenderState.SelectedPids.contains(Item->data(Qt::UserRole).toUInt()))
+                ProcessTable->selectionModel()->select(
+                    ProcessTable->model()->index(Row, 0),
+                    QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        }
         ProcessTable->setUpdatesEnabled(true);
+        Rendering = false;
+        if (Refreshing.load())
+        {
+            RefreshButton->setText("Refreshing...");
+            RefreshButton->setEnabled(false);
+        }
+        else
+        {
+            RefreshButton->setText("Refresh");
+            RefreshButton->setEnabled(true);
+            if (RefreshIndicator)
+            {
+                RefreshIndicator->stop();
+                RefreshIndicator->hide();
+            }
+        }
+        if (RefreshPending && !Refreshing.load())
+        {
+            RefreshPending = false;
+            QTimer::singleShot(0, this, [this] { RefreshProcesses(); });
+        }
+    }
+
+    void FillProcessTableRow(int Row, const ProcessRow &Process)
+    {
+        const auto CreateItem = [&Process](const QString &Text) {
+            auto *Item = new ProcessTableItem(Text);
+            Item->setData(KProcessPinnedRole, Process.Hidden);
+            return Item;
+        };
+        auto *PidItem = new ProcessTableItem;
+        PidItem->setData(Qt::DisplayRole, QVariant::fromValue<qulonglong>(Process.Pid));
+        PidItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(Process.Pid));
+        PidItem->setData(KProcessPinnedRole, Process.Hidden);
+        ProcessTable->setItem(Row, 0, PidItem);
+        ProcessTable->setItem(Row, 1, CreateItem(Process.Name));
+        ProcessTable->setItem(Row, 2, CreateItem(Process.User));
+        ProcessTable->setItem(Row, 3, CreateItem(IntegrityName(Process.IntegrityRid)));
+        ProcessTable->setItem(Row, 4, CreateItem(Process.Ppl
+            ? QString("Yes (0x%1)").arg(Process.PplRaw, 2, 16, QLatin1Char('0')) : "No"));
+        ProcessTable->setItem(Row, 5, CreateItem(Process.EprocessText.isEmpty()
+            ? FormatTaskPointer(Process.Eprocess) : Process.EprocessText));
+        ProcessTable->setItem(Row, 6, CreateItem(QString::number(Process.ParentPid)));
+        ProcessTable->setRowHeight(Row, KCompactTableRowHeight);
     }
 
     const ProcessRow *FindProcess(DWORD Pid) const
@@ -6734,6 +7025,7 @@ class TaskManagerPage final : public QWidget
     QTimer *SearchDebounceTimer = nullptr;
     BodyLabel *StatusLabel = nullptr;
     PushButton *RefreshButton = nullptr;
+    IndeterminateProgressRing *RefreshIndicator = nullptr;
     TableWidget *ProcessTable = nullptr;
     int ActiveInspectorDialogs = 0;
     bool ProcessTablePopulatePending = false;
@@ -6741,6 +7033,10 @@ class TaskManagerPage final : public QWidget
     std::map<DWORD, ProcessRow> RetainedProcesses;
     QSet<DWORD> ProtectedPids;
     std::atomic_bool Refreshing = false;
+    bool RefreshPending = false;
+    bool Rendering = false;
+    quint64 TableRenderGeneration = 0;
+    TableRenderState RenderState;
 
   protected:
     void showEvent(QShowEvent *Event) override
@@ -10550,8 +10846,8 @@ class DriverManagerPage final : public QWidget
 
         if (RefreshButton)
         {
-            RefreshButton->setEnabled(false);
-            RefreshButton->setText("Refreshing...");
+        RefreshButton->setEnabled(false);
+        RefreshButton->setText("Refreshing...");
         }
         if (RefreshIndicator)
         {
@@ -13009,14 +13305,30 @@ QWidget *CreateSettingsPage()
     AddSection("Language");
 
     auto *Language = new ComboBox;
-    Language->addItems({"English", QStringLiteral("\u4e2d\u6587")});
+    Language->addItems({"English", "Chinese"});
+    Language->setItemData(0, "en_US", Qt::UserRole);
+    Language->setItemData(1, "zh_CN", Qt::UserRole);
+    Language->setProperty("LanguageOriginal_items",
+                          QStringList{"English", "Chinese"});
+    Language->setProperty("ApplicationLanguageSelector", true);
+    Language->setItemText(0, TranslateText("English"));
+    Language->setItemText(1, TranslateText("Chinese"));
     Language->setCurrentIndex(ActiveLanguage == "zh_CN" ? 1 : 0);
     Language->setMinimumWidth(154);
     AddSetting("Display language", "Choose the language used by the application interface.", Language);
-    QObject::connect(Language, &ComboBox::currentIndexChanged, Content, [Content](int Index) {
-        const QString LanguageCode = Index == 1 ? "zh_CN" : "en_US";
+    QObject::connect(Language, &ComboBox::currentIndexChanged, Content, [Content, Language](int Index) {
+        const QString LanguageCode = Language->itemData(Index, Qt::UserRole).toString() == "zh_CN"
+            ? "zh_CN" : "en_US";
         SetConfigurationValue("Application", "Language", LanguageCode);
         ApplyApplicationLanguage(LanguageCode);
+        {
+            const QSignalBlocker Blocker(Language);
+            Language->setItemText(0, TranslateText("English"));
+            Language->setItemText(1, TranslateText("Chinese"));
+            Language->setCurrentIndex(-1);
+            Language->setCurrentIndex(LanguageCode == "zh_CN" ? 1 : 0);
+            Language->update();
+        }
         ShowSuccessNotice(Content, TranslateText("Settings"), TranslateText("Display language updated."));
     });
 
