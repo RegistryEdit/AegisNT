@@ -128,6 +128,11 @@
   <ItemGroup>
     <Image Include="Data\Windows.ico" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="Data\zh_CN.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
     <Import Project="$(QtMsBuild)\qt.targets" />

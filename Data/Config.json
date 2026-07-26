@@ -2,6 +2,7 @@
     "Application": {
         "FPS": 90,
         "Height": 1000,
+        "Language": "en_US",
         "Opacity": 1,
         "Title": "Windows Tool",
         "Version": "2",

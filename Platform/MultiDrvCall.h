@@ -232,8 +232,11 @@ typedef struct _PROCESS_ENUM_ENTRY {
 	BOOLEAN IsHidden;
 	UCHAR   PplRawLevel;
 	UCHAR   _Padding[3];
+	ULONG_PTR ObjectAddress;
 	WCHAR   ImageName[16];
 } PROCESS_ENUM_ENTRY, * PPROCESS_ENUM_ENTRY;
+
+static_assert(sizeof(PROCESS_ENUM_ENTRY) == 64, "PROCESS_ENUM_ENTRY ABI mismatch");
 
 typedef struct _PROCESS_ENUM_OUTPUT {
 	ULONG             Count;

@@ -21,6 +21,7 @@
 #include <QListWidget>
 #include <QLocale>
 #include <QMessageBox>
+#include <QMetaProperty>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPointer>
@@ -697,6 +698,8 @@ const QColor KSurfaceSoft("#EFEFF5");
 const QColor KTextPrimary("#17171B");
 const QColor KTextMuted("#626269");
 QJsonObject Configuration;
+QJsonObject ChineseTranslations;
+QString ActiveLanguage = "en_US";
 
 QString MonitorTimestamp(const FILETIME &Timestamp);
 QString MonitorTimestamp(const LARGE_INTEGER &Timestamp);
@@ -1413,6 +1416,173 @@ std::string Utf8Bytes(const QString &Text)
 {
     const QByteArray Bytes = Text.toUtf8();
     return std::string(Bytes.constData(), static_cast<size_t>(Bytes.size()));
+}
+
+QString TranslationPath(const QString &FileName)
+{
+    const QString InstalledPath = QCoreApplication::applicationDirPath() + "/Data/" + FileName;
+    if (QFileInfo::exists(InstalledPath))
+        return InstalledPath;
+    return QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("../Data/" + FileName);
+}
+
+void LoadLanguageResources()
+{
+    ChineseTranslations = {};
+    QFile File(TranslationPath("zh_CN.json"));
+    if (!File.open(QIODevice::ReadOnly))
+        return;
+    const QJsonDocument Document = QJsonDocument::fromJson(File.readAll());
+    if (Document.isObject())
+        ChineseTranslations = Document.object().value("translations").toObject();
+}
+
+QString TranslateText(const QString &English)
+{
+    if (ActiveLanguage != "zh_CN" || English.isEmpty())
+        return English;
+    const QJsonValue Value = ChineseTranslations.value(English);
+    return Value.isString() ? Value.toString() : English;
+}
+
+void TranslateObjectTree(QObject *Root);
+bool LanguageTranslationActive = false;
+
+void ScheduleLanguageRefresh(QObject *Object)
+{
+    if (LanguageTranslationActive || !Object)
+        return;
+    QWidget *Widget = qobject_cast<QWidget *>(Object);
+    if (!Widget)
+        Widget = qobject_cast<QWidget *>(Object->parent());
+    QObject *Root = Widget ? static_cast<QObject *>(Widget->window()) : Object;
+    if (!Root || Root->property("LanguageRefreshPending").toBool())
+        return;
+    Root->setProperty("LanguageRefreshPending", true);
+    QPointer<QObject> SafeRoot(Root);
+    QTimer::singleShot(0, Root, [SafeRoot] {
+        if (!SafeRoot)
+            return;
+        SafeRoot->setProperty("LanguageRefreshPending", false);
+        TranslateObjectTree(SafeRoot);
+    });
+}
+
+class RuntimeLanguageFilter final : public QObject
+{
+  public:
+    using QObject::QObject;
+
+  protected:
+    bool eventFilter(QObject *Watched, QEvent *Event) override
+    {
+        if (Event->type() == QEvent::ChildAdded || Event->type() == QEvent::Show)
+            ScheduleLanguageRefresh(Watched);
+        return QObject::eventFilter(Watched, Event);
+    }
+};
+
+RuntimeLanguageFilter *LanguageFilter = nullptr;
+
+QString OriginalText(QObject *Object, const char *PropertyName, const QString &Current)
+{
+    const QByteArray Key = QByteArray("LanguageOriginal_") + PropertyName;
+    const QVariant Stored = Object->property(Key.constData());
+    if (Stored.isValid())
+        return Stored.toString();
+    Object->setProperty(Key.constData(), Current);
+    return Current;
+}
+
+void TranslateObject(QObject *Object)
+{
+    bool TextHandled = false;
+    if (auto *Label = qobject_cast<QLabel *>(Object))
+    {
+        const QString Original = OriginalText(Label, "text", Label->text());
+        const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Original) : Original;
+        if (Label->text() != Translated) Label->setText(Translated);
+        TextHandled = true;
+    }
+    if (auto *Button = qobject_cast<QAbstractButton *>(Object))
+    {
+        const QString Original = OriginalText(Button, "text", Button->text());
+        const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Original) : Original;
+        if (Button->text() != Translated) Button->setText(Translated);
+        TextHandled = true;
+    }
+    const int TextPropertyIndex = Object->metaObject()->indexOfProperty("text");
+    if (!TextHandled && TextPropertyIndex >= 0 && Object->metaObject()->property(TextPropertyIndex).isWritable())
+    {
+        const QString Current = Object->property("text").toString();
+        const QString Original = OriginalText(Object, "text", Current);
+        const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Original) : Original;
+        if (Current != Translated) Object->setProperty("text", Translated);
+    }
+    if (auto *Edit = qobject_cast<QLineEdit *>(Object))
+    {
+        const QString Original = OriginalText(Edit, "placeholder", Edit->placeholderText());
+        const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Original) : Original;
+        if (Edit->placeholderText() != Translated) Edit->setPlaceholderText(Translated);
+    }
+    if (auto *Combo = qobject_cast<QComboBox *>(Object))
+    {
+        QVariant Stored = Combo->property("LanguageOriginal_items");
+        QStringList Originals = Stored.toStringList();
+        if (Originals.size() != Combo->count())
+        {
+            Originals.clear();
+            for (int Index = 0; Index < Combo->count(); ++Index)
+                Originals.append(Combo->itemText(Index));
+            Combo->setProperty("LanguageOriginal_items", Originals);
+        }
+        const QSignalBlocker Blocker(Combo);
+        for (int Index = 0; Index < Originals.size(); ++Index)
+        {
+            const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Originals[Index]) : Originals[Index];
+            if (Combo->itemText(Index) != Translated) Combo->setItemText(Index, Translated);
+        }
+    }
+    if (auto *Action = qobject_cast<QAction *>(Object))
+    {
+        const QString Original = OriginalText(Action, "text", Action->text());
+        const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Original) : Original;
+        if (Action->text() != Translated) Action->setText(Translated);
+    }
+    if (auto *Table = qobject_cast<QTableWidget *>(Object))
+    {
+        for (int Column = 0; Column < Table->columnCount(); ++Column)
+        {
+            QTableWidgetItem *Item = Table->horizontalHeaderItem(Column);
+            if (!Item) continue;
+            QString Original = Item->data(Qt::UserRole + 100).toString();
+            if (Original.isEmpty()) {
+                Original = Item->text();
+                Item->setData(Qt::UserRole + 100, Original);
+            }
+            const QString Translated = ActiveLanguage == "zh_CN" ? TranslateText(Original) : Original;
+            if (Item->text() != Translated) Item->setText(Translated);
+        }
+    }
+}
+
+void TranslateObjectTree(QObject *Root)
+{
+    if (!Root) return;
+    if (LanguageTranslationActive) return;
+    LanguageTranslationActive = true;
+    TranslateObject(Root);
+    const auto Children = Root->findChildren<QObject *>();
+    for (QObject *Child : Children)
+        TranslateObject(Child);
+    LanguageTranslationActive = false;
+}
+
+void ApplyApplicationLanguage(const QString &Language)
+{
+    ActiveLanguage = Language == "zh_CN" ? "zh_CN" : "en_US";
+    for (QWidget *Window : QApplication::topLevelWidgets())
+        TranslateObjectTree(Window);
 }
 
 QString DecodeMultiByteText(UINT CodePage, DWORD Flags, const QByteArray &Bytes)
@@ -5135,14 +5305,8 @@ class TaskManagerPage final : public QWidget
                     }
                     Row.HandleCountAvailable =
                         QueryProcessHandleCount(Row.Pid, Row.HandleCount, Row.HandleCountError);
-                    std::vector<MDV2_RECORD> ProcessRecords;
-                    MDV2_LIST_HEADER ProcessHeader{};
-                    if (QueryProcessRecordsV2(Row.Pid, IOCTL_QUERY_PROCESS_V2, ProcessRecords, &ProcessHeader) &&
-                        !ProcessRecords.empty())
-                    {
-                        Row.Eprocess = ProcessRecords.front().Address;
-                        Row.EprocessText = FormatTaskPointer(Row.Eprocess);
-                    }
+                    Row.Eprocess = Entry.ObjectAddress;
+                    Row.EprocessText = FormatTaskPointer(Row.Eprocess);
                     Result.push_back(std::move(Row));
                 }
             }
@@ -5225,13 +5389,22 @@ class TaskManagerPage final : public QWidget
                 Page->RefreshButton->setText("Refresh");
                 Page->RefreshButton->setEnabled(true);
                 Page->Refreshing = false;
-                Page->PopulateTable();
+                if (Page->ActiveInspectorDialogs > 0)
+                    Page->ProcessTablePopulatePending = true;
+                else
+                    Page->PopulateTable();
             }, Qt::QueuedConnection);
         }).detach();
     }
 
     void PopulateTable()
     {
+        if (ActiveInspectorDialogs > 0)
+        {
+            ProcessTablePopulatePending = true;
+            return;
+        }
+        ProcessTablePopulatePending = false;
         const QString Query = SearchEdit->text().trimmed();
         std::vector<const ProcessRow *> VisibleRows;
         VisibleRows.reserve(Rows.size());
@@ -5755,6 +5928,16 @@ class TaskManagerPage final : public QWidget
             ? SelectedProcess->Name : QString("Process %1").arg(Pid);
         auto *Dialog = new QDialog(this);
         Dialog->setAttribute(Qt::WA_DeleteOnClose);
+        ++ActiveInspectorDialogs;
+        QObject::connect(Dialog, &QObject::destroyed, this, [this] {
+            if (ActiveInspectorDialogs > 0)
+                --ActiveInspectorDialogs;
+            if (ActiveInspectorDialogs == 0 && ProcessTablePopulatePending)
+            {
+                ProcessTablePopulatePending = false;
+                PopulateTable();
+            }
+        });
         Dialog->setWindowTitle(QString("%1 - Process Inspector").arg(ProcessName));
         Dialog->resize(1120, 760);
         Dialog->setMinimumSize(900, 620);
@@ -6206,7 +6389,10 @@ class TaskManagerPage final : public QWidget
                     return;
                 }
                 for (QTableWidget *Table : {Summary, Token, Threads, Handles, Modules, Memory, Mitigations})
+                {
+                    Table->setUpdatesEnabled(false);
                     Table->setSortingEnabled(false);
+                }
                 while (Summary->rowCount() > StaticSummaryRows)
                     Summary->removeRow(Summary->rowCount() - 1);
                 for (QTableWidget *Table : {Token, Threads, Handles, Modules, Memory, Mitigations})
@@ -6342,7 +6528,10 @@ class TaskManagerPage final : public QWidget
                     PebText->find(InspectorSearch->text().trimmed());
                 }
                 for (QTableWidget *Table : {Summary, Token, Threads, Handles, Modules, Memory, Mitigations})
+                {
                     Table->setSortingEnabled(true);
+                    Table->setUpdatesEnabled(true);
+                }
                 Loading->stop();
                 Loading->hide();
                 LoadStatus->setText(QString("%1 threads | %2 handles | %3 modules")
@@ -6546,6 +6735,8 @@ class TaskManagerPage final : public QWidget
     BodyLabel *StatusLabel = nullptr;
     PushButton *RefreshButton = nullptr;
     TableWidget *ProcessTable = nullptr;
+    int ActiveInspectorDialogs = 0;
+    bool ProcessTablePopulatePending = false;
     std::vector<ProcessRow> Rows;
     std::map<DWORD, ProcessRow> RetainedProcesses;
     QSet<DWORD> ProtectedPids;
@@ -12815,6 +13006,20 @@ QWidget *CreateSettingsPage()
         Layout->addWidget(Row);
     };
 
+    AddSection("Language");
+
+    auto *Language = new ComboBox;
+    Language->addItems({"English", QStringLiteral("\u4e2d\u6587")});
+    Language->setCurrentIndex(ActiveLanguage == "zh_CN" ? 1 : 0);
+    Language->setMinimumWidth(154);
+    AddSetting("Display language", "Choose the language used by the application interface.", Language);
+    QObject::connect(Language, &ComboBox::currentIndexChanged, Content, [Content](int Index) {
+        const QString LanguageCode = Index == 1 ? "zh_CN" : "en_US";
+        SetConfigurationValue("Application", "Language", LanguageCode);
+        ApplyApplicationLanguage(LanguageCode);
+        ShowSuccessNotice(Content, TranslateText("Settings"), TranslateText("Display language updated."));
+    });
+
     AddSection("Theme");
 
     auto *DarkMode = new SwitchButton;
@@ -13567,8 +13772,12 @@ class WindowsToolWindow final : public QWidget
         const bool WasLoaded = PageLoaded[Index];
         EnsurePageLoaded(Index);
         NavigationPanelWidget->setCurrentItem(QString::number(Index));
+        TitleLabelWidget->setProperty("LanguageOriginal_text", KPages[Index].Title);
+        SubtitleLabelWidget->setProperty("LanguageOriginal_text", KPages[Index].Subtitle);
         TitleLabelWidget->setText(KPages[Index].Title);
         SubtitleLabelWidget->setText(KPages[Index].Subtitle);
+        TranslateObject(TitleLabelWidget);
+        TranslateObject(SubtitleLabelWidget);
         PageStack->setCurrentIndex(Index, Animate && WasLoaded, 120, false);
         if (std::clamp(ConfigurationValue("Theme", "BackgroundMaterial", KDefaultThemeBackgroundMaterial).toInt(), 0, 2) == 2)
             ScheduleBackdropRefresh(this);
@@ -13621,6 +13830,11 @@ int main(int Argc, char *Argv[])
     Application.setApplicationDisplayName("AegisNT");
     Application.setOrganizationName("AegisNT");
     LoadConfiguration();
+    LoadLanguageResources();
+    ActiveLanguage = ConfigurationValue("Application", "Language", "en_US").toString() == "zh_CN"
+        ? "zh_CN" : "en_US";
+    LanguageFilter = new RuntimeLanguageFilter(&Application);
+    Application.installEventFilter(LanguageFilter);
     EnsureThemeConfiguration();
     ApplyConfiguredAppearance(nullptr);
 
