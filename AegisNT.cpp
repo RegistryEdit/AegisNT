@@ -1,7 +1,6 @@
 #include <QApplication>
 #include <QAction>
 #include <QClipboard>
-#include <QColorDialog>
 #include <QComboBox>
 #include <QCompleter>
 #include <QDesktopServices>
@@ -66,6 +65,7 @@
 #include <QFluent/ComboBox.h>
 #include <QFluent/DateTime/DatePicker.h>
 #include <QFluent/DateTime/TimePicker.h>
+#include <QFluent/Dialog/ColorDialog.h>
 #include <QFluent/Dialog/MessageBoxBase.h>
 #include <QFluent/FluentIcon.h>
 #include <QFluent/IconWidget.h>
@@ -73,6 +73,7 @@
 #include <QFluent/Label.h>
 #include <QFluent/LineEdit.h>
 #include <QFluent/Menu/RoundMenu.h>
+#include <QFluent/MultiViewComboBox.h>
 #include <QFluent/Navigation/NavigationPanel.h>
 #include <QFluent/Progress/IndeterminateProgressRing.h>
 #include <QFluent/PushButton.h>
@@ -730,7 +731,7 @@ QColor ConfiguredColor(const QString &Key, const QColor &Fallback);
 PushButton *MakeButton(const QString &Text, bool Primary = false);
 FluentLabelBase *MakeLabel(const QString &Text, int PixelSize, const QColor &Color,
                            QFont::Weight Weight = QFont::Normal);
-void ConfigureToolbarLayout(QHBoxLayout *Layout, int Spacing = 8);
+void ConfigureToolbarLayout(QHBoxLayout *Layout, int Spacing = 6);
 void InstallFluentScrollBar(QAbstractScrollArea *Area, Qt::Orientation Orientation);
 QString ApplicationStyleSheet(int MaterialOverride = -1);
 void ShowSuccessNotice(QWidget *Parent, const QString &Title, const QString &Content);
@@ -759,6 +760,10 @@ struct ThemePalette
 };
 
 constexpr bool KDefaultThemeDarkMode = false;
+constexpr int KCompactToolbarSpacing = 6;
+constexpr int KCompactPageSpacing = 10;
+constexpr int KCompactTableRowHeight = 32;
+constexpr int KSearchDebounceMs = 150;
 constexpr int KDefaultThemeCornerRadius = 8;
 constexpr int KDefaultThemeDensity = 98;
 constexpr int KDefaultThemeFontScale = 100;
@@ -3594,7 +3599,9 @@ TableWidget *MakeTable(const QStringList &Headers)
     Table->setHorizontalHeaderLabels(Headers);
     Table->horizontalHeader()->setStretchLastSection(true);
     Table->horizontalHeader()->setMinimumSectionSize(80);
+    Table->horizontalHeader()->setFixedHeight(34);
     Table->verticalHeader()->hide();
+    Table->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
     Table->setAlternatingRowColors(false);
     Table->setSelectionBehavior(QAbstractItemView::SelectRows);
     Table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -3619,13 +3626,13 @@ TableWidget *MakeTable(const QStringList &Headers)
 
         auto *Dialog = new QDialog(Table->window());
         Dialog->setAttribute(Qt::WA_DeleteOnClose);
-        Dialog->resize(900, 620);
+        Dialog->resize(860, 580);
         Dialog->setWindowTitle(Table->property("DetailDialogTitle").toString().isEmpty()
                                    ? QString("Details")
                                    : Table->property("DetailDialogTitle").toString());
         auto *Layout = new QVBoxLayout(Dialog);
-        Layout->setContentsMargins(16, 16, 16, 16);
-        Layout->setSpacing(10);
+        Layout->setContentsMargins(14, 14, 14, 14);
+        Layout->setSpacing(8);
         auto *Text = new PlainTextEdit;
         Text->setReadOnly(true);
         Text->setFont(QFont("Cascadia Mono", 10));
@@ -3648,7 +3655,7 @@ void ConfigureToolbarLayout(QHBoxLayout *Layout, int Spacing)
     Layout->setSpacing(Spacing);
 }
 
-void ConfigurePageLayout(QVBoxLayout *Layout, int Spacing = 12)
+void ConfigurePageLayout(QVBoxLayout *Layout, int Spacing = KCompactPageSpacing)
 {
     if (!Layout)
         return;
@@ -4399,7 +4406,7 @@ class TaskManagerPage final : public QWidget
         SearchEdit = new SearchLineEdit;
         SearchEdit->setPlaceholderText("Search by name, PID, or user");
         SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(380);
+        SearchEdit->setMaximumWidth(320);
         StatusLabel = new BodyLabel("Ready");
         auto *RunButton = MakeButton("Run");
         RefreshButton = MakeButton("Refresh", true);
@@ -4421,8 +4428,13 @@ class TaskManagerPage final : public QWidget
         for (int Column = 3; Column < ProcessTable->columnCount(); ++Column)
             ProcessTable->horizontalHeader()->setSectionResizeMode(Column, QHeaderView::ResizeToContents);
         Layout->addWidget(ProcessTable, 1);
+        ProcessTable->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
 
-        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { PopulateTable(); });
+        SearchDebounceTimer = new QTimer(this);
+        SearchDebounceTimer->setSingleShot(true);
+        SearchDebounceTimer->setInterval(KSearchDebounceMs);
+        QObject::connect(SearchDebounceTimer, &QTimer::timeout, this, [this] { PopulateTable(); });
+        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { SearchDebounceTimer->start(); });
         QObject::connect(RunButton, &QPushButton::clicked, this, [this] { ShowLaunchAsDialog(this); });
         QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] {
             RefreshProcesses();
@@ -4558,7 +4570,17 @@ class TaskManagerPage final : public QWidget
             {GENERIC_ALL, "GENERIC_ALL"},
         };
 
-        const auto Type = TypeName.trimmed();
+        QString Type = TypeName.trimmed();
+        if (Type.startsWith("Type ", Qt::CaseInsensitive))
+            Type = Type.mid(5).trimmed();
+        if (Type.contains(QLatin1Char('\\')))
+            Type = Type.section(QLatin1Char('\\'), -1).trimmed();
+        if (Type.compare("Mutant", Qt::CaseInsensitive) == 0 ||
+            Type.compare("Mutex", Qt::CaseInsensitive) == 0)
+            Type = "Mutant";
+        else if (Type.compare("Registry", Qt::CaseInsensitive) == 0 ||
+                 Type.compare("RegistryKey", Qt::CaseInsensitive) == 0)
+            Type = "Key";
         if (Type.compare("Process", Qt::CaseInsensitive) == 0)
             Entries.insert(Entries.end(), {
                 {PROCESS_TERMINATE, "PROCESS_TERMINATE"},
@@ -4641,6 +4663,25 @@ class TaskManagerPage final : public QWidget
                 {TOKEN_ADJUST_GROUPS, "TOKEN_ADJUST_GROUPS"},
                 {TOKEN_ADJUST_DEFAULT, "TOKEN_ADJUST_DEFAULT"},
                 {TOKEN_ADJUST_SESSIONID, "TOKEN_ADJUST_SESSIONID"},
+            });
+        else if (Type.compare("Semaphore", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {0x0001, "SEMAPHORE_QUERY_STATE"},
+                {0x0002, "SEMAPHORE_MODIFY_STATE"},
+            });
+        else if (Type.compare("Timer", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {0x0001, "TIMER_QUERY_STATE"},
+                {0x0002, "TIMER_MODIFY_STATE"},
+            });
+        else if (Type.compare("Job", Qt::CaseInsensitive) == 0)
+            Entries.insert(Entries.end(), {
+                {JOB_OBJECT_ASSIGN_PROCESS, "JOB_OBJECT_ASSIGN_PROCESS"},
+                {JOB_OBJECT_SET_ATTRIBUTES, "JOB_OBJECT_SET_ATTRIBUTES"},
+                {JOB_OBJECT_QUERY, "JOB_OBJECT_QUERY"},
+                {JOB_OBJECT_TERMINATE, "JOB_OBJECT_TERMINATE"},
+                {JOB_OBJECT_SET_SECURITY_ATTRIBUTES, "JOB_OBJECT_SET_SECURITY_ATTRIBUTES"},
+                {JOB_OBJECT_IMPERSONATE, "JOB_OBJECT_IMPERSONATE"},
             });
         return Entries;
     }
@@ -4797,49 +4838,37 @@ class TaskManagerPage final : public QWidget
                                 quint32 &SelectedMask, const QString &Title, const QString &Description,
                                 const QString &ApplyText = "Apply")
     {
-        auto *Dialog = new QDialog(Parent);
-        Dialog->setAttribute(Qt::WA_DeleteOnClose);
-        Dialog->setWindowTitle(Title);
-        Dialog->setModal(true);
-        Dialog->resize(520, 520);
+        QDialog Dialog(Parent);
+        Dialog.setWindowTitle(Title);
+        Dialog.setModal(true);
+        Dialog.resize(520, 250);
 
-        auto *Layout = new QVBoxLayout(Dialog);
+        auto *Layout = new QVBoxLayout(&Dialog);
         Layout->setContentsMargins(20, 18, 20, 18);
         Layout->setSpacing(10);
 
         auto *Desc = MakeLabel(Description, 11, KTextMuted);
         Desc->setWordWrap(true);
-        auto *Scroll = new QScrollArea;
-        Scroll->setWidgetResizable(true);
-        Scroll->setFrameShape(QFrame::NoFrame);
-        auto *Container = new QWidget;
-        auto *Options = new QVBoxLayout(Container);
-        Options->setContentsMargins(0, 0, 0, 0);
-        Options->setSpacing(8);
-
-        std::vector<QCheckBox *> Boxes;
+        auto *AccessCombo = new MultiViewComboBox;
+        AccessCombo->setPlaceholderText("Select handle permissions");
+        AccessCombo->setMaxVisibleItems(12);
+        AccessCombo->setMinimumHeight(36);
         const auto Entries = HandleAccessEntriesForType(TypeName);
         for (const auto &Entry : Entries)
         {
-            auto *Box = new CheckBox(QString::fromLatin1(Entry.Name));
-            Box->setProperty("maskValue", QVariant::fromValue<quint32>(Entry.Mask));
-            Box->setChecked((CurrentAccess & Entry.Mask) == Entry.Mask);
-            Options->addWidget(Box);
-            Boxes.push_back(Box);
+            const int Index = AccessCombo->count();
+            AccessCombo->addItem(QString::fromLatin1(Entry.Name), QVariant::fromValue<quint32>(Entry.Mask));
+            AccessCombo->setItemSelected(Index, (CurrentAccess & Entry.Mask) == Entry.Mask);
         }
-        Options->addStretch();
-        Scroll->setWidget(Container);
 
         auto *Preview = new BodyLabel;
-        auto UpdatePreview = [Preview, Boxes, TypeName]() {
+        auto UpdatePreview = [Preview, AccessCombo, TypeName]() {
             quint32 Mask = 0;
-            for (QCheckBox *Box : Boxes)
-                if (Box->isChecked())
-                    Mask |= Box->property("maskValue").toUInt();
+            for (const QVariant &Data : AccessCombo->selectedDatas())
+                Mask |= Data.toUInt();
             Preview->setText("Access: " + FormatHandleAccessDisplay(TypeName, Mask));
         };
-        for (QCheckBox *Box : Boxes)
-            QObject::connect(Box, &QCheckBox::toggled, Dialog, UpdatePreview);
+        QObject::connect(AccessCombo, &MultiViewComboBox::selectionChanged, &Dialog, UpdatePreview);
         UpdatePreview();
 
         auto *Buttons = new QHBoxLayout;
@@ -4851,20 +4880,20 @@ class TaskManagerPage final : public QWidget
         Buttons->addWidget(Apply);
 
         Layout->addWidget(Desc);
-        Layout->addWidget(Scroll, 1);
+        Layout->addWidget(AccessCombo);
         Layout->addWidget(Preview);
+        Layout->addStretch();
         Layout->addLayout(Buttons);
 
-        QObject::connect(Cancel, &QPushButton::clicked, Dialog, &QDialog::reject);
-        QObject::connect(Apply, &QPushButton::clicked, Dialog, [Dialog]() { Dialog->accept(); });
+        QObject::connect(Cancel, &QPushButton::clicked, &Dialog, &QDialog::reject);
+        QObject::connect(Apply, &QPushButton::clicked, &Dialog, &QDialog::accept);
 
-        if (Dialog->exec() != QDialog::Accepted)
+        if (Dialog.exec() != QDialog::Accepted)
             return false;
 
         SelectedMask = 0;
-        for (QCheckBox *Box : Boxes)
-            if (Box->isChecked())
-                SelectedMask |= Box->property("maskValue").toUInt();
+        for (const QVariant &Data : AccessCombo->selectedDatas())
+            SelectedMask |= Data.toUInt();
         return true;
     }
 
@@ -5204,6 +5233,17 @@ class TaskManagerPage final : public QWidget
     void PopulateTable()
     {
         const QString Query = SearchEdit->text().trimmed();
+        std::vector<const ProcessRow *> VisibleRows;
+        VisibleRows.reserve(Rows.size());
+        for (const ProcessRow &Process : Rows)
+        {
+            if (!Query.isEmpty() && !Process.Name.contains(Query, Qt::CaseInsensitive) &&
+                !Process.User.contains(Query, Qt::CaseInsensitive) &&
+                !Process.EprocessText.contains(Query, Qt::CaseInsensitive) &&
+                !QString::number(Process.Pid).contains(Query))
+                continue;
+            VisibleRows.push_back(&Process);
+        }
         QSet<DWORD> SelectedPids;
         for (const QModelIndex &Selected : ProcessTable->selectionModel()->selectedRows(0))
         {
@@ -5213,16 +5253,10 @@ class TaskManagerPage final : public QWidget
         ProcessTable->setUpdatesEnabled(false);
         ProcessTable->setSortingEnabled(false);
         ProcessTable->clearContents();
-        ProcessTable->setRowCount(0);
-        for (const ProcessRow &Process : Rows)
+        ProcessTable->setRowCount(static_cast<int>(VisibleRows.size()));
+        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
         {
-            if (!Query.isEmpty() && !Process.Name.contains(Query, Qt::CaseInsensitive) &&
-                !Process.User.contains(Query, Qt::CaseInsensitive) &&
-                !Process.EprocessText.contains(Query, Qt::CaseInsensitive) &&
-                !QString::number(Process.Pid).contains(Query))
-                continue;
-            const int Row = ProcessTable->rowCount();
-            ProcessTable->insertRow(Row);
+            const ProcessRow &Process = *VisibleRows[Row];
             const auto CreateItem = [&Process](const QString &Text) {
                 auto *Item = new ProcessTableItem(Text);
                 Item->setData(KProcessPinnedRole, Process.Hidden);
@@ -5241,7 +5275,7 @@ class TaskManagerPage final : public QWidget
             ProcessTable->setItem(Row, 5, CreateItem(Process.EprocessText.isEmpty()
                 ? FormatTaskPointer(Process.Eprocess) : Process.EprocessText));
             ProcessTable->setItem(Row, 6, CreateItem(QString::number(Process.ParentPid)));
-            ProcessTable->setRowHeight(Row, 38);
+            ProcessTable->setRowHeight(Row, KCompactTableRowHeight);
         }
         ProcessTable->setSortingEnabled(true);
         if (!SelectedPids.isEmpty())
@@ -5722,18 +5756,18 @@ class TaskManagerPage final : public QWidget
         auto *Dialog = new QDialog(this);
         Dialog->setAttribute(Qt::WA_DeleteOnClose);
         Dialog->setWindowTitle(QString("%1 - Process Inspector").arg(ProcessName));
-        Dialog->resize(1180, 800);
+        Dialog->resize(1120, 760);
         Dialog->setMinimumSize(900, 620);
         auto *Layout = new QVBoxLayout(Dialog);
-        Layout->setContentsMargins(22, 20, 22, 18);
-        Layout->setSpacing(14);
+        Layout->setContentsMargins(18, 16, 18, 16);
+        Layout->setSpacing(10);
 
         auto *Header = new QWidget;
         auto *HeaderLayout = new QHBoxLayout(Header);
         HeaderLayout->setContentsMargins(0, 0, 0, 0);
-        HeaderLayout->setSpacing(14);
+        HeaderLayout->setSpacing(10);
         auto *IconHost = new QWidget;
-        IconHost->setFixedSize(48, 48);
+        IconHost->setFixedSize(42, 42);
         const QColor Accent = ConfiguredColor("AccentColor", KAccent);
         IconHost->setStyleSheet(QString("background: rgba(%1,%2,%3,%4); border-radius: 8px;")
             .arg(Accent.red()).arg(Accent.green()).arg(Accent.blue()).arg(42));
@@ -5743,8 +5777,8 @@ class TaskManagerPage final : public QWidget
         HeaderLayout->addWidget(IconHost);
         auto *IdentityLayout = new QVBoxLayout;
         IdentityLayout->setContentsMargins(0, 1, 0, 1);
-        IdentityLayout->setSpacing(3);
-        IdentityLayout->addWidget(MakeLabel(ProcessName, 18, KTextPrimary, QFont::DemiBold));
+        IdentityLayout->setSpacing(2);
+        IdentityLayout->addWidget(MakeLabel(ProcessName, 17, KTextPrimary, QFont::DemiBold));
         IdentityLayout->addWidget(MakeLabel(QString("PID %1").arg(Pid), 11, KTextMuted, QFont::Medium));
         HeaderLayout->addLayout(IdentityLayout, 1);
         auto *Loading = new IndeterminateProgressRing(Dialog, false);
@@ -5758,7 +5792,7 @@ class TaskManagerPage final : public QWidget
         auto *InspectorSearch = new SearchLineEdit;
         InspectorSearch->setPlaceholderText("Search the current process details");
         InspectorSearch->setClearButtonEnabled(true);
-        InspectorSearch->setMaximumWidth(460);
+        InspectorSearch->setMaximumWidth(380);
         Layout->addWidget(InspectorSearch);
 
         auto *Tabs = new TabBar;
@@ -5787,7 +5821,7 @@ class TaskManagerPage final : public QWidget
             Summary->insertRow(Row);
             Summary->setItem(Row, 0, new QTableWidgetItem(Field));
             Summary->setItem(Row, 1, new QTableWidgetItem(Value));
-            Summary->setRowHeight(Row, 36);
+            Summary->setRowHeight(Row, KCompactTableRowHeight);
         };
         if (SelectedProcess)
         {
@@ -5829,6 +5863,8 @@ class TaskManagerPage final : public QWidget
         Pages->addWidget(PebText);
         const std::array<QTableWidget *, 7> InspectorTables{
             Summary, Token, Threads, Handles, Modules, Memory, Mitigations};
+        for (QTableWidget *Table : InspectorTables)
+            Table->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
         const auto ApplyInspectorSearch = [InspectorSearch, Pages, PebText, InspectorTables] {
             const QString Query = InspectorSearch->text().trimmed();
             for (QTableWidget *Table : InspectorTables)
@@ -6104,9 +6140,21 @@ class TaskManagerPage final : public QWidget
         Dialog->show();
 
         const bool HasSelectedProcess = SelectedProcess != nullptr;
+        const int StaticSummaryRows = Summary->rowCount();
         QPointer<QDialog> SafeDialog(Dialog);
-        std::thread([SafeDialog, Pid, Summary, Token, Threads, Handles, Modules, Memory, Mitigations,
-                     PebText, Loading, LoadStatus, InspectorSearch, HasSelectedProcess] {
+        auto RefreshBusy = std::make_shared<std::atomic_bool>(false);
+        auto RefreshInspector = std::make_shared<std::function<void()>>();
+        *RefreshInspector = [SafeDialog, Pid, Summary, Token, Threads, Handles, Modules, Memory, Mitigations,
+                             PebText, Loading, LoadStatus, InspectorSearch, HasSelectedProcess,
+                             StaticSummaryRows, RefreshBusy] {
+            if (!SafeDialog || RefreshBusy->exchange(true))
+                return;
+            Loading->show();
+            Loading->start();
+            LoadStatus->setText("Refreshing process data...");
+            std::thread([SafeDialog, Pid, Summary, Token, Threads, Handles, Modules, Memory, Mitigations,
+                         PebText, Loading, LoadStatus, InspectorSearch, HasSelectedProcess,
+                         StaticSummaryRows, RefreshBusy] {
             UserTokenInfo TokenInfo;
             const bool TokenOk = QueryUserTokenInfo(Pid, TokenInfo);
             std::vector<MDV2_RECORD> ProcessRows, ThreadRows, HandleRows, ModuleRows, MemoryRows;
@@ -6149,14 +6197,24 @@ class TaskManagerPage final : public QWidget
                                              HandleRows = std::move(HandleRows), UserHandleRows = std::move(UserHandleRows),
                                              ModuleRows = std::move(ModuleRows), MemoryRows = std::move(MemoryRows),
                                               ProcessHeader, HandleHeader, ModuleHeader, UserHandleOk, UserHandleError,
-                                              KernelProcessOk, KernelThreadOk, KernelHandleOk, KernelModuleOk, KernelMemoryOk,
+                                             KernelProcessOk, KernelThreadOk, KernelHandleOk, KernelModuleOk, KernelMemoryOk,
                                               PebOutput = std::move(PebOutput), HasSelectedProcess,
-                                              MitigationEntries = std::move(MitigationEntries), Pid]() mutable {
-                if (!SafeDialog) return;
+                                              MitigationEntries = std::move(MitigationEntries), Pid,
+                                              StaticSummaryRows, RefreshBusy]() mutable {
+                if (!SafeDialog) {
+                    RefreshBusy->store(false);
+                    return;
+                }
+                for (QTableWidget *Table : {Summary, Token, Threads, Handles, Modules, Memory, Mitigations})
+                    Table->setSortingEnabled(false);
+                while (Summary->rowCount() > StaticSummaryRows)
+                    Summary->removeRow(Summary->rowCount() - 1);
+                for (QTableWidget *Table : {Token, Threads, Handles, Modules, Memory, Mitigations})
+                    Table->setRowCount(0);
                 const auto Add = [InspectorSearch](QTableWidget *Table, const QStringList &Values) {
                     const int Row = Table->rowCount(); Table->insertRow(Row);
                     for (int Column = 0; Column < Values.size(); ++Column) Table->setItem(Row, Column, new QTableWidgetItem(Values[Column]));
-                    Table->setRowHeight(Row, 36);
+                    Table->setRowHeight(Row, KCompactTableRowHeight);
                     const QString Query = InspectorSearch->text().trimmed();
                     Table->setRowHidden(Row, !Query.isEmpty() &&
                         !Values.join(QLatin1Char(' ')).contains(Query, Qt::CaseInsensitive));
@@ -6291,8 +6349,15 @@ class TaskManagerPage final : public QWidget
                     .arg(ThreadRows.size())
                     .arg(UserHandleOk && !UserHandleRows.empty() ? UserHandleRows.size() : HandleRows.size())
                     .arg(ModuleRows.size()));
+                RefreshBusy->store(false);
             }, Qt::QueuedConnection);
-        }).detach();
+            }).detach();
+        };
+        auto *RefreshTimer = new QTimer(Dialog);
+        RefreshTimer->setInterval(2000);
+        QObject::connect(RefreshTimer, &QTimer::timeout, Dialog, [RefreshInspector] { (*RefreshInspector)(); });
+        RefreshTimer->start();
+        (*RefreshInspector)();
     }
 
     void ShowPebDetails(DWORD Pid)
@@ -6338,7 +6403,7 @@ class TaskManagerPage final : public QWidget
         auto *ModuleSearch = new SearchLineEdit;
         ModuleSearch->setPlaceholderText("Search module, address, size, or path");
         ModuleSearch->setClearButtonEnabled(true);
-        ModuleSearch->setMaximumWidth(460);
+        ModuleSearch->setMaximumWidth(360);
         auto *ModuleCount = new BodyLabel(QString("%1 modules").arg(Modules.size()));
         Toolbar->addWidget(ModuleSearch, 1);
         Toolbar->addWidget(ModuleCount);
@@ -6359,7 +6424,7 @@ class TaskManagerPage final : public QWidget
             Table->setItem(Row, 2, new QTableWidgetItem(
                 QString("%1 bytes (0x%2)").arg(Module.SizeOfImage).arg(Module.SizeOfImage, 0, 16).toUpper()));
             Table->setItem(Row, 3, new QTableWidgetItem(Utf8Text(Module.FullPath)));
-            Table->setRowHeight(Row, 38);
+            Table->setRowHeight(Row, KCompactTableRowHeight);
         }
         Layout->addWidget(Table, 1);
         QObject::connect(ModuleSearch, &QLineEdit::textChanged, Dialog,
@@ -6477,6 +6542,7 @@ class TaskManagerPage final : public QWidget
     }
 
     SearchLineEdit *SearchEdit = nullptr;
+    QTimer *SearchDebounceTimer = nullptr;
     BodyLabel *StatusLabel = nullptr;
     PushButton *RefreshButton = nullptr;
     TableWidget *ProcessTable = nullptr;
@@ -6698,7 +6764,7 @@ class MonitorManagerPage final : public QWidget
         auto *Page = new QWidget;
         auto *Layout = new QVBoxLayout(Page);
         Layout->setContentsMargins(0, 0, 0, 0);
-        Layout->setSpacing(10);
+        Layout->setSpacing(KCompactPageSpacing);
         Layout->addLayout(Controls);
         auto *FilterLayout = new QHBoxLayout;
         Searches[Index] = new SearchLineEdit;
@@ -6713,7 +6779,16 @@ class MonitorManagerPage final : public QWidget
         Tables[Index]->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         Tables[Index]->setContextMenuPolicy(Qt::CustomContextMenu);
         Layout->addWidget(Tables[Index], 1);
-        QObject::connect(Searches[Index], &QLineEdit::textChanged, this, [this, Index] { Populate(Index); });
+        if (!SearchDebounceTimers[Index])
+        {
+            SearchDebounceTimers[Index] = new QTimer(this);
+            SearchDebounceTimers[Index]->setSingleShot(true);
+            SearchDebounceTimers[Index]->setInterval(KSearchDebounceMs);
+            QObject::connect(SearchDebounceTimers[Index], &QTimer::timeout, this, [this, Index] { Populate(Index); });
+        }
+        QObject::connect(Searches[Index], &QLineEdit::textChanged, this, [this, Index] {
+            SearchDebounceTimers[Index]->start();
+        });
         QObject::connect(ClearButton, &QPushButton::clicked, this, [this, Index] { Clear(Index); });
         QObject::connect(Tables[Index], &QWidget::customContextMenuRequested, this,
                          [this, Index](const QPoint &Position) { ShowEventMenu(Index, Position); });
@@ -6728,7 +6803,7 @@ class MonitorManagerPage final : public QWidget
         SystemMode = new ComboBox;
         SystemMode->addItems({"ETWMode", "KernelMode"});
         SystemMode->setCurrentIndex(0);
-        SystemMode->setMinimumWidth(220);
+        SystemMode->setMinimumWidth(190);
         SystemFilterPid = new LineEdit;
         SystemFilterPid->setPlaceholderText("PID filter (0 = all)");
         SystemFilterPid->setMaximumWidth(150);
@@ -6814,7 +6889,7 @@ class MonitorManagerPage final : public QWidget
         auto *Page = new QWidget;
         auto *Layout = new QVBoxLayout(Page);
         Layout->setContentsMargins(0, 0, 0, 0);
-        Layout->setSpacing(10);
+        Layout->setSpacing(KCompactPageSpacing);
 
         auto *CtrlBar = new QHBoxLayout;
         auto *ExportBtn = MakeButton("Export CSV");
@@ -6822,7 +6897,7 @@ class MonitorManagerPage final : public QWidget
         HistorySearchEdit = new SearchLineEdit;
         HistorySearchEdit->setPlaceholderText("Search events by type, PID, process, or detail");
         HistorySearchEdit->setClearButtonEnabled(true);
-        HistorySearchEdit->setMaximumWidth(400);
+        HistorySearchEdit->setMaximumWidth(340);
         HistoryStatus = new BodyLabel("Persistent event history");
         CtrlBar->addWidget(HistorySearchEdit);
         CtrlBar->addStretch();
@@ -6835,8 +6910,14 @@ class MonitorManagerPage final : public QWidget
         HistoryTable->setProperty("DetailDialogTitle", "Event details");
         Layout->addWidget(HistoryTable, 1);
 
-        QObject::connect(HistorySearchEdit, &QLineEdit::textChanged, this, [this] {
+        HistorySearchDebounceTimer = new QTimer(this);
+        HistorySearchDebounceTimer->setSingleShot(true);
+        HistorySearchDebounceTimer->setInterval(KSearchDebounceMs);
+        QObject::connect(HistorySearchDebounceTimer, &QTimer::timeout, this, [this] {
             PopulateHistory(HistorySearchEdit->text().trimmed());
+        });
+        QObject::connect(HistorySearchEdit, &QLineEdit::textChanged, this, [this] {
+            HistorySearchDebounceTimer->start();
         });
         QObject::connect(ExportBtn, &QPushButton::clicked, this, [this] {
             QString Path = QFileDialog::getSaveFileName(this, "Export Events", "events.csv", "CSV (*.csv)");
@@ -6877,20 +6958,25 @@ class MonitorManagerPage final : public QWidget
             Rows = SharedState->Streams[Index].Rows;
         }
         const QString Query = Searches[Index]->text().trimmed();
-        Tables[Index]->setUpdatesEnabled(false);
-        Tables[Index]->clearContents();
-        Tables[Index]->setRowCount(0);
+        std::vector<const MonitorEventRow *> VisibleRows;
+        VisibleRows.reserve(Rows.size());
         for (const MonitorEventRow &Event : Rows)
         {
             if (!Query.isEmpty() && !Event.Text.contains(Query, Qt::CaseInsensitive) &&
                 !Event.Detail.contains(Query, Qt::CaseInsensitive))
                 continue;
-            const int Row = Tables[Index]->rowCount();
-            Tables[Index]->insertRow(Row);
+            VisibleRows.push_back(&Event);
+        }
+        Tables[Index]->setUpdatesEnabled(false);
+        Tables[Index]->clearContents();
+        Tables[Index]->setRowCount(static_cast<int>(VisibleRows.size()));
+        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
+        {
+            const MonitorEventRow &Event = *VisibleRows[Row];
             auto *Item = new QTableWidgetItem(Event.Text);
             Item->setData(Qt::UserRole, Event.Detail);
             Tables[Index]->setItem(Row, 0, Item);
-            Tables[Index]->setRowHeight(Row, 38);
+            Tables[Index]->setRowHeight(Row, KCompactTableRowHeight);
         }
         Tables[Index]->setUpdatesEnabled(true);
     }
@@ -7297,12 +7383,14 @@ class MonitorManagerPage final : public QWidget
     std::array<TableWidget *, 4> Tables{};
     std::array<BodyLabel *, 4> Statuses{};
     std::array<uint64_t, 4> DisplayedVersions{};
+    std::array<QTimer *, 4> SearchDebounceTimers{};
     uint64_t DisplayedHistoryVersion = 0;
     QTimer *UpdateTimer = nullptr;
 
     SearchLineEdit *HistorySearchEdit = nullptr;
     TableWidget *HistoryTable = nullptr;
     BodyLabel *HistoryStatus = nullptr;
+    QTimer *HistorySearchDebounceTimer = nullptr;
     void PopulateHistory(const QString &Query)
     {
         if (!HistoryTable)
@@ -7312,8 +7400,8 @@ class MonitorManagerPage final : public QWidget
             std::lock_guard<std::mutex> Lock(SharedState->HistoryMutex);
             HistoryRows = SharedState->HistoryRows;
         }
-        HistoryTable->clearContents();
-        HistoryTable->setRowCount(0);
+        std::vector<const MonitorHistoryRow *> VisibleRows;
+        VisibleRows.reserve(HistoryRows.size());
         for (const auto &Evt : HistoryRows)
         {
             if (!Query.isEmpty() && !Evt.Type.contains(Query, Qt::CaseInsensitive) &&
@@ -7321,15 +7409,22 @@ class MonitorManagerPage final : public QWidget
                 !Evt.Detail.contains(Query, Qt::CaseInsensitive) &&
                 !QString::number(Evt.Pid).contains(Query))
                 continue;
-            int R = HistoryTable->rowCount();
-            HistoryTable->insertRow(R);
-            HistoryTable->setItem(R, 0, new QTableWidgetItem(Evt.Timestamp));
-            HistoryTable->setItem(R, 1, new QTableWidgetItem(Evt.Type));
-            HistoryTable->setItem(R, 2, new QTableWidgetItem(QString::number(Evt.Pid)));
-            HistoryTable->setItem(R, 3, new QTableWidgetItem(Evt.Process));
-            HistoryTable->setItem(R, 4, new QTableWidgetItem(Evt.Detail));
-            HistoryTable->setRowHeight(R, 38);
+            VisibleRows.push_back(&Evt);
         }
+        HistoryTable->setUpdatesEnabled(false);
+        HistoryTable->clearContents();
+        HistoryTable->setRowCount(static_cast<int>(VisibleRows.size()));
+        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
+        {
+            const MonitorHistoryRow &Evt = *VisibleRows[Row];
+            HistoryTable->setItem(Row, 0, new QTableWidgetItem(Evt.Timestamp));
+            HistoryTable->setItem(Row, 1, new QTableWidgetItem(Evt.Type));
+            HistoryTable->setItem(Row, 2, new QTableWidgetItem(QString::number(Evt.Pid)));
+            HistoryTable->setItem(Row, 3, new QTableWidgetItem(Evt.Process));
+            HistoryTable->setItem(Row, 4, new QTableWidgetItem(Evt.Detail));
+            HistoryTable->setRowHeight(Row, KCompactTableRowHeight);
+        }
+        HistoryTable->setUpdatesEnabled(true);
         HistoryStatus->setText(QString("Events: %1").arg(HistoryRows.size()));
     }
 
@@ -7397,7 +7492,7 @@ class RegistryManagerPage final : public QWidget
     explicit RegistryManagerPage(QWidget *Parent = nullptr) : QWidget(Parent)
     {
         auto *Layout = new QVBoxLayout(this);
-        ConfigurePageLayout(Layout, 10);
+        ConfigurePageLayout(Layout, 8);
 
         auto *Tabs = new TabBar;
         Tabs->setAddButtonVisible(false);
@@ -7420,16 +7515,16 @@ class RegistryManagerPage final : public QWidget
     {
         auto *Page = new QWidget;
         auto *Layout = new QVBoxLayout(Page);
-        ConfigurePageLayout(Layout, 10);
+        ConfigurePageLayout(Layout, 8);
 
         auto *ScopeLayout = new QHBoxLayout;
         ConfigureToolbarLayout(ScopeLayout);
         SourceCombo = new ComboBox;
         SourceCombo->addItems({"Startup items", "Image hijacks", "Selected path"});
         SourceCombo->setCurrentIndex(0);
-        SourceCombo->setMinimumWidth(190);
+        SourceCombo->setMinimumWidth(170);
         PathCombo = new ComboBox;
-        PathCombo->setMinimumWidth(300);
+        PathCombo->setMinimumWidth(260);
         const auto AddPathOption = [this](const QString &Label, const QString &Path) {
             PathCombo->addItem(Label, Path);
         };
@@ -7473,7 +7568,7 @@ class RegistryManagerPage final : public QWidget
         SearchEdit = new SearchLineEdit;
         SearchEdit->setPlaceholderText("Search key, value name, type, or data");
         SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(420);
+        SearchEdit->setMaximumWidth(340);
         auto *NewKeyButton = new PushButton("New key", Fluent::IconType::FOLDER_ADD);
         auto *NewValueButton = new PushButton("New value", Fluent::IconType::DOCUMENT);
         ModifyButton = new PushButton("Modify", Fluent::IconType::CODE);
@@ -7534,7 +7629,11 @@ class RegistryManagerPage final : public QWidget
             ShowSuccessNotice(this, "Registry", "Registry values refreshed.");
         });
         QObject::connect(ProtectButton, &QPushButton::clicked, this, [this] { ProtectAddress(); });
-        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { PopulateValues(); });
+        SearchDebounceTimer = new QTimer(this);
+        SearchDebounceTimer->setSingleShot(true);
+        SearchDebounceTimer->setInterval(KSearchDebounceMs);
+        QObject::connect(SearchDebounceTimer, &QTimer::timeout, this, [this] { PopulateValues(); });
+        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { SearchDebounceTimer->start(); });
         QObject::connect(NewKeyButton, &QPushButton::clicked, this, [this] { ShowCreateKeyDialog(); });
         QObject::connect(NewValueButton, &QPushButton::clicked, this, [this] { ShowValueDialog(false); });
         QObject::connect(ModifyButton, &QPushButton::clicked, this, [this] { ShowValueDialog(true); });
@@ -7556,13 +7655,13 @@ class RegistryManagerPage final : public QWidget
     {
         auto *Page = new QWidget;
         auto *Layout = new QVBoxLayout(Page);
-        ConfigurePageLayout(Layout, 10);
+        ConfigurePageLayout(Layout, 8);
         auto *Toolbar = new QHBoxLayout;
         ConfigureToolbarLayout(Toolbar);
         ProtectedSearchEdit = new SearchLineEdit;
         ProtectedSearchEdit->setPlaceholderText("Search protected paths");
         ProtectedSearchEdit->setClearButtonEnabled(true);
-        ProtectedSearchEdit->setMaximumWidth(420);
+        ProtectedSearchEdit->setMaximumWidth(340);
         ProtectedCountLabel = new BodyLabel("0 paths");
         UnprotectButton = new PushButton("Unprotect", Fluent::IconType::CERTIFICATE);
         UnprotectButton->setEnabled(false);
@@ -7579,7 +7678,11 @@ class RegistryManagerPage final : public QWidget
         QObject::connect(ProtectedTable, &QTableWidget::itemSelectionChanged, this, [this] {
             UnprotectButton->setEnabled(!ProtectedTable->selectionModel()->selectedRows(0).isEmpty());
         });
-        QObject::connect(ProtectedSearchEdit, &QLineEdit::textChanged, this, [this] { RefreshProtectedTable(); });
+        ProtectedSearchDebounceTimer = new QTimer(this);
+        ProtectedSearchDebounceTimer->setSingleShot(true);
+        ProtectedSearchDebounceTimer->setInterval(KSearchDebounceMs);
+        QObject::connect(ProtectedSearchDebounceTimer, &QTimer::timeout, this, [this] { RefreshProtectedTable(); });
+        QObject::connect(ProtectedSearchEdit, &QLineEdit::textChanged, this, [this] { ProtectedSearchDebounceTimer->start(); });
         QObject::connect(UnprotectButton, &QPushButton::clicked, this, [this] { UnprotectSelection(); });
         return Page;
     }
@@ -7960,16 +8063,25 @@ class RegistryManagerPage final : public QWidget
     void PopulateValues()
     {
         const QString Query = SearchEdit->text().trimmed();
-        ValueTable->setSortingEnabled(false);
-        ValueTable->clearContents(); ValueTable->setRowCount(0);
-        int VisibleCount = 0;
+        std::vector<int> VisibleRows;
+        VisibleRows.reserve(Rows.size());
         for (int Index = 0; Index < static_cast<int>(Rows.size()); ++Index)
         {
             const RegistryValueRow &Value = Rows[Index];
             const QString SearchText = Value.RootName + " " + Value.Location + " " + Value.KeyPath + " " + Value.Name +
                                        " " + TypeName(Value.Type) + " " + Value.Data;
-            if (!Query.isEmpty() && !SearchText.contains(Query, Qt::CaseInsensitive)) continue;
-            const int Row = ValueTable->rowCount(); ValueTable->insertRow(Row);
+            if (!Query.isEmpty() && !SearchText.contains(Query, Qt::CaseInsensitive))
+                continue;
+            VisibleRows.push_back(Index);
+        }
+        ValueTable->setSortingEnabled(false);
+        ValueTable->setUpdatesEnabled(false);
+        ValueTable->clearContents();
+        ValueTable->setRowCount(static_cast<int>(VisibleRows.size()));
+        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
+        {
+            const int Index = VisibleRows[Row];
+            const RegistryValueRow &Value = Rows[Index];
             auto *LocationItem = new QTableWidgetItem(Value.Location);
             LocationItem->setData(Qt::UserRole, Index);
             ValueTable->setItem(Row, 0, LocationItem);
@@ -7977,13 +8089,13 @@ class RegistryManagerPage final : public QWidget
             ValueTable->setItem(Row, 2, new QTableWidgetItem(Value.Name.isEmpty() ? "(Default)" : Value.Name));
             ValueTable->setItem(Row, 3, new QTableWidgetItem(TypeName(Value.Type)));
             ValueTable->setItem(Row, 4, new QTableWidgetItem(Value.Data));
-            ValueTable->setRowHeight(Row, 38);
-            ++VisibleCount;
+            ValueTable->setRowHeight(Row, KCompactTableRowHeight);
         }
+        ValueTable->setUpdatesEnabled(true);
         ValueTable->setSortingEnabled(true);
         ValueCountLabel->setText(Query.isEmpty()
             ? QString("%1 value%2").arg(Rows.size()).arg(Rows.size() == 1 ? "" : "s")
-            : QString("%1 of %2").arg(VisibleCount).arg(Rows.size()));
+            : QString("%1 of %2").arg(VisibleRows.size()).arg(Rows.size()));
         ModifyButton->setEnabled(false); DeleteButton->setEnabled(false);
     }
 
@@ -8219,27 +8331,32 @@ class RegistryManagerPage final : public QWidget
     void RefreshProtectedTable()
     {
         const QString Query = ProtectedSearchEdit ? ProtectedSearchEdit->text().trimmed() : QString();
-        ProtectedTable->setSortingEnabled(false);
-        ProtectedTable->clearContents();
-        ProtectedTable->setRowCount(0);
-        int VisibleCount = 0;
-        for (const ProtectedRegistryEntry &Entry : ProtectedEntries) {
+        std::vector<const ProtectedRegistryEntry *> VisibleRows;
+        VisibleRows.reserve(ProtectedEntries.size());
+        for (const ProtectedRegistryEntry &Entry : ProtectedEntries)
+        {
             if (!Query.isEmpty() && !(Entry.DisplayPath + " " + Entry.KernelPath).contains(Query, Qt::CaseInsensitive))
                 continue;
-            const int Row = ProtectedTable->rowCount();
-            ProtectedTable->insertRow(Row);
+            VisibleRows.push_back(&Entry);
+        }
+        ProtectedTable->setSortingEnabled(false);
+        ProtectedTable->setUpdatesEnabled(false);
+        ProtectedTable->clearContents();
+        ProtectedTable->setRowCount(static_cast<int>(VisibleRows.size()));
+        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row) {
+            const ProtectedRegistryEntry &Entry = *VisibleRows[Row];
             auto *Item = new QTableWidgetItem(Entry.DisplayPath);
             Item->setData(Qt::UserRole, Entry.KernelPath);
             ProtectedTable->setItem(Row, 0, Item);
             ProtectedTable->setItem(Row, 1, new QTableWidgetItem(Entry.KernelPath));
-            ProtectedTable->setRowHeight(Row, 38);
-            ++VisibleCount;
+            ProtectedTable->setRowHeight(Row, KCompactTableRowHeight);
         }
+        ProtectedTable->setUpdatesEnabled(true);
         ProtectedTable->setSortingEnabled(true);
         if (ProtectedCountLabel)
             ProtectedCountLabel->setText(Query.isEmpty()
                 ? QString("%1 path%2").arg(ProtectedEntries.size()).arg(ProtectedEntries.size() == 1 ? "" : "s")
-                : QString("%1 of %2").arg(VisibleCount).arg(ProtectedEntries.size()));
+                : QString("%1 of %2").arg(VisibleRows.size()).arg(ProtectedEntries.size()));
         UnprotectButton->setEnabled(false);
     }
 
@@ -8257,12 +8374,14 @@ class RegistryManagerPage final : public QWidget
     ComboBox *PathCombo = nullptr;
     LineEdit *AddressEdit = nullptr;
     SearchLineEdit *SearchEdit = nullptr;
+    QTimer *SearchDebounceTimer = nullptr;
     BodyLabel *ValueCountLabel = nullptr;
     TableWidget *ValueTable = nullptr;
     PushButton *ModifyButton = nullptr;
     PushButton *DeleteButton = nullptr;
     TableWidget *ProtectedTable = nullptr;
     SearchLineEdit *ProtectedSearchEdit = nullptr;
+    QTimer *ProtectedSearchDebounceTimer = nullptr;
     BodyLabel *ProtectedCountLabel = nullptr;
     PushButton *UnprotectButton = nullptr;
     std::vector<RegistryValueRow> Rows;
@@ -8298,7 +8417,7 @@ class FileExplorerPage final : public QWidget
         : QWidget(Parent)
     {
         auto *Layout = new QVBoxLayout(this);
-        ConfigurePageLayout(Layout, 10);
+        ConfigurePageLayout(Layout, 8);
 
         auto *Tabs = new TabBar;
         Tabs->setAddButtonVisible(false);
@@ -8314,7 +8433,7 @@ class FileExplorerPage final : public QWidget
         Pages = new QStackedWidget;
         auto *ExplorerPage = new QWidget;
         auto *ExplorerLayout = new QVBoxLayout(ExplorerPage);
-        ConfigurePageLayout(ExplorerLayout, 10);
+        ConfigurePageLayout(ExplorerLayout, 8);
 
         auto *NavigationLayout = new QHBoxLayout;
         ConfigureToolbarLayout(NavigationLayout);
@@ -8327,7 +8446,7 @@ class FileExplorerPage final : public QWidget
         SearchEdit = new SearchLineEdit;
         SearchEdit->setPlaceholderText("Search this folder");
         SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(280);
+        SearchEdit->setMaximumWidth(240);
         NavigationLayout->addWidget(BackButton);
         NavigationLayout->addWidget(ForwardButton);
         NavigationLayout->addWidget(UpButton);
@@ -8362,7 +8481,7 @@ class FileExplorerPage final : public QWidget
         DirectoryTree->setRootIndex(DirectoryModel->index(QString()));
         DirectoryTree->setHeaderHidden(true);
         DirectoryTree->setAnimated(true);
-        DirectoryTree->setMinimumWidth(210);
+        DirectoryTree->setMinimumWidth(190);
         for (int Column = 1; Column < DirectoryModel->columnCount(); ++Column)
             DirectoryTree->hideColumn(Column);
         InstallFluentScrollBar(DirectoryTree, Qt::Vertical);
@@ -8396,7 +8515,7 @@ class FileExplorerPage final : public QWidget
 
         auto *ProtectedPage = new QWidget;
         auto *ProtectedLayout = new QVBoxLayout(ProtectedPage);
-        ConfigurePageLayout(ProtectedLayout, 10);
+        ConfigurePageLayout(ProtectedLayout, 8);
         auto *ProtectedToolbar = new QHBoxLayout;
         ConfigureToolbarLayout(ProtectedToolbar);
         auto *ProtectedTitle = MakeLabel("ProtectedFiles", 13, KTextPrimary, QFont::DemiBold);
@@ -8415,7 +8534,7 @@ class FileExplorerPage final : public QWidget
 
         auto *MonitorPage = new QWidget;
         auto *MonitorLayout = new QVBoxLayout(MonitorPage);
-        ConfigurePageLayout(MonitorLayout, 10);
+        ConfigurePageLayout(MonitorLayout, 8);
         auto *MonitorToolbar = new QHBoxLayout;
         ConfigureToolbarLayout(MonitorToolbar);
         auto *BrowseMonitorButton = MakeButton("Browse", true);
@@ -8473,7 +8592,11 @@ class FileExplorerPage final : public QWidget
         });
         QObject::connect(MonitorStopButton, &QPushButton::clicked, this, [this] { StopFileMonitor(true); });
         QObject::connect(MonitorClearButton, &QPushButton::clicked, this, [this] { ClearMonitorEvents(); });
-        QObject::connect(MonitorSearchEdit, &QLineEdit::textChanged, this, [this] { RefreshMonitorTable(); });
+        MonitorSearchDebounceTimer = new QTimer(this);
+        MonitorSearchDebounceTimer->setSingleShot(true);
+        MonitorSearchDebounceTimer->setInterval(KSearchDebounceMs);
+        QObject::connect(MonitorSearchDebounceTimer, &QTimer::timeout, this, [this] { RefreshMonitorTable(); });
+        QObject::connect(MonitorSearchEdit, &QLineEdit::textChanged, this, [this] { MonitorSearchDebounceTimer->start(); });
         QObject::connect(MonitorTable, &QTableWidget::cellDoubleClicked, this,
                          [this](int Row, int Column) {
                              if (Column == 4)
@@ -8917,9 +9040,8 @@ class FileExplorerPage final : public QWidget
         }
 
         const QString Query = MonitorSearchEdit ? MonitorSearchEdit->text().trimmed() : QString();
-        MonitorTable->setUpdatesEnabled(false);
-        MonitorTable->clearContents();
-        MonitorTable->setRowCount(0);
+        std::vector<const FileMonitorEntry *> VisibleRows;
+        VisibleRows.reserve(Rows.size());
         for (const FileMonitorEntry &Entry : Rows)
         {
             const QString PidText = QString::number(Entry.ProcessId);
@@ -8933,9 +9055,15 @@ class FileExplorerPage final : public QWidget
             {
                 continue;
             }
-
-            const int Row = MonitorTable->rowCount();
-            MonitorTable->insertRow(Row);
+            VisibleRows.push_back(&Entry);
+        }
+        MonitorTable->setUpdatesEnabled(false);
+        MonitorTable->clearContents();
+        MonitorTable->setRowCount(static_cast<int>(VisibleRows.size()));
+        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
+        {
+            const FileMonitorEntry &Entry = *VisibleRows[Row];
+            const QString PidText = QString::number(Entry.ProcessId);
             auto *TimeItem = new QTableWidgetItem(Entry.Timestamp);
             TimeItem->setData(Qt::UserRole, Entry.Detail);
             MonitorTable->setItem(Row, 0, TimeItem);
@@ -8945,9 +9073,8 @@ class FileExplorerPage final : public QWidget
             auto *PathItem = new QTableWidgetItem(Entry.Path);
             PathItem->setToolTip(Entry.Path);
             MonitorTable->setItem(Row, 4, PathItem);
-            MonitorTable->setRowHeight(Row, 38);
+            MonitorTable->setRowHeight(Row, KCompactTableRowHeight);
         }
-        MonitorTable->resizeColumnToContents(4);
         MonitorTable->setUpdatesEnabled(true);
     }
 
@@ -9069,7 +9196,7 @@ class FileExplorerPage final : public QWidget
             NameItem->setData(Qt::UserRole + 1, Entry.NtPath);
             ProtectedTable->setItem(Row, 0, NameItem);
             ProtectedTable->setItem(Row, 1, new QTableWidgetItem(Entry.DisplayPath));
-            ProtectedTable->setRowHeight(Row, 38);
+            ProtectedTable->setRowHeight(Row, KCompactTableRowHeight);
         }
         UnprotectButton->setEnabled(false);
     }
@@ -9197,6 +9324,7 @@ class FileExplorerPage final : public QWidget
     PushButton *UnprotectButton = nullptr;
     TableWidget *MonitorTable = nullptr;
     SearchLineEdit *MonitorSearchEdit = nullptr;
+    QTimer *MonitorSearchDebounceTimer = nullptr;
     BodyLabel *MonitorStatusLabel = nullptr;
     BodyLabel *MonitorDirectoryLabel = nullptr;
     PushButton *MonitorStopButton = nullptr;
@@ -9278,7 +9406,7 @@ class WindowManagerPage final : public QWidget
         SearchEdit = new SearchLineEdit;
         SearchEdit->setPlaceholderText("Search title, class, process, PID, or HWND");
         SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(440);
+        SearchEdit->setMaximumWidth(360);
         auto *RefreshButton = MakeButton("Refresh", true);
         Toolbar->addWidget(SearchEdit);
         Toolbar->addStretch();
@@ -9291,12 +9419,13 @@ class WindowManagerPage final : public QWidget
         WindowTable->horizontalHeader()->setStretchLastSection(false);
         for (int Column = 0; Column < WindowTable->columnCount(); ++Column)
             WindowTable->horizontalHeader()->setSectionResizeMode(Column, QHeaderView::ResizeToContents);
+        WindowTable->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
         WinLayout->addWidget(WindowTable, 1);
 
         
         auto *ProtPage = new QWidget;
         auto *ProtLayout = new QVBoxLayout(ProtPage);
-        ConfigurePageLayout(ProtLayout, 10);
+        ConfigurePageLayout(ProtLayout, 8);
         auto *ProtToolbar = new QHBoxLayout;
         ConfigureToolbarLayout(ProtToolbar);
         auto *ProtTitle = MakeLabel("Protected Windows", 13, KTextPrimary, QFont::DemiBold);
@@ -9311,13 +9440,18 @@ class WindowManagerPage final : public QWidget
         ProtectedTable->setProperty("DetailDialogTitle", "Protected window details");
         ProtectedTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         ProtectedTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        ProtectedTable->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
         ProtLayout->addWidget(ProtectedTable, 1);
 
         Pages->addWidget(WinPage);
         Pages->addWidget(ProtPage);
         QObject::connect(Tabs, &TabBar::currentChanged, Pages, &QStackedWidget::setCurrentIndex);
 
-        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { Populate(); });
+        SearchDebounceTimer = new QTimer(this);
+        SearchDebounceTimer->setSingleShot(true);
+        SearchDebounceTimer->setInterval(KSearchDebounceMs);
+        QObject::connect(SearchDebounceTimer, &QTimer::timeout, this, [this] { Populate(); });
+        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { SearchDebounceTimer->start(); });
         QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { Refresh(); ShowSuccessNotice(this, "Window", "Window list refreshed."); });
         QObject::connect(WindowTable, &QWidget::customContextMenuRequested, this,
                          [this](const QPoint &Position) { ShowMenu(Position); });
@@ -9391,21 +9525,29 @@ class WindowManagerPage final : public QWidget
     void Populate()
     {
         const QString Query = SearchEdit->text().trimmed();
-        WindowTable->clearContents();
-        WindowTable->setRowCount(0);
+        std::vector<const WindowRow *> VisibleRows;
+        VisibleRows.reserve(Rows.size());
         for (const WindowRow &Window : Rows)
         {
             const QString HandleText = QString("0x%1").arg(reinterpret_cast<quintptr>(Window.Handle), 0, 16);
             const QString SearchText = Window.Title + " " + Window.ClassName + " " + Window.ProcessPath +
                                        " " + QString::number(Window.Pid) + " " + HandleText;
-            if (!Query.isEmpty() && !SearchText.contains(Query, Qt::CaseInsensitive)) continue;
+            if (!Query.isEmpty() && !SearchText.contains(Query, Qt::CaseInsensitive))
+                continue;
+            VisibleRows.push_back(&Window);
+        }
+        WindowTable->setUpdatesEnabled(false);
+        WindowTable->clearContents();
+        WindowTable->setRowCount(static_cast<int>(VisibleRows.size()));
+        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
+        {
+            const WindowRow &Window = *VisibleRows[Row];
+            const QString HandleText = QString("0x%1").arg(reinterpret_cast<quintptr>(Window.Handle), 0, 16);
             QStringList States{Window.Visible ? "Visible" : "Hidden", Window.Enabled ? "Enabled" : "Disabled"};
             if (Window.Minimized) States.append("Minimized");
             if (Window.Maximized) States.append("Maximized");
             if (Window.IsHung) States.append("HUNG");
             if (Window.IsTopmost) States.append("Topmost");
-            const int Row = WindowTable->rowCount();
-            WindowTable->insertRow(Row);
             auto *HandleItem = new QTableWidgetItem(HandleText);
             HandleItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(reinterpret_cast<quintptr>(Window.Handle)));
             WindowTable->setItem(Row, 0, HandleItem);
@@ -9420,8 +9562,9 @@ class WindowManagerPage final : public QWidget
                 .arg(Window.Rect.left).arg(Window.Rect.top).arg(Window.Rect.right).arg(Window.Rect.bottom)
                 .arg(Window.Rect.right - Window.Rect.left).arg(Window.Rect.bottom - Window.Rect.top)));
             WindowTable->setItem(Row, 8, new QTableWidgetItem(QString::number(Window.Dpi)));
-            WindowTable->setRowHeight(Row, 38);
+            WindowTable->setRowHeight(Row, KCompactTableRowHeight);
         }
+        WindowTable->setUpdatesEnabled(true);
     }
 
     void ShowMenu(const QPoint &Position)
@@ -9620,6 +9763,7 @@ class WindowManagerPage final : public QWidget
     }
 
     SearchLineEdit *SearchEdit = nullptr;
+    QTimer *SearchDebounceTimer = nullptr;
     TableWidget *WindowTable = nullptr;
     TableWidget *ProtectedTable = nullptr;
     PushButton *UnprotectButton = nullptr;
@@ -9702,7 +9846,7 @@ class WindowManagerPage final : public QWidget
             ProtectedTable->setItem(R, 1, new QTableWidgetItem(P.Title));
             ProtectedTable->setItem(R, 2, new QTableWidgetItem(QString::number(P.Pid)));
             ProtectedTable->setItem(R, 3, new QTableWidgetItem(QString("0x%1").arg(P.Flags, 8, 16, QLatin1Char('0'))));
-            ProtectedTable->setRowHeight(R, 38);
+            ProtectedTable->setRowHeight(R, KCompactTableRowHeight);
         }
         UnprotectButton->setEnabled(false);
     }
@@ -9829,22 +9973,25 @@ class DriverManagerPage final : public QWidget
     explicit DriverManagerPage(QWidget *Parent = nullptr) : QWidget(Parent)
     {
         auto *Layout = new QVBoxLayout(this); ConfigurePageLayout(Layout);
-        auto *LoadLayout = new QHBoxLayout;
-        ConfigureToolbarLayout(LoadLayout);
-        LoadLayout->addStretch(1);
         auto *LoadButton = MakeButton("Load", true);
-        LoadLayout->addWidget(LoadButton);
-        Layout->addLayout(LoadLayout);
         auto *FilterLayout = new QHBoxLayout;
         ConfigureToolbarLayout(FilterLayout);
-        SearchEdit = new SearchLineEdit; SearchEdit->setPlaceholderText("Search service, display name, path, or state"); SearchEdit->setClearButtonEnabled(true);
+        SearchEdit = new SearchLineEdit; SearchEdit->setPlaceholderText("Search service, display name, path, or state"); SearchEdit->setClearButtonEnabled(true); SearchEdit->setMaximumWidth(380);
         RefreshIndicator = new IndeterminateProgressRing(this, false);
         RefreshIndicator->setFixedSize(22, 22);
         RefreshIndicator->hide();
+        LoadButton->setMinimumWidth(92);
+        LoadButton->setMaximumWidth(92);
+        LoadButton->setFixedHeight(32);
         RefreshButton = MakeButton("Refresh", true);
-        FilterLayout->addWidget(SearchEdit, 1);
-        FilterLayout->addWidget(RefreshIndicator);
-        FilterLayout->addWidget(RefreshButton);
+        RefreshButton->setMinimumWidth(92);
+        RefreshButton->setMaximumWidth(92);
+        RefreshButton->setFixedHeight(32);
+        FilterLayout->addWidget(SearchEdit, 0, Qt::AlignLeft | Qt::AlignVCenter);
+        FilterLayout->addStretch(1);
+        FilterLayout->addWidget(RefreshIndicator, 0, Qt::AlignVCenter);
+        FilterLayout->addWidget(LoadButton, 0, Qt::AlignRight | Qt::AlignVCenter);
+        FilterLayout->addWidget(RefreshButton, 0, Qt::AlignRight | Qt::AlignVCenter);
         Layout->addLayout(FilterLayout);
         DriverTable = MakeTable({"Service", "Display name", "State", "Type", "Object", "Base", "Size", "Signature", "SHA-256", "Path"});
         DriverTable->setSelectionMode(QAbstractItemView::SingleSelection); DriverTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -10301,7 +10448,7 @@ class DriverManagerPage final : public QWidget
             DriverTable->setItem(Row, 6, new QTableWidgetItem(QString("0x%1").arg(Driver.ImageSize, 0, 16)));
             DriverTable->setItem(Row, 7, new QTableWidgetItem(Driver.Trust.Trusted ? Driver.Trust.SignatureKind + " | " + Driver.Trust.Signer : "Untrusted"));
             DriverTable->setItem(Row, 8, new QTableWidgetItem(Driver.Trust.Sha256));
-            DriverTable->setItem(Row, 9, new QTableWidgetItem(Driver.Path)); DriverTable->setRowHeight(Row, 38); }
+            DriverTable->setItem(Row, 9, new QTableWidgetItem(Driver.Path)); DriverTable->setRowHeight(Row, KCompactTableRowHeight); }
     }
     SearchLineEdit *SearchEdit = nullptr; TableWidget *DriverTable = nullptr; PushButton *RefreshButton = nullptr; IndeterminateProgressRing *RefreshIndicator = nullptr; std::vector<DriverRow> Rows; std::atomic_bool Refreshing = false;
 };
@@ -10326,7 +10473,7 @@ public:
         SearchEdit = new SearchLineEdit;
         SearchEdit->setPlaceholderText("Search service name, display, or path");
         SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(440);
+        SearchEdit->setMaximumWidth(360);
         Toolbar->addWidget(SearchEdit);
         Toolbar->addStretch();
         Toolbar->addWidget(RefreshButton);
@@ -10431,7 +10578,7 @@ private:
             Table->setItem(R, 3, new QTableWidgetItem(Svc.StartType));
             Table->setItem(R, 4, new QTableWidgetItem(Svc.Pid ? QString::number(Svc.Pid) : "-"));
             Table->setItem(R, 5, new QTableWidgetItem(Svc.BinaryPath));
-            Table->setRowHeight(R, 38);
+            Table->setRowHeight(R, KCompactTableRowHeight);
         }
     }
 
@@ -10540,7 +10687,7 @@ QWidget *CreateTablePage()
     auto *Search = new SearchLineEdit;
     Search->setPlaceholderText("Search index, name, address, or metadata");
     Search->setClearButtonEnabled(true);
-    Search->setMaximumWidth(380);
+    Search->setMaximumWidth(320);
     auto *Status = new BodyLabel("Not queried.");
     auto *RefreshIndicator = new IndeterminateProgressRing(Page, false);
     RefreshIndicator->setFixedSize(22, 22);
@@ -10558,7 +10705,7 @@ QWidget *CreateTablePage()
         const std::shared_ptr<TableQueryResult> Result = State->Result;
         const SYSTEM_TABLES_OUTPUT &Summary = Result->Summary;
         const QString SearchText = Search->text().trimmed();
-        const auto AddRow = [Table, SearchText](const QString &Index, const QString &Name, const QString &Address, const QString &Metadata = QString()) { if (!SearchText.isEmpty() && !(Index + " " + Name + " " + Address + " " + Metadata).contains(SearchText, Qt::CaseInsensitive)) return; const int Row = Table->rowCount(); Table->insertRow(Row); Table->setItem(Row, 0, new QTableWidgetItem(Index)); Table->setItem(Row, 1, new QTableWidgetItem(Name)); Table->setItem(Row, 2, new QTableWidgetItem(Address)); Table->setItem(Row, 3, new QTableWidgetItem(Metadata)); Table->setRowHeight(Row, 38); };
+        const auto AddRow = [Table, SearchText](const QString &Index, const QString &Name, const QString &Address, const QString &Metadata = QString()) { if (!SearchText.isEmpty() && !(Index + " " + Name + " " + Address + " " + Metadata).contains(SearchText, Qt::CaseInsensitive)) return; const int Row = Table->rowCount(); Table->insertRow(Row); Table->setItem(Row, 0, new QTableWidgetItem(Index)); Table->setItem(Row, 1, new QTableWidgetItem(Name)); Table->setItem(Row, 2, new QTableWidgetItem(Address)); Table->setItem(Row, 3, new QTableWidgetItem(Metadata)); Table->setRowHeight(Row, KCompactTableRowHeight); };
         if (Tab < 5 && Result->Available[Tab]) { const auto &Output = Result->Entries[Tab]; AddRow("-", "Table Base", QString("0x%1").arg(Output.TableBase, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper(), QString("%1 of %2 entries").arg(Output.Count).arg(Output.TotalCount));
             for (ULONG Index = 0; Index < Output.Count; ++Index) { const SYSTEM_TABLE_ENTRY &Entry = Output.Entries[Index];
                 AddRow(QString::number(Entry.Index), SystemTableEntryName(Tab, Entry), QString("0x%1").arg(Entry.Address, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper(), QString::number(Entry.ArgumentBytes)); } return; }
@@ -10719,7 +10866,7 @@ QWidget *CreateCallbackPage()
     auto *Search = new SearchLineEdit;
     Search->setPlaceholderText("Search type, source, module, or address");
     Search->setClearButtonEnabled(true);
-    Search->setMaximumWidth(420);
+    Search->setMaximumWidth(360);
     auto *Status = new BodyLabel("Not queried.");
     auto *RefreshIndicator = new IndeterminateProgressRing(Page, false);
     RefreshIndicator->setFixedSize(22, 22);
@@ -10744,7 +10891,7 @@ QWidget *CreateCallbackPage()
     const auto Populate = [Search, TypeFilter, Table, State, DescribeCallbackType] { const QString Query = Search->text().trimmed(); const QString TypeFilterText = TypeFilter->currentText(); Table->clearContents(); Table->setRowCount(0); for (const CALLBACK_ENTRY &Entry : State->Rows) { const QString Type = DescribeCallbackType(Entry.Type);
         const QString Address = QString("0x%1").arg(Entry.Address, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper(); const QString Module = Entry.ModuleName[0] ? QString::fromWCharArray(Entry.ModuleName) : "(unknown)"; const QString Source = Entry.SourceName[0] ? QString::fromWCharArray(Entry.SourceName) : "(unknown)";
         if (TypeFilterText != "All" && Type != TypeFilterText) continue;
-        if (!Query.isEmpty() && !(Type + " " + Address + " " + Module + " " + Source).contains(Query, Qt::CaseInsensitive)) continue; const int Row = Table->rowCount(); Table->insertRow(Row); auto *TypeItem = new QTableWidgetItem(Type); TypeItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(Entry.Address)); TypeItem->setData(Qt::UserRole + 1, QVariant::fromValue<qulonglong>(Entry.Type)); TypeItem->setData(Qt::UserRole + 2, QVariant::fromValue<qulonglong>(Entry.Flags)); Table->setItem(Row, 0, TypeItem); Table->setItem(Row, 1, new QTableWidgetItem(Address)); Table->setItem(Row, 2, new QTableWidgetItem(Module)); Table->setItem(Row, 3, new QTableWidgetItem(Source)); Table->setRowHeight(Row, 38); } };
+        if (!Query.isEmpty() && !(Type + " " + Address + " " + Module + " " + Source).contains(Query, Qt::CaseInsensitive)) continue; const int Row = Table->rowCount(); Table->insertRow(Row); auto *TypeItem = new QTableWidgetItem(Type); TypeItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(Entry.Address)); TypeItem->setData(Qt::UserRole + 1, QVariant::fromValue<qulonglong>(Entry.Type)); TypeItem->setData(Qt::UserRole + 2, QVariant::fromValue<qulonglong>(Entry.Flags)); Table->setItem(Row, 0, TypeItem); Table->setItem(Row, 1, new QTableWidgetItem(Address)); Table->setItem(Row, 2, new QTableWidgetItem(Module)); Table->setItem(Row, 3, new QTableWidgetItem(Source)); Table->setRowHeight(Row, KCompactTableRowHeight); } };
     const auto Query = [Page, Status, Refresh, RefreshIndicator, State, Populate, DescribeCallbackType](bool ShowResult) {
         if (State->Refreshing.exchange(true))
             return;
@@ -10868,36 +11015,36 @@ QWidget *CreatePayloadPage()
 
     auto *GeneratePage = new QWidget;
     auto *GenerateLayout = new QVBoxLayout(GeneratePage);
-    ConfigurePageLayout(GenerateLayout, 14);
+    ConfigurePageLayout(GenerateLayout, 10);
 
     auto *ModuleCard = new SimpleCardWidget;
     ModuleCard->setBorderRadius(5);
     auto *ModuleCardLayout = new QVBoxLayout(ModuleCard);
-    ModuleCardLayout->setContentsMargins(16, 16, 16, 16);
-    ModuleCardLayout->setSpacing(10);
+    ModuleCardLayout->setContentsMargins(14, 14, 14, 14);
+    ModuleCardLayout->setSpacing(8);
     ModuleCardLayout->addWidget(MakeLabel("Payload module", 12, KTextMuted, QFont::Normal));
     auto *ModuleRow = new QHBoxLayout;
     ConfigureToolbarLayout(ModuleRow);
     auto *Modules = new ComboBox;
-    Modules->setMinimumWidth(240);
+    Modules->setMinimumWidth(220);
     auto *RefreshModules = MakeButton("Refresh");
     ModuleRow->addWidget(Modules, 1);
     ModuleRow->addWidget(RefreshModules);
     ModuleCardLayout->addLayout(ModuleRow);
     auto *Information = new BodyLabel("Select a payload module to generate output.");
     Information->setWordWrap(true);
-    Information->setMinimumHeight(54);
+    Information->setMinimumHeight(46);
     ModuleCardLayout->addWidget(Information);
     auto *TopLayout = new QHBoxLayout;
-    ConfigureToolbarLayout(TopLayout, 14);
+    ConfigureToolbarLayout(TopLayout, 10);
     TopLayout->addWidget(ModuleCard, 1);
 
     auto *OptionsCard = new SimpleCardWidget;
     OptionsCard->setBorderRadius(5);
     auto *OptionsCardLayout = new QGridLayout(OptionsCard);
-    OptionsCardLayout->setContentsMargins(16, 16, 16, 16);
-    OptionsCardLayout->setHorizontalSpacing(10);
-    OptionsCardLayout->setVerticalSpacing(12);
+    OptionsCardLayout->setContentsMargins(14, 14, 14, 14);
+    OptionsCardLayout->setHorizontalSpacing(8);
+    OptionsCardLayout->setVerticalSpacing(10);
     auto *Browse = MakeButton("Browse");
     auto *Encoder = new ComboBox;
     auto *Nop = new ComboBox;
@@ -10945,7 +11092,8 @@ QWidget *CreatePayloadPage()
     Parameters->verticalHeader()->hide();
     Parameters->setSelectionMode(QAbstractItemView::NoSelection);
     Parameters->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    Parameters->setMinimumHeight(180);
+    Parameters->setMinimumHeight(160);
+    Parameters->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
     GenerateLayout->addLayout(ParametersToolbar);
     GenerateLayout->addWidget(Parameters);
 
@@ -10954,7 +11102,7 @@ QWidget *CreatePayloadPage()
 
     auto *ShellPage = new QWidget;
     auto *ShellLayout = new QVBoxLayout(ShellPage);
-    ConfigurePageLayout(ShellLayout, 14);
+    ConfigurePageLayout(ShellLayout, 10);
     const auto ShellState = std::make_shared<PayloadShellState>();
     ShellState->Page = ShellPage;
 
@@ -10962,13 +11110,13 @@ QWidget *CreatePayloadPage()
     ConnectionCard->setBorderRadius(5);
     ConnectionCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
     auto *ConnectionLayout = new QHBoxLayout(ConnectionCard);
-    ConnectionLayout->setContentsMargins(16, 16, 16, 16);
-    ConnectionLayout->setSpacing(14);
+    ConnectionLayout->setContentsMargins(14, 14, 14, 14);
+    ConnectionLayout->setSpacing(10);
     auto *HostListCard = new QWidget;
-    HostListCard->setMinimumWidth(280);
+    HostListCard->setMinimumWidth(250);
     auto *HostListLayout = new QVBoxLayout(HostListCard);
     HostListLayout->setContentsMargins(0, 0, 0, 0);
-    HostListLayout->setSpacing(10);
+    HostListLayout->setSpacing(8);
     HostListLayout->addWidget(MakeLabel("Hosts", 12, KTextMuted, QFont::Normal));
     auto *HostList = new QListWidget;
     HostList->setMinimumHeight(96);
@@ -11517,7 +11665,7 @@ QWidget *CreateModuleRunPage()
 {
     auto *Page = new QWidget;
     auto *Layout = new QVBoxLayout(Page);
-    ConfigurePageLayout(Layout, 14);
+    ConfigurePageLayout(Layout, 10);
 
     auto *Toolbar = new QHBoxLayout;
     ConfigureToolbarLayout(Toolbar);
@@ -11527,7 +11675,7 @@ QWidget *CreateModuleRunPage()
     Categories->setMinimumWidth(150);
     auto *Modules = new ComboBox;
     Modules->setCurrentIndex(0);
-    Modules->setMinimumWidth(300);
+    Modules->setMinimumWidth(260);
     auto *Refresh = MakeButton("Refresh");
     auto *Execute = MakeButton("Run", true);
     auto *Stop = MakeButton("Stop");
@@ -11557,7 +11705,8 @@ QWidget *CreateModuleRunPage()
     Options->verticalHeader()->hide();
     Options->setSelectionMode(QAbstractItemView::NoSelection);
     Options->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    Options->setMinimumHeight(180);
+    Options->setMinimumHeight(160);
+    Options->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
 
     auto *OutputToolbar = new QHBoxLayout;
     ConfigureToolbarLayout(OutputToolbar);
@@ -11645,7 +11794,7 @@ QWidget *CreateModuleRunPage()
                 });
                 Options->setCellWidget(Row, 2, Editor);
             }
-            Options->setRowHeight(Row, 42);
+            Options->setRowHeight(Row, KCompactTableRowHeight + 4);
             ++Row;
         }
         Execute->setEnabled(!ModuleRunning.load());
@@ -11734,7 +11883,7 @@ QWidget *CreateConsolePage()
 {
     auto *Page = new QWidget;
     auto *Layout = new QVBoxLayout(Page);
-    ConfigurePageLayout(Layout, 10);
+    ConfigurePageLayout(Layout, 8);
     auto *Output = new PlainTextEdit;
     InstallFluentScrollBar(Output, Qt::Vertical);
     Output->setReadOnly(true);
@@ -11841,7 +11990,7 @@ QWidget *CreateModuleManagerPage()
 {
     auto *Page = new QWidget;
     auto *Layout = new QVBoxLayout(Page);
-    ConfigurePageLayout(Layout, 14);
+    ConfigurePageLayout(Layout, 10);
 
     auto *Paths = new BodyLabel;
     Paths->setWordWrap(true);
@@ -11854,7 +12003,7 @@ QWidget *CreateModuleManagerPage()
     auto *Search = new SearchLineEdit;
     Search->setPlaceholderText("Search");
     Search->setClearButtonEnabled(true);
-    Search->setMaximumWidth(360);
+    Search->setMaximumWidth(320);
     auto *Kind = new ComboBox;
     Kind->addItems({"All", "DLL modules", "System drivers"});
     Kind->setCurrentIndex(0);
@@ -11919,7 +12068,7 @@ QWidget *CreateModuleManagerPage()
             auto *PathItem = new QTableWidgetItem(Path);
             PathItem->setToolTip(QString::fromStdString(Module.Description));
             Table->setItem(Row, 4, PathItem);
-            Table->setRowHeight(Row, 38);
+            Table->setRowHeight(Row, KCompactTableRowHeight);
         };
         if (Kind->currentIndex() != 2)
         {
@@ -12066,32 +12215,42 @@ QWidget *CreateKernelInspectorPage()
     auto *Page = new QWidget;
     auto *Layout = new QVBoxLayout(Page);
     ConfigurePageLayout(Layout);
+    const auto ConfigureInspectorMeta = [](QHBoxLayout *MetaLayout) {
+        MetaLayout->setContentsMargins(0, 0, 0, 0);
+        MetaLayout->setSpacing(KCompactToolbarSpacing);
+    };
+    const auto ConfigureInspectorTabLayout = [](QVBoxLayout *TabLayout) {
+        TabLayout->setContentsMargins(0, 0, 0, 0);
+        TabLayout->setSpacing(8);
+    };
 
     auto *Header = new QWidget;
     auto *HeaderLayout = new QHBoxLayout(Header);
     HeaderLayout->setContentsMargins(0, 0, 0, 0);
-    HeaderLayout->setSpacing(12);
+    HeaderLayout->setSpacing(10);
     auto *IconHost = new QWidget;
-    IconHost->setFixedSize(44, 44);
+    IconHost->setFixedSize(40, 40);
     const QColor Accent = ConfiguredColor("AccentColor", KAccent);
     IconHost->setStyleSheet(QString("background: rgba(%1,%2,%3,%4); border-radius: 8px;")
         .arg(Accent.red()).arg(Accent.green()).arg(Accent.blue()).arg(40));
     auto *IconLayout = new QVBoxLayout(IconHost);
     IconLayout->setContentsMargins(0, 0, 0, 0);
-    IconLayout->addWidget(MakeGlyph(Fluent::IconType::SEARCH, 22), 0, Qt::AlignCenter);
+    IconLayout->addWidget(MakeGlyph(Fluent::IconType::SEARCH, 20), 0, Qt::AlignCenter);
     HeaderLayout->addWidget(IconHost);
     auto *TitleLayout = new QVBoxLayout;
     TitleLayout->setContentsMargins(0, 0, 0, 0);
     TitleLayout->setSpacing(2);
     TitleLayout->addWidget(MakeLabel("Kernel Inspector", 17, KTextPrimary, QFont::DemiBold));
-    TitleLayout->addWidget(MakeLabel("MultiDrv V2", 10, KTextMuted, QFont::Medium));
+    TitleLayout->addWidget(MakeLabel("MultiDrv V2 kernel inventory and control surface", 10, KTextMuted, QFont::Medium));
     HeaderLayout->addLayout(TitleLayout, 1);
     auto *Search = new SearchLineEdit;
     Search->setPlaceholderText("Filter current results");
     Search->setClearButtonEnabled(true);
-    Search->setMaximumWidth(300);
+    Search->setMaximumWidth(280);
+    Search->setMinimumWidth(220);
     HeaderLayout->addWidget(Search);
     auto *Status = new BodyLabel("Ready");
+    Status->setMinimumWidth(120);
     auto *Loading = new IndeterminateProgressRing(Page, false);
     Loading->setFixedSize(22, 22);
     Loading->hide();
@@ -12101,27 +12260,37 @@ QWidget *CreateKernelInspectorPage()
     HeaderLayout->addWidget(Refresh);
     Layout->addWidget(Header);
 
-    auto *Tabs = new TabBar;
-    Tabs->setAddButtonVisible(false);
-    Tabs->setTabsClosable(false);
-    Tabs->setMovable(false);
+    auto *TabSelector = new ComboBox;
+    TabSelector->setMinimumWidth(220);
     auto *Pages = new QStackedWidget;
-    Layout->addWidget(Tabs);
-    Layout->addWidget(Pages, 1);
+    auto *Surface = new SimpleCardWidget;
+    Surface->setBorderRadius(5);
+    auto *SurfaceLayout = new QVBoxLayout(Surface);
+    SurfaceLayout->setContentsMargins(14, 14, 14, 14);
+    SurfaceLayout->setSpacing(10);
+    auto *SelectorLayout = new QHBoxLayout;
+    ConfigureToolbarLayout(SelectorLayout);
+    SelectorLayout->addWidget(MakeLabel("Section", 11, KTextMuted, QFont::Medium));
+    SelectorLayout->addWidget(TabSelector);
+    SelectorLayout->addStretch();
+    SurfaceLayout->addLayout(SelectorLayout);
+    SurfaceLayout->addWidget(Pages, 1);
+    Layout->addWidget(Surface, 1);
     auto State = std::make_shared<std::vector<InspectorTab>>();
     auto DebugStateUi = std::make_shared<DebugWidgets>();
     {
         auto *TabPage = new QWidget;
         auto *TabLayout = new QVBoxLayout(TabPage);
-        TabLayout->setContentsMargins(0, 0, 0, 0);
-        TabLayout->setSpacing(8);
+        ConfigureInspectorTabLayout(TabLayout);
 
         auto *MetaLayout = new QHBoxLayout;
-        MetaLayout->setContentsMargins(2, 0, 2, 0);
+        ConfigureInspectorMeta(MetaLayout);
+        auto *DebugCaption = MakeLabel("Kernel debug variables", 11, KTextMuted, QFont::Medium);
         DebugStateUi->Summary = new BodyLabel("Current debug state: Unknown");
         DebugStateUi->Count = new BodyLabel("0 variables");
         DebugStateUi->Enable = new PushButton("EnableDebug");
         DebugStateUi->Disable = new PushButton("DisableDebug");
+        MetaLayout->addWidget(DebugCaption);
         MetaLayout->addWidget(DebugStateUi->Summary);
         MetaLayout->addStretch();
         MetaLayout->addWidget(DebugStateUi->Count);
@@ -12141,7 +12310,7 @@ QWidget *CreateKernelInspectorPage()
         DebugStateUi->Table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Stretch);
         TabLayout->addWidget(DebugStateUi->Table, 1);
 
-        Tabs->addTab("kernel-debug", "Debug", Fluent::IconType::DEVELOPER_TOOLS);
+        TabSelector->addItem("Debug");
         Pages->addWidget(TabPage);
     }
     const std::array<std::tuple<DWORD, const char*, const wchar_t*, Fluent::IconType>, 8> Definitions{{
@@ -12158,11 +12327,12 @@ QWidget *CreateKernelInspectorPage()
     for (const auto &[Ioctl, Name, Path, Icon] : Definitions) {
         auto *TabPage = new QWidget;
         auto *TabLayout = new QVBoxLayout(TabPage);
-        TabLayout->setContentsMargins(0, 0, 0, 0);
-        TabLayout->setSpacing(8);
+        ConfigureInspectorTabLayout(TabLayout);
         auto *MetaLayout = new QHBoxLayout;
-        MetaLayout->setContentsMargins(2, 0, 2, 0);
+        ConfigureInspectorMeta(MetaLayout);
+        auto *SectionLabel = MakeLabel(QString::fromLatin1(Name), 11, KTextMuted, QFont::Medium);
         auto *Count = new BodyLabel("0 records");
+        MetaLayout->addWidget(SectionLabel);
         MetaLayout->addStretch();
         MetaLayout->addWidget(Count);
         TabLayout->addLayout(MetaLayout);
@@ -12178,16 +12348,17 @@ QWidget *CreateKernelInspectorPage()
         Table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
         Table->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
         TabLayout->addWidget(Table, 1);
-        Tabs->addTab(QString("kernel-%1").arg(TabIndex++), Name, Icon);
+        (void)Icon;
+        TabSelector->addItem(QString::fromLatin1(Name));
         Pages->addWidget(TabPage);
         State->push_back({Ioctl, QString::fromWCharArray(Path), Table, Count});
     }
     
     auto *SyncTab = new QWidget;
     auto *SyncLayout = new QVBoxLayout(SyncTab);
-    SyncLayout->setContentsMargins(0, 0, 0, 0);
-    SyncLayout->setSpacing(8);
-    auto *SyncMeta = new QHBoxLayout; SyncMeta->setContentsMargins(2, 0, 2, 0);
+    ConfigureInspectorTabLayout(SyncLayout);
+    auto *SyncMeta = new QHBoxLayout; ConfigureInspectorMeta(SyncMeta);
+    SyncMeta->addWidget(MakeLabel("Synchronization objects", 11, KTextMuted, QFont::Medium));
     auto *SyncCount = new BodyLabel("0 objects");
     SyncMeta->addStretch(); SyncMeta->addWidget(SyncCount);
     SyncLayout->addLayout(SyncMeta);
@@ -12195,16 +12366,19 @@ QWidget *CreateKernelInspectorPage()
     SyncTable->setSortingEnabled(true);
     SyncTable->setTextElideMode(Qt::ElideRight);
     SyncTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    SyncTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    SyncTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    SyncTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     SyncLayout->addWidget(SyncTable, 1);
-    Tabs->addTab("kernel-sync", "Sync Objects", Fluent::IconType::SYNC);
+    TabSelector->addItem("Sync Objects");
     Pages->addWidget(SyncTab);
 
     
     auto *SessTab = new QWidget;
     auto *SessLayout = new QVBoxLayout(SessTab);
-    SessLayout->setContentsMargins(0, 0, 0, 0);
-    SessLayout->setSpacing(8);
-    auto *SessMeta = new QHBoxLayout; SessMeta->setContentsMargins(2, 0, 2, 0);
+    ConfigureInspectorTabLayout(SessLayout);
+    auto *SessMeta = new QHBoxLayout; ConfigureInspectorMeta(SessMeta);
+    SessMeta->addWidget(MakeLabel("Session inventory", 11, KTextMuted, QFont::Medium));
     auto *SessCount = new BodyLabel("0 sessions");
     SessMeta->addStretch(); SessMeta->addWidget(SessCount);
     SessLayout->addLayout(SessMeta);
@@ -12212,18 +12386,20 @@ QWidget *CreateKernelInspectorPage()
     SessTable->setSortingEnabled(true);
     SessTable->setTextElideMode(Qt::ElideRight);
     SessTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    SessTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    SessTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     SessTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     SessTable->setContextMenuPolicy(Qt::CustomContextMenu);
     SessLayout->addWidget(SessTable, 1);
-    Tabs->addTab("kernel-session", "Sessions", Fluent::IconType::PEOPLE);
+    TabSelector->addItem("Sessions");
     Pages->addWidget(SessTab);
 
     
     auto *FwTab = new QWidget;
     auto *FwLayout = new QVBoxLayout(FwTab);
-    FwLayout->setContentsMargins(0, 0, 0, 0);
-    FwLayout->setSpacing(8);
-    auto *FwMeta = new QHBoxLayout; FwMeta->setContentsMargins(2, 0, 2, 0);
+    ConfigureInspectorTabLayout(FwLayout);
+    auto *FwMeta = new QHBoxLayout; ConfigureInspectorMeta(FwMeta);
+    FwMeta->addWidget(MakeLabel("Firewall rules", 11, KTextMuted, QFont::Medium));
     auto *FwCount = new BodyLabel("0 rules");
     auto *FwAddBtn = new PushButton("Add Rule");
     FwMeta->addStretch(); FwMeta->addWidget(FwCount); FwMeta->addWidget(FwAddBtn);
@@ -12232,13 +12408,17 @@ QWidget *CreateKernelInspectorPage()
     FwTable->setSortingEnabled(true);
     FwTable->setTextElideMode(Qt::ElideRight);
     FwTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    FwTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    FwTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    FwTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    FwTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
     FwTable->setContextMenuPolicy(Qt::CustomContextMenu);
     FwLayout->addWidget(FwTable, 1);
-    Tabs->addTab("kernel-fw", "Firewall", Fluent::IconType::GLOBE);
+    TabSelector->addItem("Firewall");
     Pages->addWidget(FwTab);
 
-    QObject::connect(Tabs, &TabBar::currentChanged, Pages, &QStackedWidget::setCurrentIndex);
-    QObject::connect(Pages, &QStackedWidget::currentChanged, Tabs, &TabBar::setCurrentIndex);
+    QObject::connect(TabSelector, &ComboBox::currentIndexChanged, Pages, &QStackedWidget::setCurrentIndex);
+    QObject::connect(Pages, &QStackedWidget::currentChanged, TabSelector, &ComboBox::setCurrentIndex);
     const auto ApplyFilter = [Search, State, DebugStateUi, SyncTable, SessTable, FwTable] {
         const QString Query = Search->text().trimmed();
         const auto FilterTable = [&Query](QTableWidget *Table) {
@@ -12623,11 +12803,11 @@ QWidget *CreateSettingsPage()
     const auto AddSetting = [Layout](const QString &Title, const QString &Description, QWidget *Control) {
         auto *Row = new QFrame;
         Row->setObjectName("settingRow");
-        Row->setMinimumHeight(72);
+        Row->setMinimumHeight(64);
         auto *RowLayout = new QHBoxLayout(Row);
-        RowLayout->setContentsMargins(18, 10, 18, 10);
+        RowLayout->setContentsMargins(16, 8, 16, 8);
         auto *TextLayout = new QVBoxLayout;
-        TextLayout->setSpacing(3);
+        TextLayout->setSpacing(2);
         TextLayout->addWidget(MakeLabel(Title, 10, KTextPrimary, QFont::DemiBold));
         TextLayout->addWidget(MakeLabel(Description, 9, KTextMuted));
         RowLayout->addLayout(TextLayout, 1);
@@ -12752,10 +12932,40 @@ QWidget *CreateSettingsPage()
         QObject::connect(ColorButton, &QPushButton::clicked, Content, [Content, ColorButton, UpdateColorButton, Key, Fallback, Title, ThemeUiSyncing] {
             if (*ThemeUiSyncing)
                 return;
-            const QColor Selected = QColorDialog::getColor(ConfiguredColor(Key, Fallback), Content->window(),
-                                                           "Select " + Key, QColorDialog::ShowAlphaChannel);
-            if (!Selected.isValid())
+            ColorDialog Dialog(ConfiguredColor(Key, Fallback), "Select " + Title, Content->window(), true);
+            const QMap<QString, QString> ColorDialogTranslations{
+                {QStringLiteral("\u7f16\u8f91\u989c\u8272"), "Edit color"},
+                {QStringLiteral("\u65b0\u989c\u8272"), "New color"},
+                {QStringLiteral("\u539f\u989c\u8272"), "Original color"},
+                {QStringLiteral("\u5f53\u524d\u989c\u8272"), "Current color"},
+                {QStringLiteral("\u7ea2\u8272"), "Red"},
+                {QStringLiteral("\u7eff\u8272"), "Green"},
+                {QStringLiteral("\u84dd\u8272"), "Blue"},
+                {QStringLiteral("\u4e0d\u900f\u660e\u5ea6"), "Opacity"},
+                {QStringLiteral("\u900f\u660e\u5ea6"), "Opacity"},
+                {QStringLiteral("\u900f\u660e"), "Opacity"},
+                {QStringLiteral("\u786e\u5b9a"), "OK"},
+                {QStringLiteral("\u53d6\u6d88"), "Cancel"},
+            };
+            const auto TranslateColorDialog = [&Dialog, &ColorDialogTranslations] {
+                for (QLabel *Label : Dialog.findChildren<QLabel *>())
+                {
+                    const auto It = ColorDialogTranslations.constFind(Label->text().trimmed());
+                    if (It != ColorDialogTranslations.cend())
+                        Label->setText(*It);
+                }
+                for (QAbstractButton *Button : Dialog.findChildren<QAbstractButton *>())
+                {
+                    const auto It = ColorDialogTranslations.constFind(Button->text().trimmed());
+                    if (It != ColorDialogTranslations.cend())
+                        Button->setText(*It);
+                }
+            };
+            TranslateColorDialog();
+            QTimer::singleShot(0, &Dialog, TranslateColorDialog);
+            if (Dialog.exec() != QDialog::Accepted)
                 return;
+            const QColor Selected = Dialog.color();
             SetConfigurationValueTransient("Theme", Key, Selected.name(QColor::HexRgb).toUpper());
             UpdateColorButton(ColorButton, Selected);
             QueueThemeApply(Content->window(), true, true);
@@ -13322,17 +13532,17 @@ class WindowsToolWindow final : public QWidget
         auto *Content = new QWidget;
         Content->setObjectName("Content");
         auto *Layout = new QVBoxLayout(Content);
-        Layout->setContentsMargins(32, 27, 32, 32);
+        Layout->setContentsMargins(24, 20, 24, 24);
         Layout->setSpacing(0);
 
-        TitleLabelWidget = MakeLabel("", 23, KAccent, QFont::DemiBold);
-        TitleLabelWidget->setFixedHeight(46);
+        TitleLabelWidget = MakeLabel("", 22, KAccent, QFont::DemiBold);
+        TitleLabelWidget->setFixedHeight(40);
         SubtitleLabelWidget = MakeLabel("", 11, KTextMuted);
-        SubtitleLabelWidget->setFixedHeight(30);
+        SubtitleLabelWidget->setFixedHeight(24);
         Layout->addWidget(TitleLabelWidget);
-        Layout->addSpacing(8);
+        Layout->addSpacing(4);
         Layout->addWidget(SubtitleLabelWidget);
-        Layout->addSpacing(22);
+        Layout->addSpacing(14);
 
         PageStack = new StackedWidget(nullptr, AnimationType::PopUp);
         PageStack->setAnimationEnabled(false);

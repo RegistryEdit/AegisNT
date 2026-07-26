@@ -1,5 +1,5 @@
 #define AppName "AegisNT"
-#define AppVersion "2.0.2"
+#define AppVersion "3.1.0"
 #define AppPublisher "AegisNT"
 #define AppExeName "AegisNT.exe"
 #define SourceDir "C:\Users\RegistryEdit\Desktop\App\AegisNT"
