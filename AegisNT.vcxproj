@@ -117,6 +117,32 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="AegisNT.cpp" />
+    <ClCompile Include="Source\AppContext.cpp" />
+    <ClCompile Include="Source\Pages\PageRegistry.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\AppContext.h" />
+    <ClInclude Include="Source\Pages\PageFactory.h" />
+    <ClInclude Include="Source\Pages\PageRegistry.h" />
+    <None Include="Source\Core\Configuration.inc" />
+    <None Include="Source\Core\PayloadShell.inc" />
+    <None Include="Source\Core\ModuleRuntime.inc" />
+    <None Include="Source\Pages\TaskManagerPage.inc" />
+    <None Include="Source\Pages\MonitorPage.inc" />
+    <None Include="Source\Pages\RegistryPage.inc" />
+    <None Include="Source\Pages\FilePage.inc" />
+    <None Include="Source\Pages\WindowPage.inc" />
+    <None Include="Source\Pages\DriverPage.inc" />
+    <None Include="Source\Pages\ServicePage.inc" />
+    <None Include="Source\Pages\SettingsPage.inc" />
+    <None Include="Source\Pages\MemoryPage.inc" />
+    <None Include="Source\Pages\TablePage.inc" />
+    <None Include="Source\Pages\CallbackPage.inc" />
+    <None Include="Source\Pages\PayloadPage.inc" />
+    <None Include="Source\Pages\ModuleRunPage.inc" />
+    <None Include="Source\Pages\ConsolePage.inc" />
+    <None Include="Source\Pages\ModuleManagerPage.inc" />
+    <None Include="Source\Pages\KernelInspectorPage.inc" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
