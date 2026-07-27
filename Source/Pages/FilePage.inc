@@ -584,9 +584,7 @@ class FileExplorerPage final : public QWidget
         WatchedDisplayPath = QDir::toNativeSeparators(AbsoluteDirectory);
         WatchedNtPath = NtPath;
         ClearMonitorEvents();
-        MonitorStatusLabel->setText("Running");
-        MonitorDirectoryLabel->setText(WatchedDisplayPath);
-        MonitorStopButton->setEnabled(true);
+        UpdateMonitorWatchUi(true);
         if (SwitchToMonitorTab && TabBarWidget)
             TabBarWidget->setCurrentIndex(2);
         if (ShowNotice)
@@ -604,14 +602,21 @@ class FileExplorerPage final : public QWidget
         MonitorDrvClearWatchDirectory();
         WatchedDisplayPath.clear();
         WatchedNtPath.clear();
-        if (MonitorStatusLabel)
-            MonitorStatusLabel->setText("Stopped");
-        if (MonitorDirectoryLabel)
-            MonitorDirectoryLabel->setText("-");
-        if (MonitorStopButton)
-            MonitorStopButton->setEnabled(false);
+        UpdateMonitorWatchUi(false);
         if (ShowNotice)
             ShowSuccessNotice(this, "File monitor", "Directory monitoring stopped.");
+    }
+
+    void UpdateMonitorWatchUi(bool Running)
+    {
+        if (MonitorStatusLabel)
+            MonitorStatusLabel->setText(Running ? "Running" : "Stopped");
+        if (MonitorDirectoryLabel)
+            MonitorDirectoryLabel->setText(Running
+                                              ? (WatchedDisplayPath.isEmpty() ? WatchedNtPath : WatchedDisplayPath)
+                                              : "-");
+        if (MonitorStopButton)
+            MonitorStopButton->setEnabled(Running);
     }
 
     void AppendMonitorEvent(const MonitorEvent &Event)

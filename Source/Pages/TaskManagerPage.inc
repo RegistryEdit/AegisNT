@@ -126,6 +126,7 @@ class TaskManagerPage final : public QWidget
         });
 
         auto *RefreshTimer = new QTimer(this);
+        AutoRefreshTimer = RefreshTimer;
         QObject::connect(RefreshTimer, &QTimer::timeout, this, [this] {
             if (isVisible()) RefreshProcesses();
         });
@@ -2454,6 +2455,7 @@ class TaskManagerPage final : public QWidget
 
     SearchLineEdit *SearchEdit = nullptr;
     QTimer *SearchDebounceTimer = nullptr;
+    QTimer *AutoRefreshTimer = nullptr;
     BodyLabel *StatusLabel = nullptr;
     PushButton *RefreshButton = nullptr;
     IndeterminateProgressRing *RefreshIndicator = nullptr;
@@ -2473,7 +2475,16 @@ class TaskManagerPage final : public QWidget
     void showEvent(QShowEvent *Event) override
     {
         QWidget::showEvent(Event);
+        if (AutoRefreshTimer)
+            AutoRefreshTimer->start(10000);
         RefreshProcesses();
+    }
+
+    void hideEvent(QHideEvent *Event) override
+    {
+        if (AutoRefreshTimer)
+            AutoRefreshTimer->stop();
+        QWidget::hideEvent(Event);
     }
 };
 

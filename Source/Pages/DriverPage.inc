@@ -359,19 +359,44 @@ class DriverManagerPage final : public QWidget
         auto *Dialog = new QDialog(this); Dialog->setAttribute(Qt::WA_DeleteOnClose);
         Dialog->setWindowTitle("Driver Inspector - " + Name); Dialog->resize(1040, 680);
         auto *Layout = new QVBoxLayout(Dialog);
-        auto *Tabs = new QTabWidget;
+        ConfigurePageLayout(Layout);
+        auto *Tabs = new TabBar;
+        auto *Pages = new QStackedWidget;
         auto *Overview = MakeTable({"Kind", "Name", "Address", "Value", "Source"});
         auto *Dispatch = MakeTable({"Major function", "Address", "Source"});
         auto *Devices = MakeTable({"Device", "Attached", "Type", "Characteristics", "Flags", "Stack"});
-        Tabs->addTab(Overview, "Overview"); Tabs->addTab(Dispatch, "Dispatch"); Tabs->addTab(Devices, "Devices"); Layout->addWidget(Tabs, 1);
-        auto *Close = MakeButton("Close", true); Layout->addWidget(Close, 0, Qt::AlignRight);
+        Tabs->addTab("overview", "Overview", Fluent::IconType::DOCUMENT);
+        Tabs->addTab("dispatch", "Dispatch", Fluent::IconType::CODE);
+        Tabs->addTab("devices", "Devices", Fluent::IconType::FOLDER);
+        Pages->addWidget(Overview);
+        Pages->addWidget(Dispatch);
+        Pages->addWidget(Devices);
+        QObject::connect(Tabs, &TabBar::currentChanged, Pages, &QStackedWidget::setCurrentIndex);
+        QObject::connect(Pages, &QStackedWidget::currentChanged, Tabs, &TabBar::setCurrentIndex);
+        Layout->addWidget(Tabs);
+        Layout->addWidget(Pages, 1);
+
+        auto *BottomLayout = new QHBoxLayout;
+        ConfigureToolbarLayout(BottomLayout);
+        auto *Loading = new IndeterminateProgressRing(Dialog, false);
+        Loading->setFixedSize(22, 22);
+        Loading->start();
+        auto *Close = MakeButton("Close", true);
+        BottomLayout->addWidget(Loading, 0, Qt::AlignVCenter);
+        BottomLayout->addStretch(1);
+        BottomLayout->addWidget(Close, 0, Qt::AlignRight | Qt::AlignVCenter);
+        Layout->addLayout(BottomLayout);
         QObject::connect(Close, &QPushButton::clicked, Dialog, &QDialog::accept); Dialog->show();
         QPointer<QDialog> SafeDialog(Dialog);
-        std::thread([SafeDialog, Name, Overview, Dispatch, Devices] {
+        std::thread([SafeDialog, Name, Overview, Dispatch, Devices, Loading] {
             std::vector<MDV2_RECORD> Records; MDV2_LIST_HEADER Header{};
             QueryNamedDriverRecordsV2(Name.toStdWString(), Records, &Header);
-            QMetaObject::invokeMethod(qApp, [SafeDialog, Overview, Dispatch, Devices, Records = std::move(Records), Header] {
+            QMetaObject::invokeMethod(qApp, [SafeDialog, Overview, Dispatch, Devices, Loading, Records = std::move(Records), Header] {
                 if (!SafeDialog) return;
+                if (Loading) {
+                    Loading->stop();
+                    Loading->hide();
+                }
                 const auto Add = [](QTableWidget *Table, const QStringList &Values) {
                     const int Row = Table->rowCount(); Table->insertRow(Row);
                     for (int Column = 0; Column < Values.size(); ++Column) Table->setItem(Row, Column, new QTableWidgetItem(Values[Column]));

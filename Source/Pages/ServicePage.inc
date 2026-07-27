@@ -12,6 +12,9 @@ public:
         ConfigurePageLayout(Layout);
         auto *Toolbar = new QHBoxLayout;
         ConfigureToolbarLayout(Toolbar);
+        RefreshIndicator = new IndeterminateProgressRing(this, false);
+        RefreshIndicator->setFixedSize(22, 22);
+        RefreshIndicator->hide();
         RefreshButton = MakeButton("Refresh", true);
         SearchEdit = new SearchLineEdit;
         SearchEdit->setPlaceholderText("Search service name, display, or path");
@@ -19,86 +22,119 @@ public:
         SearchEdit->setMaximumWidth(360);
         Toolbar->addWidget(SearchEdit);
         Toolbar->addStretch();
+        Toolbar->addWidget(RefreshIndicator);
         Toolbar->addWidget(RefreshButton);
         Layout->addLayout(Toolbar);
         Table = MakeTable({"Service", "Display Name", "State", "Start Type", "PID", "Path"});
         Table->setContextMenuPolicy(Qt::CustomContextMenu);
         Layout->addWidget(Table, 1);
         QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { Populate(); });
-        QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { Refresh(); ShowSuccessNotice(this, "Service", "Service list refreshed."); });
+        QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { Refresh(true); });
         QObject::connect(Table, &QWidget::customContextMenuRequested, this, [this](const QPoint &P) { ShowMenu(P); });
         Refresh();
     }
 
 private:
-    void Refresh()
+    void Refresh(bool ShowResult = false)
     {
-        Rows.clear();
-        SC_HANDLE Scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
-        if (!Scm) return;
-        DWORD Needed = 0, Count = 0, Resume = 0;
-        EnumServicesStatusExW(Scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER,
-            SERVICE_STATE_ALL, NULL, 0, &Needed, &Count, &Resume, NULL);
-        if (Needed == 0) { CloseServiceHandle(Scm); return; }
-        std::vector<BYTE> Buf(Needed);
-        if (EnumServicesStatusExW(Scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER,
-            SERVICE_STATE_ALL, Buf.data(), Needed, &Needed, &Count, &Resume, NULL))
-        {
-            auto *Services = reinterpret_cast<LPENUM_SERVICE_STATUS_PROCESSW>(Buf.data());
-            for (DWORD i = 0; i < Count; i++)
+        if (Refreshing.exchange(true))
+            return;
+        RefreshButton->setEnabled(false);
+        RefreshButton->setText("Refreshing...");
+        RefreshIndicator->show();
+        RefreshIndicator->start();
+        QPointer<ServiceManagerPage> Page(this);
+        std::thread([Page, ShowResult] {
+            std::vector<ServiceRow> Result;
+            SC_HANDLE Scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
+            if (Scm)
             {
-                ServiceRow Row;
-                Row.Name = QString::fromWCharArray(Services[i].lpServiceName);
-                Row.DisplayName = QString::fromWCharArray(Services[i].lpDisplayName);
-                Row.Pid = Services[i].ServiceStatusProcess.dwProcessId;
-                Row.Type = Services[i].ServiceStatusProcess.dwServiceType;
-
-                switch (Services[i].ServiceStatusProcess.dwCurrentState)
+                DWORD Needed = 0, Count = 0, Resume = 0;
+                EnumServicesStatusExW(Scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER,
+                    SERVICE_STATE_ALL, NULL, 0, &Needed, &Count, &Resume, NULL);
+                if (Needed != 0)
                 {
-                case SERVICE_RUNNING: Row.State = "Running"; break;
-                case SERVICE_STOPPED: Row.State = "Stopped"; break;
-                case SERVICE_PAUSED: Row.State = "Paused"; break;
-                case SERVICE_START_PENDING: Row.State = "Starting..."; break;
-                case SERVICE_STOP_PENDING: Row.State = "Stopping..."; break;
-                default: Row.State = QString("Unknown(%1)").arg(Services[i].ServiceStatusProcess.dwCurrentState); break;
-                }
-
-                SC_HANDLE Svc = OpenServiceW(Scm, Services[i].lpServiceName, SERVICE_QUERY_CONFIG);
-                if (Svc)
-                {
-                    DWORD CfgSize = 0;
-                    QueryServiceConfigW(Svc, NULL, 0, &CfgSize);
-                    if (CfgSize >= sizeof(QUERY_SERVICE_CONFIGW))
+                    std::vector<BYTE> Buf(Needed);
+                    if (EnumServicesStatusExW(Scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER,
+                        SERVICE_STATE_ALL, Buf.data(), Needed, &Needed, &Count, &Resume, NULL))
                     {
-                        std::vector<BYTE> CfgBuf(CfgSize);
-                        auto *Cfg = reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(CfgBuf.data());
-                        DWORD CfgOutSize = static_cast<DWORD>(CfgBuf.size());
-                        if (QueryServiceConfigW(Svc, Cfg, CfgOutSize, &CfgSize))
+                        auto *Services = reinterpret_cast<LPENUM_SERVICE_STATUS_PROCESSW>(Buf.data());
+                        for (DWORD i = 0; i < Count; i++)
                         {
-                            Row.BinaryPath = QString::fromWCharArray(Cfg->lpBinaryPathName);
-                            switch (Cfg->dwStartType)
+                            ServiceRow Row;
+                            Row.Name = QString::fromWCharArray(Services[i].lpServiceName);
+                            Row.DisplayName = QString::fromWCharArray(Services[i].lpDisplayName);
+                            Row.Pid = Services[i].ServiceStatusProcess.dwProcessId;
+                            Row.Type = Services[i].ServiceStatusProcess.dwServiceType;
+
+                            switch (Services[i].ServiceStatusProcess.dwCurrentState)
                             {
-                            case SERVICE_BOOT_START: Row.StartType = "Boot"; break;
-                            case SERVICE_SYSTEM_START: Row.StartType = "System"; break;
-                            case SERVICE_AUTO_START: Row.StartType = "Auto"; break;
-                            case SERVICE_DEMAND_START: Row.StartType = "Manual"; break;
-                            case SERVICE_DISABLED: Row.StartType = "Disabled"; break;
-                            default: Row.StartType = QString::number(Cfg->dwStartType); break;
+                            case SERVICE_RUNNING: Row.State = "Running"; break;
+                            case SERVICE_STOPPED: Row.State = "Stopped"; break;
+                            case SERVICE_PAUSED: Row.State = "Paused"; break;
+                            case SERVICE_START_PENDING: Row.State = "Starting..."; break;
+                            case SERVICE_STOP_PENDING: Row.State = "Stopping..."; break;
+                            default: Row.State = QString("Unknown(%1)").arg(Services[i].ServiceStatusProcess.dwCurrentState); break;
                             }
+
+                            SC_HANDLE Svc = OpenServiceW(Scm, Services[i].lpServiceName, SERVICE_QUERY_CONFIG);
+                            if (Svc)
+                            {
+                                DWORD CfgSize = 0;
+                                QueryServiceConfigW(Svc, NULL, 0, &CfgSize);
+                                if (CfgSize >= sizeof(QUERY_SERVICE_CONFIGW))
+                                {
+                                    std::vector<BYTE> CfgBuf(CfgSize);
+                                    auto *Cfg = reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(CfgBuf.data());
+                                    DWORD CfgOutSize = static_cast<DWORD>(CfgBuf.size());
+                                    if (QueryServiceConfigW(Svc, Cfg, CfgOutSize, &CfgSize))
+                                    {
+                                        Row.BinaryPath = QString::fromWCharArray(Cfg->lpBinaryPathName);
+                                        switch (Cfg->dwStartType)
+                                        {
+                                        case SERVICE_BOOT_START: Row.StartType = "Boot"; break;
+                                        case SERVICE_SYSTEM_START: Row.StartType = "System"; break;
+                                        case SERVICE_AUTO_START: Row.StartType = "Auto"; break;
+                                        case SERVICE_DEMAND_START: Row.StartType = "Manual"; break;
+                                        case SERVICE_DISABLED: Row.StartType = "Disabled"; break;
+                                        default: Row.StartType = QString::number(Cfg->dwStartType); break;
+                                        }
+                                    }
+                                }
+                                CloseServiceHandle(Svc);
+                            }
+                            else
+                            {
+                                Row.BinaryPath = "-";
+                                Row.StartType = "-";
+                            }
+                            Result.push_back(std::move(Row));
                         }
                     }
-                    CloseServiceHandle(Svc);
                 }
-                else
-                {
-                    Row.BinaryPath = "-";
-                    Row.StartType = "-";
-                }
-                Rows.push_back(std::move(Row));
+                CloseServiceHandle(Scm);
             }
-        }
-        CloseServiceHandle(Scm);
-        Populate();
+
+            QMetaObject::invokeMethod(qApp, [Page, Result = std::move(Result), ShowResult]() mutable {
+                if (!Page)
+                    return;
+                Page->Refreshing = false;
+                Page->Rows = std::move(Result);
+                if (Page->RefreshIndicator)
+                {
+                    Page->RefreshIndicator->stop();
+                    Page->RefreshIndicator->hide();
+                }
+                if (Page->RefreshButton)
+                {
+                    Page->RefreshButton->setText("Refresh");
+                    Page->RefreshButton->setEnabled(true);
+                }
+                Page->Populate();
+                if (ShowResult)
+                    ShowSuccessNotice(Page, "Service", "Service list refreshed.");
+            }, Qt::QueuedConnection);
+        }).detach();
     }
 
     void Populate()
@@ -197,7 +233,9 @@ private:
 
     SearchLineEdit *SearchEdit{};
     PushButton *RefreshButton{};
+    IndeterminateProgressRing *RefreshIndicator{};
     TableWidget *Table{};
     std::vector<ServiceRow> Rows;
+    std::atomic_bool Refreshing = false;
 };
 

@@ -57,9 +57,13 @@ class WindowManagerPage final : public QWidget
         SearchEdit->setPlaceholderText("Search title, class, process, PID, or HWND");
         SearchEdit->setClearButtonEnabled(true);
         SearchEdit->setMaximumWidth(360);
-        auto *RefreshButton = MakeButton("Refresh", true);
+        RefreshIndicator = new IndeterminateProgressRing(this, false);
+        RefreshIndicator->setFixedSize(22, 22);
+        RefreshIndicator->hide();
+        RefreshButton = MakeButton("Refresh", true);
         Toolbar->addWidget(SearchEdit);
         Toolbar->addStretch();
+        Toolbar->addWidget(RefreshIndicator);
         Toolbar->addWidget(RefreshButton);
         WinLayout->addLayout(Toolbar);
         WindowTable = MakeTable({"HWND", "Title", "Class", "Process", "PID", "Style", "State", "Rect", "Dpi"});
@@ -102,7 +106,7 @@ class WindowManagerPage final : public QWidget
         SearchDebounceTimer->setInterval(KSearchDebounceMs);
         QObject::connect(SearchDebounceTimer, &QTimer::timeout, this, [this] { Populate(); });
         QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { SearchDebounceTimer->start(); });
-        QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { Refresh(); ShowSuccessNotice(this, "Window", "Window list refreshed."); });
+        QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { Refresh(true); });
         QObject::connect(WindowTable, &QWidget::customContextMenuRequested, this,
                          [this](const QPoint &Position) { ShowMenu(Position); });
         QObject::connect(UnprotectButton, &QPushButton::clicked, this, &WindowManagerPage::UnprotectSelected);
@@ -122,54 +126,82 @@ class WindowManagerPage final : public QWidget
         return QString::fromWCharArray(Text.c_str());
     }
 
-    void Refresh()
+    void Refresh(bool ShowResult = false)
     {
-        Rows.clear();
-        EnumWindows([](HWND Handle, LPARAM Parameter) -> BOOL {
-            auto *Page = reinterpret_cast<WindowManagerPage *>(Parameter);
-            WindowRow Row;
-            Row.Handle = Handle;
-            Row.Title = ReadWindowText(Handle);
-            wchar_t ClassName[256]{};
-            GetClassNameW(Handle, ClassName, 256);
-            Row.ClassName = QString::fromWCharArray(ClassName);
-            Row.Tid = GetWindowThreadProcessId(Handle, &Row.Pid);
-            Row.Visible = IsWindowVisible(Handle) != FALSE;
-            Row.Enabled = IsWindowEnabled(Handle) != FALSE;
-            Row.Minimized = IsIconic(Handle) != FALSE;
-            Row.Maximized = IsZoomed(Handle) != FALSE;
-            Row.IsHung = IsHungAppWindow(Handle) != FALSE;
-            Row.IsUnicode = IsWindowUnicode(Handle) != FALSE;
-            Row.Style = GetWindowLongW(Handle, GWL_STYLE);
-            Row.ExStyle = GetWindowLongW(Handle, GWL_EXSTYLE);
-            Row.IsTopmost = (Row.ExStyle & WS_EX_TOPMOST) != 0;
-            Row.IsLayered = (Row.ExStyle & WS_EX_LAYERED) != 0;
-            Row.IsToolWindow = (Row.ExStyle & WS_EX_TOOLWINDOW) != 0;
-            Row.IsAppWindow = (Row.ExStyle & WS_EX_APPWINDOW) != 0;
-            Row.IsPopup = (Row.Style & WS_POPUP) != 0;
-            Row.IsChild = (Row.Style & WS_CHILD) != 0;
-            Row.ParentHwnd = GetParent(Handle);
-            Row.OwnerHwnd = GetWindow(Handle, GW_OWNER);
-            Row.Dpi = GetDpiForWindow(Handle);
-            GetWindowRect(Handle, &Row.Rect);
-            GetClientRect(Handle, &Row.ClientRect);
-            HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Row.Pid);
-            if (Process)
-            {
-                wchar_t Path[32768]{};
-                DWORD Size = 32768;
-                if (QueryFullProcessImageNameW(Process, 0, Path, &Size))
-                    Row.ProcessPath = QString::fromWCharArray(Path, static_cast<qsizetype>(Size));
-                CloseHandle(Process);
-            }
-            if (!Row.Title.isEmpty() || !Row.ClassName.isEmpty()) Page->Rows.push_back(std::move(Row));
-            return TRUE;
-        }, reinterpret_cast<LPARAM>(this));
-        std::sort(Rows.begin(), Rows.end(), [](const WindowRow &Left, const WindowRow &Right) {
-            if (Left.Visible != Right.Visible) return Left.Visible > Right.Visible;
-            return Left.Pid < Right.Pid;
-        });
-        Populate();
+        if (Refreshing.exchange(true))
+            return;
+        RefreshButton->setEnabled(false);
+        RefreshButton->setText("Refreshing...");
+        RefreshIndicator->show();
+        RefreshIndicator->start();
+        QPointer<WindowManagerPage> Page(this);
+        std::thread([Page, ShowResult] {
+            std::vector<WindowRow> Result;
+            EnumWindows([](HWND Handle, LPARAM Parameter) -> BOOL {
+                auto *Rows = reinterpret_cast<std::vector<WindowRow> *>(Parameter);
+                WindowRow Row;
+                Row.Handle = Handle;
+                Row.Title = ReadWindowText(Handle);
+                wchar_t ClassName[256]{};
+                GetClassNameW(Handle, ClassName, 256);
+                Row.ClassName = QString::fromWCharArray(ClassName);
+                Row.Tid = GetWindowThreadProcessId(Handle, &Row.Pid);
+                Row.Visible = IsWindowVisible(Handle) != FALSE;
+                Row.Enabled = IsWindowEnabled(Handle) != FALSE;
+                Row.Minimized = IsIconic(Handle) != FALSE;
+                Row.Maximized = IsZoomed(Handle) != FALSE;
+                Row.IsHung = IsHungAppWindow(Handle) != FALSE;
+                Row.IsUnicode = IsWindowUnicode(Handle) != FALSE;
+                Row.Style = GetWindowLongW(Handle, GWL_STYLE);
+                Row.ExStyle = GetWindowLongW(Handle, GWL_EXSTYLE);
+                Row.IsTopmost = (Row.ExStyle & WS_EX_TOPMOST) != 0;
+                Row.IsLayered = (Row.ExStyle & WS_EX_LAYERED) != 0;
+                Row.IsToolWindow = (Row.ExStyle & WS_EX_TOOLWINDOW) != 0;
+                Row.IsAppWindow = (Row.ExStyle & WS_EX_APPWINDOW) != 0;
+                Row.IsPopup = (Row.Style & WS_POPUP) != 0;
+                Row.IsChild = (Row.Style & WS_CHILD) != 0;
+                Row.ParentHwnd = GetParent(Handle);
+                Row.OwnerHwnd = GetWindow(Handle, GW_OWNER);
+                Row.Dpi = GetDpiForWindow(Handle);
+                GetWindowRect(Handle, &Row.Rect);
+                GetClientRect(Handle, &Row.ClientRect);
+                HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Row.Pid);
+                if (Process)
+                {
+                    wchar_t Path[32768]{};
+                    DWORD Size = 32768;
+                    if (QueryFullProcessImageNameW(Process, 0, Path, &Size))
+                        Row.ProcessPath = QString::fromWCharArray(Path, static_cast<qsizetype>(Size));
+                    CloseHandle(Process);
+                }
+                if (!Row.Title.isEmpty() || !Row.ClassName.isEmpty())
+                    Rows->push_back(std::move(Row));
+                return TRUE;
+            }, reinterpret_cast<LPARAM>(&Result));
+            std::sort(Result.begin(), Result.end(), [](const WindowRow &Left, const WindowRow &Right) {
+                if (Left.Visible != Right.Visible) return Left.Visible > Right.Visible;
+                return Left.Pid < Right.Pid;
+            });
+            QMetaObject::invokeMethod(qApp, [Page, Result = std::move(Result), ShowResult]() mutable {
+                if (!Page)
+                    return;
+                Page->Refreshing = false;
+                Page->Rows = std::move(Result);
+                if (Page->RefreshIndicator)
+                {
+                    Page->RefreshIndicator->stop();
+                    Page->RefreshIndicator->hide();
+                }
+                if (Page->RefreshButton)
+                {
+                    Page->RefreshButton->setText("Refresh");
+                    Page->RefreshButton->setEnabled(true);
+                }
+                Page->Populate();
+                if (ShowResult)
+                    ShowSuccessNotice(Page, "Window", "Window list refreshed.");
+            }, Qt::QueuedConnection);
+        }).detach();
     }
 
     void Populate()
@@ -414,6 +446,8 @@ class WindowManagerPage final : public QWidget
 
     SearchLineEdit *SearchEdit = nullptr;
     QTimer *SearchDebounceTimer = nullptr;
+    IndeterminateProgressRing *RefreshIndicator = nullptr;
+    PushButton *RefreshButton = nullptr;
     TableWidget *WindowTable = nullptr;
     TableWidget *ProtectedTable = nullptr;
     PushButton *UnprotectButton = nullptr;
@@ -421,6 +455,7 @@ class WindowManagerPage final : public QWidget
 
     struct ProtectedWin { ULONG64 Hwnd; ULONG Pid; QString Title; ULONG Flags; };
     std::vector<ProtectedWin> ProtectedWindows;
+    std::atomic_bool Refreshing = false;
 
     bool IsTrackedProtectedWindow(ULONG64 Hwnd) const
     {

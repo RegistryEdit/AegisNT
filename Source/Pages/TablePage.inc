@@ -93,14 +93,14 @@ QWidget *CreateTablePage()
             }
             QMetaObject::invokeMethod(qApp, [SafePage, Status, Refresh, RefreshIndicator, State, Populate,
                                              Result = std::move(Result), ShowResult] {
-                if (!SafePage)
-                    return;
                 State->Result = Result;
                 State->Refreshing = false;
                 RefreshIndicator->stop();
                 RefreshIndicator->hide();
                 Refresh->setText("Refresh");
                 Refresh->setEnabled(true);
+                if (!SafePage)
+                    return;
                 if (!Result->Success)
                 {
                     const QString Message = QString("Query failed (error %1)").arg(Result->ErrorCode);

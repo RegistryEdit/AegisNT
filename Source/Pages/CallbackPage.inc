@@ -61,6 +61,7 @@ QWidget *CreateCallbackPage()
     {
         std::vector<CALLBACK_ENTRY> Rows;
         std::atomic_bool Refreshing = false;
+        std::atomic_bool Removing = false;
     };
 
     auto *Page = new QWidget;
@@ -130,18 +131,32 @@ QWidget *CreateCallbackPage()
                                               &BytesReturned) != FALSE;
                 ErrorCode = G_LastMultiDrvError;
                 if (Success)
-                    Rows.assign(Output->Entries, Output->Entries + Output->Count);
+                {
+                    const size_t MaxEntries = Count;
+                    const size_t ReturnedEntries = static_cast<size_t>(Output->Count);
+                    const size_t RequiredBytes = sizeof(CALLBACK_ENUM_OUTPUT) +
+                                                 (ReturnedEntries ? (ReturnedEntries - 1) * sizeof(CALLBACK_ENTRY) : 0);
+                    if (ReturnedEntries > MaxEntries || BytesReturned < RequiredBytes)
+                    {
+                        Success = false;
+                        ErrorCode = ERROR_INVALID_DATA;
+                    }
+                    else
+                    {
+                        Rows.assign(Output->Entries, Output->Entries + ReturnedEntries);
+                    }
+                }
             }
             QMetaObject::invokeMethod(qApp, [SafePage, Status, Refresh, RefreshIndicator, State, Populate,
                                              DescribeCallbackType, Rows = std::move(Rows), Success, ErrorCode,
                                              ShowResult]() mutable {
-                if (!SafePage)
-                    return;
                 State->Refreshing = false;
                 RefreshIndicator->stop();
                 RefreshIndicator->hide();
                 Refresh->setText("Refresh");
                 Refresh->setEnabled(true);
+                if (!SafePage)
+                    return;
                 if (!Success)
                 {
                     const QString Message = QString("Enumeration failed (error %1)").arg(ErrorCode);
@@ -171,8 +186,8 @@ QWidget *CreateCallbackPage()
     };
     QObject::connect(TypeFilter, &ComboBox::currentTextChanged, Page, [Populate](const QString &) { Populate(); });
     QObject::connect(Search, &QLineEdit::textChanged, Page, [Populate] { Populate(); }); QObject::connect(Refresh, &QPushButton::clicked, Page, [Query] { Query(true); });
-    QObject::connect(Table, &QWidget::customContextMenuRequested, Page, [Page, Table, Query](const QPoint &Position) { const QModelIndex Index = Table->indexAt(Position); if (!Index.isValid()) return; Table->selectRow(Index.row()); auto *TypeItem = Table->item(Index.row(), 0); const ULONG_PTR Address = static_cast<ULONG_PTR>(TypeItem->data(Qt::UserRole).toULongLong()); const ULONG Type = static_cast<ULONG>(TypeItem->data(Qt::UserRole + 1).toULongLong()); const ULONG Flags = static_cast<ULONG>(TypeItem->data(Qt::UserRole + 2).toULongLong());
-        auto *Menu = new RoundMenu(QString(), Page); auto *Remove = new QAction("Remove callback", Menu); Remove->setEnabled(true); Menu->addAction(Remove); QObject::connect(Remove, &QAction::triggered, Page, [Page = QPointer<QWidget>(Page), Address, Type, Query] { if (!Page) return; if (QMessageBox::warning(Page, "Callback", QString("Remove callback at 0x%1?").arg(Address, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper(), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return; CALLBACK_REMOVE_INPUT Input = {}; Input.Type = Type; Input.Address = Address; SendIoctl(IOCTL_REMOVE_CALLBACK_BY_ADDRESS, &Input, sizeof(Input)); if (G_LastMultiDrvError != ERROR_SUCCESS) ShowErrorNotice(Page, "Callback", QString("Operation failed (error %1)").arg(G_LastMultiDrvError)); else ShowSuccessNotice(Page, "Callback", "Callback removed successfully."); Query(false); }); ReleaseMenuAfterClose(Menu); Menu->exec(Table->viewport()->mapToGlobal(Position)); });
+    QObject::connect(Table, &QWidget::customContextMenuRequested, Page, [Page, Table, State, Query](const QPoint &Position) { const QModelIndex Index = Table->indexAt(Position); if (!Index.isValid()) return; Table->selectRow(Index.row()); auto *TypeItem = Table->item(Index.row(), 0); if (!TypeItem) return; const ULONG_PTR Address = static_cast<ULONG_PTR>(TypeItem->data(Qt::UserRole).toULongLong()); const ULONG Type = static_cast<ULONG>(TypeItem->data(Qt::UserRole + 1).toULongLong()); const ULONG Flags = static_cast<ULONG>(TypeItem->data(Qt::UserRole + 2).toULongLong());
+        auto *Menu = new RoundMenu(QString(), Page); auto *Remove = new QAction("Remove callback", Menu); Remove->setEnabled((Flags & CALLBACK_FLAG_CAN_REMOVE) != 0 && !State->Removing.load()); Menu->addAction(Remove); ConnectMenuAction(Remove, Page, [Page = QPointer<QWidget>(Page), State, Address, Type, Flags, Query] { if (!Page) return; if ((Flags & CALLBACK_FLAG_CAN_REMOVE) == 0) { ShowWarningNotice(Page, "Callback", "This callback is not marked as removable."); return; } if (State->Removing.exchange(true)) { ShowWarningNotice(Page, "Callback", "A callback removal is already running."); return; } if (QMessageBox::warning(Page, "Callback", QString("Remove callback at 0x%1?").arg(Address, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper(), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) { State->Removing = false; return; } QPointer<QWidget> SafePage(Page); std::thread([SafePage, State, Address, Type, Query] { CALLBACK_REMOVE_INPUT Input = {}; Input.Type = Type; Input.Address = Address; const bool Success = SendIoctl(IOCTL_REMOVE_CALLBACK_BY_ADDRESS, &Input, sizeof(Input)) != FALSE; const DWORD ErrorCode = G_LastMultiDrvError; QMetaObject::invokeMethod(qApp, [SafePage, State, Success, ErrorCode, Query] { State->Removing = false; if (!SafePage) return; if (!Success || ErrorCode != ERROR_SUCCESS) ShowErrorNotice(SafePage, "Callback", QString("Operation failed (error %1)").arg(ErrorCode)); else ShowSuccessNotice(SafePage, "Callback", "Callback removed successfully."); Query(false); }, Qt::QueuedConnection); }).detach(); }); ReleaseMenuAfterClose(Menu); Menu->exec(Table->viewport()->mapToGlobal(Position)); });
     if (TypeFilter->count() > 0)
         TypeFilter->setCurrentIndex(0);
     Query(false);
