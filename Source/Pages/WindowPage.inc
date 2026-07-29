@@ -54,13 +54,12 @@ class WindowManagerPage final : public QWidget
         auto *Toolbar = new QHBoxLayout;
         ConfigureToolbarLayout(Toolbar);
         SearchEdit = new SearchLineEdit;
-        SearchEdit->setPlaceholderText("Search title, class, process, PID, or HWND");
-        SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(360);
+        ConfigureSearchLineEdit(SearchEdit, "Search title, class, process, PID, or HWND", KStandardSearchWidth);
         RefreshIndicator = new IndeterminateProgressRing(this, false);
         RefreshIndicator->setFixedSize(22, 22);
         RefreshIndicator->hide();
         RefreshButton = MakeButton("Refresh", true);
+        ConfigureActionButton(RefreshButton);
         Toolbar->addWidget(SearchEdit);
         Toolbar->addStretch();
         Toolbar->addWidget(RefreshIndicator);
@@ -71,8 +70,15 @@ class WindowManagerPage final : public QWidget
         WindowTable->setContextMenuPolicy(Qt::CustomContextMenu);
         WindowTable->setProperty("DetailDialogTitle", "Window details");
         WindowTable->horizontalHeader()->setStretchLastSection(false);
-        for (int Column = 0; Column < WindowTable->columnCount(); ++Column)
-            WindowTable->horizontalHeader()->setSectionResizeMode(Column, QHeaderView::ResizeToContents);
+        WindowTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        WindowTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        WindowTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        WindowTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+        WindowTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+        WindowTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Interactive);
+        WindowTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Interactive);
+        WindowTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::Interactive);
+        WindowTable->horizontalHeader()->setSectionResizeMode(8, QHeaderView::ResizeToContents);
         WindowTable->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
         WinLayout->addWidget(WindowTable, 1);
 
@@ -130,10 +136,7 @@ class WindowManagerPage final : public QWidget
     {
         if (Refreshing.exchange(true))
             return;
-        RefreshButton->setEnabled(false);
-        RefreshButton->setText("Refreshing...");
-        RefreshIndicator->show();
-        RefreshIndicator->start();
+        SetRefreshUiState(RefreshButton, RefreshIndicator, nullptr, true);
         QPointer<WindowManagerPage> Page(this);
         std::thread([Page, ShowResult] {
             std::vector<WindowRow> Result;
@@ -187,16 +190,7 @@ class WindowManagerPage final : public QWidget
                     return;
                 Page->Refreshing = false;
                 Page->Rows = std::move(Result);
-                if (Page->RefreshIndicator)
-                {
-                    Page->RefreshIndicator->stop();
-                    Page->RefreshIndicator->hide();
-                }
-                if (Page->RefreshButton)
-                {
-                    Page->RefreshButton->setText("Refresh");
-                    Page->RefreshButton->setEnabled(true);
-                }
+                SetRefreshUiState(Page->RefreshButton, Page->RefreshIndicator, nullptr, false);
                 Page->Populate();
                 if (ShowResult)
                     ShowSuccessNotice(Page, "Window", "Window list refreshed.");
@@ -218,7 +212,7 @@ class WindowManagerPage final : public QWidget
                 continue;
             VisibleRows.push_back(&Window);
         }
-        WindowTable->setUpdatesEnabled(false);
+        SetTableRefreshEnabled(WindowTable, false);
         WindowTable->clearContents();
         WindowTable->setRowCount(static_cast<int>(VisibleRows.size()));
         for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
@@ -246,7 +240,7 @@ class WindowManagerPage final : public QWidget
             WindowTable->setItem(Row, 8, new QTableWidgetItem(QString::number(Window.Dpi)));
             WindowTable->setRowHeight(Row, KCompactTableRowHeight);
         }
-        WindowTable->setUpdatesEnabled(true);
+        SetTableRefreshEnabled(WindowTable, true);
     }
 
     void ShowMenu(const QPoint &Position)
@@ -519,6 +513,7 @@ class WindowManagerPage final : public QWidget
 
     void RefreshProtectedTable()
     {
+        SetTableRefreshEnabled(ProtectedTable, false);
         ProtectedTable->clearContents();
         ProtectedTable->setRowCount(static_cast<int>(ProtectedWindows.size()));
         for (int R = 0; R < static_cast<int>(ProtectedWindows.size()); ++R)
@@ -533,6 +528,7 @@ class WindowManagerPage final : public QWidget
             ProtectedTable->setItem(R, 3, new QTableWidgetItem(QString("0x%1").arg(P.Flags, 8, 16, QLatin1Char('0'))));
             ProtectedTable->setRowHeight(R, KCompactTableRowHeight);
         }
+        SetTableRefreshEnabled(ProtectedTable, true);
         UnprotectButton->setEnabled(false);
     }
 };

@@ -6,6 +6,9 @@ class DriverManagerPage final : public QWidget
         QString DisplayName;
         QString Path;
         QString RegistryPath;
+        QString SymbolNames;
+        QString DeviceLinks;
+        QString SearchText;
         DWORD State = 0;
         DWORD Type = 0;
         DWORD StartType = 0;
@@ -29,36 +32,39 @@ class DriverManagerPage final : public QWidget
         auto *LoadButton = MakeButton("Load", true);
         auto *FilterLayout = new QHBoxLayout;
         ConfigureToolbarLayout(FilterLayout);
-        SearchEdit = new SearchLineEdit; SearchEdit->setPlaceholderText("Search service, display name, path, or state"); SearchEdit->setClearButtonEnabled(true); SearchEdit->setMaximumWidth(380);
+        SearchEdit = new SearchLineEdit;
+        ConfigureSearchLineEdit(SearchEdit, "Search service, display name, path, or state", KStandardWideSearchWidth);
         RefreshIndicator = new IndeterminateProgressRing(this, false);
         RefreshIndicator->setFixedSize(22, 22);
         RefreshIndicator->hide();
-        LoadButton->setMinimumWidth(92);
-        LoadButton->setMaximumWidth(92);
-        LoadButton->setFixedHeight(32);
+        ConfigureActionButton(LoadButton);
         RefreshButton = MakeButton("Refresh", true);
-        RefreshButton->setMinimumWidth(92);
-        RefreshButton->setMaximumWidth(92);
-        RefreshButton->setFixedHeight(32);
+        ConfigureActionButton(RefreshButton);
         FilterLayout->addWidget(SearchEdit, 0, Qt::AlignLeft | Qt::AlignVCenter);
         FilterLayout->addStretch(1);
         FilterLayout->addWidget(RefreshIndicator, 0, Qt::AlignVCenter);
         FilterLayout->addWidget(LoadButton, 0, Qt::AlignRight | Qt::AlignVCenter);
         FilterLayout->addWidget(RefreshButton, 0, Qt::AlignRight | Qt::AlignVCenter);
         Layout->addLayout(FilterLayout);
-        DriverTable = MakeTable({"Service", "Display name", "State", "Type", "Object", "Base", "Size", "Signature", "SHA-256", "Path"});
+        DriverTable = MakeTable({"Service", "Display name", "State", "Type", "Object", "Base", "Size", "Symbol", "Device links", "Signature", "SHA-256", "Path"});
         DriverTable->setSelectionMode(QAbstractItemView::SingleSelection); DriverTable->setContextMenuPolicy(Qt::CustomContextMenu);
         DriverTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         DriverTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
         DriverTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
         DriverTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
         DriverTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
-        DriverTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
+        DriverTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::Stretch);
         DriverTable->horizontalHeader()->setSectionResizeMode(8, QHeaderView::Stretch);
-        DriverTable->horizontalHeader()->setSectionResizeMode(9, QHeaderView::Stretch); Layout->addWidget(DriverTable, 1);
+        DriverTable->horizontalHeader()->setSectionResizeMode(9, QHeaderView::ResizeToContents);
+        DriverTable->horizontalHeader()->setSectionResizeMode(10, QHeaderView::Stretch);
+        DriverTable->horizontalHeader()->setSectionResizeMode(11, QHeaderView::Stretch); Layout->addWidget(DriverTable, 1);
         QObject::connect(LoadButton, &QPushButton::clicked, this, [this] { ShowLoadDriverDialog(); });
+        SearchDebounceTimer = new QTimer(this);
+        SearchDebounceTimer->setSingleShot(true);
+        SearchDebounceTimer->setInterval(KSearchDebounceMs);
         QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { StartRefresh(true); });
-        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { Populate(); });
+        QObject::connect(SearchDebounceTimer, &QTimer::timeout, this, [this] { ApplySearchFilter(); });
+        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { SearchDebounceTimer->start(); });
         QObject::connect(DriverTable, &QWidget::customContextMenuRequested, this, [this](const QPoint &Position) {
             const QModelIndex Index = DriverTable->indexAt(Position); if (!Index.isValid()) return; DriverTable->selectRow(Index.row());
             const QString Name = DriverTable->item(Index.row(), 0)->text();
@@ -417,34 +423,36 @@ class DriverManagerPage final : public QWidget
         }).detach();
     }
 
-    QString StateName(DWORD State) const
+    static QString StateName(DWORD State)
     {
         switch (State) { case SERVICE_STOPPED: return "Stopped"; case SERVICE_START_PENDING: return "StartPending"; case SERVICE_STOP_PENDING: return "StopPending";
         case SERVICE_RUNNING: return "Running"; case SERVICE_CONTINUE_PENDING: return "ContinuePending"; case SERVICE_PAUSE_PENDING: return "PausePending"; case SERVICE_PAUSED: return "Paused"; default: return "Unknown"; }
     }
-    QString HexPtr(ULONG_PTR Value) const
+    static QString HexPtr(ULONG_PTR Value)
     {
         return QString("0x%1").arg(Value, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0')).toUpper();
     }
-    QString StartTypeName(DWORD Value) const
+    static QString StartTypeName(DWORD Value)
     {
         switch (Value) { case 0: return "Boot"; case 1: return "System"; case 2: return "Auto"; case 3: return "Demand"; case 4: return "Disabled"; default: return QString::number(Value); }
+    }
+    static QString DriverRecordAddressText(const MDV2_RECORD &Record)
+    {
+        if (Record.Address != 0)
+            return QString("0x%1").arg(Record.Address, 0, 16).toUpper();
+        for (const ULONG64 Value : Record.Value)
+        {
+            if (Value != 0)
+                return QString("0x%1").arg(Value, 0, 16).toUpper();
+        }
+        return "-";
     }
     void StartRefresh(bool ShowResult)
     {
         if (Refreshing.exchange(true))
             return;
 
-        if (RefreshButton)
-        {
-        RefreshButton->setEnabled(false);
-        RefreshButton->setText("Refreshing...");
-        }
-        if (RefreshIndicator)
-        {
-            RefreshIndicator->show();
-            RefreshIndicator->start();
-        }
+        SetRefreshUiState(RefreshButton, RefreshIndicator, nullptr, true);
         QPointer<DriverManagerPage> SafeThis(this);
         std::thread([SafeThis, ShowResult] {
             DriverRefreshResult Result;
@@ -471,7 +479,109 @@ class DriverManagerPage final : public QWidget
                     Row.ImageBase = Entry.ImageBase;
                     Row.ImageSize = Entry.ImageSize;
                     Row.Path = NormalizeUserDriverPath(Row.Path);
+                    std::vector<MDV2_RECORD> DetailRecords;
+                    MDV2_LIST_HEADER DetailHeader{};
+                    const QStringList DetailCandidates{
+                        Row.Name,
+                        Row.Name.isEmpty() ? QString() : "\\Driver\\" + Row.Name,
+                        Row.DisplayName,
+                        QFileInfo(Row.Path).completeBaseName()
+                    };
+                    for (const QString &Candidate : DetailCandidates)
+                    {
+                        if (Candidate.isEmpty())
+                            continue;
+                        DetailRecords.clear();
+                        if (QueryNamedDriverRecordsV2(Candidate.toStdWString(), DetailRecords, &DetailHeader) && !DetailRecords.empty())
+                        {
+                            QStringList Symbols;
+                            QStringList Links;
+                            const auto AppendUnique = [](QStringList &List, const QString &Text) {
+                                if (!Text.isEmpty() && !List.contains(Text, Qt::CaseInsensitive))
+                                    List.append(Text);
+                            };
+                            for (const MDV2_RECORD &Record : DetailRecords)
+                            {
+                                const QString RecordName = QString::fromWCharArray(Record.Name).trimmed();
+                                const QString RecordType = QString::fromWCharArray(Record.TypeName).trimmed();
+                                const QString RecordPath = QString::fromWCharArray(Record.Path).trimmed();
+                                const QString RecordDetail = QString::fromWCharArray(Record.Detail).trimmed();
+                                const QString RecordAddress = DriverRecordAddressText(Record);
+                                const QString RecordLabel = !RecordName.isEmpty() ? RecordName :
+                                    (!RecordPath.isEmpty() ? RecordPath : (!RecordDetail.isEmpty() ? RecordDetail : RecordAddress));
+                                const bool LooksLikeDevice =
+                                    Record.Kind == 15 ||
+                                    RecordType.contains("Device", Qt::CaseInsensitive) ||
+                                    RecordPath.contains("\\Device\\", Qt::CaseInsensitive) ||
+                                    RecordDetail.contains("\\Device\\", Qt::CaseInsensitive);
+                                const bool LooksLikeSymbol =
+                                    Record.Kind == 8 ||
+                                    RecordType.contains("Symbol", Qt::CaseInsensitive) ||
+                                    RecordType.contains("Dispatch", Qt::CaseInsensitive) ||
+                                    RecordPath.contains("Dispatch", Qt::CaseInsensitive) ||
+                                    RecordDetail.contains("Dispatch", Qt::CaseInsensitive);
+                                const bool LooksLikeLink =
+                                    RecordType.contains("SymbolicLink", Qt::CaseInsensitive) ||
+                                    RecordType.contains("Link", Qt::CaseInsensitive) ||
+                                    RecordPath.contains("\\DosDevices\\", Qt::CaseInsensitive) ||
+                                    RecordDetail.contains("\\DosDevices\\", Qt::CaseInsensitive);
+                                if (LooksLikeLink)
+                                {
+                                    const QString TargetText = !RecordDetail.isEmpty() ? RecordDetail :
+                                        (!RecordPath.isEmpty() ? RecordPath : RecordAddress);
+                                    AppendUnique(Links, TargetText.isEmpty() ? RecordLabel : RecordLabel + " -> " + TargetText);
+                                }
+                                else if (LooksLikeDevice)
+                                {
+                                    AppendUnique(Links, RecordLabel.isEmpty() ? (RecordPath.isEmpty() ? RecordDetail : RecordPath) : RecordLabel);
+                                }
+                                else if (LooksLikeSymbol)
+                                {
+                                    AppendUnique(Symbols, RecordLabel + (RecordAddress.isEmpty() ? QString() : " @ " + RecordAddress));
+                                }
+                            }
+                            if (Symbols.isEmpty() && Links.isEmpty())
+                            {
+                                for (const MDV2_RECORD &Record : DetailRecords)
+                                {
+                                    const QString RecordName = QString::fromWCharArray(Record.Name).trimmed();
+                                    const QString RecordPath = QString::fromWCharArray(Record.Path).trimmed();
+                                    const QString RecordDetail = QString::fromWCharArray(Record.Detail).trimmed();
+                                    const QString RecordAddress = DriverRecordAddressText(Record);
+                                    const QString Fallback = !RecordName.isEmpty() ? RecordName :
+                                        (!RecordPath.isEmpty() ? RecordPath :
+                                         (!RecordDetail.isEmpty() ? RecordDetail : RecordAddress));
+                                    const bool LooksLikeNamedLink =
+                                        RecordName.contains("\\Device\\", Qt::CaseInsensitive) ||
+                                        RecordName.contains("\\DosDevices\\", Qt::CaseInsensitive) ||
+                                        RecordPath.contains("\\Device\\", Qt::CaseInsensitive) ||
+                                        RecordPath.contains("\\DosDevices\\", Qt::CaseInsensitive) ||
+                                        RecordDetail.contains("\\Device\\", Qt::CaseInsensitive) ||
+                                        RecordDetail.contains("\\DosDevices\\", Qt::CaseInsensitive);
+                                    if (!Fallback.isEmpty())
+                                        AppendUnique(Symbols, Fallback);
+                                    if (LooksLikeNamedLink)
+                                    {
+                                        const QString LinkText =
+                                            RecordPath.contains("\\Device\\", Qt::CaseInsensitive) || RecordPath.contains("\\DosDevices\\", Qt::CaseInsensitive)
+                                                ? RecordPath
+                                                : (RecordDetail.contains("\\Device\\", Qt::CaseInsensitive) || RecordDetail.contains("\\DosDevices\\", Qt::CaseInsensitive)
+                                                    ? RecordDetail
+                                                    : RecordName);
+                                        AppendUnique(Links, LinkText);
+                                    }
+                                }
+                            }
+                            Row.SymbolNames = Symbols.join(" | ");
+                            Row.DeviceLinks = Links.join(" | ");
+                            break;
+                        }
+                    }
                     if (QFileInfo::exists(Row.Path)) Row.Trust = QueryUserFileTrustCached(Row.Path);
+                    Row.SearchText = (Row.Name + ' ' + Row.DisplayName + ' ' + Row.Path + ' ' + Row.RegistryPath + ' ' +
+                                      Row.SymbolNames + ' ' + Row.DeviceLinks + ' ' + StateName(Row.State) + ' ' +
+                                      Row.Trust.Signer + ' ' + Row.Trust.Sha256 + ' ' + HexPtr(Row.DriverObject) + ' ' +
+                                      HexPtr(Row.ImageBase)).toCaseFolded();
                     Result.Rows.push_back(std::move(Row));
                 }
                 std::sort(Result.Rows.begin(), Result.Rows.end(), [](const DriverRow &Left, const DriverRow &Right) {
@@ -485,16 +595,7 @@ class DriverManagerPage final : public QWidget
                 if (!SafeThis)
                     return;
                 SafeThis->Refreshing = false;
-                if (SafeThis->RefreshIndicator)
-                {
-                    SafeThis->RefreshIndicator->stop();
-                    SafeThis->RefreshIndicator->hide();
-                }
-                if (SafeThis->RefreshButton)
-                {
-                    SafeThis->RefreshButton->setText("Refresh");
-                    SafeThis->RefreshButton->setEnabled(true);
-                }
+                SetRefreshUiState(SafeThis->RefreshButton, SafeThis->RefreshIndicator, nullptr, false);
                 if (!Result.Success)
                 {
                     SafeThis->Rows.clear();
@@ -516,18 +617,131 @@ class DriverManagerPage final : public QWidget
     }
     void Populate()
     {
-        const QString Query = SearchEdit->text().trimmed(); DriverTable->clearContents(); DriverTable->setRowCount(0);
-        for (const DriverRow &Driver : Rows) { const QString State = StateName(Driver.State); const QString Text = Driver.Name + " " + Driver.DisplayName + " " + Driver.Path + " " + Driver.RegistryPath + " " + State + " " + Driver.Trust.Signer + " " + Driver.Trust.Sha256 + " " + HexPtr(Driver.DriverObject) + " " + HexPtr(Driver.ImageBase);
-            if (!Query.isEmpty() && !Text.contains(Query, Qt::CaseInsensitive)) continue; const int Row = DriverTable->rowCount(); DriverTable->insertRow(Row);
-            DriverTable->setItem(Row, 0, new QTableWidgetItem(Driver.Name)); DriverTable->setItem(Row, 1, new QTableWidgetItem(Driver.DisplayName)); DriverTable->setItem(Row, 2, new QTableWidgetItem(State));
-            DriverTable->setItem(Row, 3, new QTableWidgetItem(QString("0x%1").arg(Driver.Type, 0, 16)));
-            DriverTable->setItem(Row, 4, new QTableWidgetItem(HexPtr(Driver.DriverObject)));
-            DriverTable->setItem(Row, 5, new QTableWidgetItem(HexPtr(Driver.ImageBase)));
-            DriverTable->setItem(Row, 6, new QTableWidgetItem(QString("0x%1").arg(Driver.ImageSize, 0, 16)));
-            DriverTable->setItem(Row, 7, new QTableWidgetItem(Driver.Trust.Trusted ? Driver.Trust.SignatureKind + " | " + Driver.Trust.Signer : "Untrusted"));
-            DriverTable->setItem(Row, 8, new QTableWidgetItem(Driver.Trust.Sha256));
-            DriverTable->setItem(Row, 9, new QTableWidgetItem(Driver.Path)); DriverTable->setRowHeight(Row, KCompactTableRowHeight); }
+        SetTableRefreshEnabled(DriverTable, false);
+        QHash<QString, int> ExistingRows;
+        ExistingRows.reserve(DriverTable->rowCount());
+        for (int Row = 0; Row < DriverTable->rowCount(); ++Row)
+        {
+            if (const QTableWidgetItem *Item = DriverTable->item(Row, 0))
+                ExistingRows.insert(Item->data(Qt::UserRole).toString(), Row);
+        }
+        for (int Row = DriverTable->rowCount() - 1; Row >= 0; --Row)
+        {
+            const QTableWidgetItem *Item = DriverTable->item(Row, 0);
+            const QString Name = Item ? Item->data(Qt::UserRole).toString() : QString();
+            const auto Match = std::find_if(Rows.begin(), Rows.end(), [&Name](const DriverRow &Driver) {
+                return Driver.Name.compare(Name, Qt::CaseInsensitive) == 0;
+            });
+            if (Name.isEmpty() || Match == Rows.end())
+                DriverTable->removeRow(Row);
+        }
+        for (const DriverRow &Driver : Rows)
+        {
+            int Row = FindDriverTableRow(Driver.Name);
+            if (Row < 0)
+            {
+                Row = DriverTable->rowCount();
+                DriverTable->insertRow(Row);
+            }
+            if (RowDataMatches(Row, Driver))
+                continue;
+            FillDriverTableRow(Row, Driver);
+        }
+        SetTableRefreshEnabled(DriverTable, true);
+        ApplySearchFilter();
     }
-    SearchLineEdit *SearchEdit = nullptr; TableWidget *DriverTable = nullptr; PushButton *RefreshButton = nullptr; IndeterminateProgressRing *RefreshIndicator = nullptr; std::vector<DriverRow> Rows; std::atomic_bool Refreshing = false;
+    int FindDriverTableRow(const QString &Name) const
+    {
+        for (int Row = 0; Row < DriverTable->rowCount(); ++Row)
+        {
+            const QTableWidgetItem *Item = DriverTable->item(Row, 0);
+            if (Item && Item->data(Qt::UserRole).toString().compare(Name, Qt::CaseInsensitive) == 0)
+                return Row;
+        }
+        return -1;
+    }
+    bool RowDataMatches(int Row, const DriverRow &Driver) const
+    {
+        const QTableWidgetItem *NameItem = DriverTable->item(Row, 0);
+        const QTableWidgetItem *DisplayItem = DriverTable->item(Row, 1);
+        const QTableWidgetItem *StateItem = DriverTable->item(Row, 2);
+        const QTableWidgetItem *TypeItem = DriverTable->item(Row, 3);
+        const QTableWidgetItem *ObjectItem = DriverTable->item(Row, 4);
+        const QTableWidgetItem *BaseItem = DriverTable->item(Row, 5);
+        const QTableWidgetItem *SizeItem = DriverTable->item(Row, 6);
+        const QTableWidgetItem *SymbolItem = DriverTable->item(Row, 7);
+        const QTableWidgetItem *LinksItem = DriverTable->item(Row, 8);
+        const QTableWidgetItem *SignatureItem = DriverTable->item(Row, 9);
+        const QTableWidgetItem *ShaItem = DriverTable->item(Row, 10);
+        const QTableWidgetItem *PathItem = DriverTable->item(Row, 11);
+        if (!NameItem || !DisplayItem || !StateItem || !TypeItem || !ObjectItem || !BaseItem ||
+            !SizeItem || !SymbolItem || !LinksItem || !SignatureItem || !ShaItem || !PathItem)
+            return false;
+        const QString SignatureText = Driver.Trust.Trusted
+            ? Driver.Trust.SignatureKind + " | " + Driver.Trust.Signer
+            : "Untrusted";
+        return NameItem->data(Qt::UserRole).toString().compare(Driver.Name, Qt::CaseInsensitive) == 0 &&
+               NameItem->data(Qt::UserRole + 1).toString() == Driver.SearchText &&
+               NameItem->text() == Driver.Name &&
+               DisplayItem->text() == Driver.DisplayName &&
+               StateItem->text() == StateName(Driver.State) &&
+               TypeItem->text() == QString("0x%1").arg(Driver.Type, 0, 16) &&
+               ObjectItem->text() == HexPtr(Driver.DriverObject) &&
+               BaseItem->text() == HexPtr(Driver.ImageBase) &&
+               SizeItem->text() == QString("0x%1").arg(Driver.ImageSize, 0, 16) &&
+               SymbolItem->text() == (Driver.SymbolNames.isEmpty() ? "-" : Driver.SymbolNames) &&
+               LinksItem->text() == (Driver.DeviceLinks.isEmpty() ? "-" : Driver.DeviceLinks) &&
+               SignatureItem->text() == SignatureText &&
+               ShaItem->text() == Driver.Trust.Sha256 &&
+               PathItem->text() == Driver.Path;
+    }
+    void FillDriverTableRow(int Row, const DriverRow &Driver)
+    {
+        const QString State = StateName(Driver.State);
+        const QString SignatureText = Driver.Trust.Trusted
+            ? Driver.Trust.SignatureKind + " | " + Driver.Trust.Signer
+            : "Untrusted";
+        auto EnsureItem = [this, Row](int Column) {
+            QTableWidgetItem *Item = DriverTable->item(Row, Column);
+            if (!Item)
+            {
+                Item = new QTableWidgetItem;
+                DriverTable->setItem(Row, Column, Item);
+            }
+            return Item;
+        };
+        QTableWidgetItem *NameItem = EnsureItem(0);
+        NameItem->setText(Driver.Name);
+        NameItem->setData(Qt::UserRole, Driver.Name);
+        NameItem->setData(Qt::UserRole + 1, Driver.SearchText);
+        EnsureItem(1)->setText(Driver.DisplayName);
+        EnsureItem(2)->setText(State);
+        EnsureItem(3)->setText(QString("0x%1").arg(Driver.Type, 0, 16));
+        EnsureItem(4)->setText(HexPtr(Driver.DriverObject));
+        EnsureItem(5)->setText(HexPtr(Driver.ImageBase));
+        EnsureItem(6)->setText(QString("0x%1").arg(Driver.ImageSize, 0, 16));
+        EnsureItem(7)->setText(Driver.SymbolNames.isEmpty() ? "-" : Driver.SymbolNames);
+        EnsureItem(8)->setText(Driver.DeviceLinks.isEmpty() ? "-" : Driver.DeviceLinks);
+        EnsureItem(9)->setText(SignatureText);
+        EnsureItem(10)->setText(Driver.Trust.Sha256);
+        EnsureItem(11)->setText(Driver.Path);
+        DriverTable->setRowHeight(Row, KCompactTableRowHeight);
+    }
+    void ApplySearchFilter()
+    {
+        if (!DriverTable)
+            return;
+        const QString Query = SearchEdit->text().trimmed().toCaseFolded();
+        const bool HasQuery = !Query.isEmpty();
+        SetTableRefreshEnabled(DriverTable, false);
+        for (int Row = 0; Row < DriverTable->rowCount(); ++Row)
+        {
+            QTableWidgetItem *Item = DriverTable->item(Row, 0);
+            const QString SearchText = Item ? Item->data(Qt::UserRole + 1).toString() : QString();
+            DriverTable->setRowHidden(Row, HasQuery && !SearchText.contains(Query));
+        }
+        SetTableRefreshEnabled(DriverTable, true);
+    }
+    SearchLineEdit *SearchEdit = nullptr; QTimer *SearchDebounceTimer = nullptr; TableWidget *DriverTable = nullptr; PushButton *RefreshButton = nullptr; IndeterminateProgressRing *RefreshIndicator = nullptr; std::vector<DriverRow> Rows; std::atomic_bool Refreshing = false;
 };
 

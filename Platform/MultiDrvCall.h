@@ -89,6 +89,11 @@
 #define IOCTL_HANDLE_CLOSE                  CTL_CODE(0x8000, 0x853, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_HANDLE_DOWNGRADE              CTL_CODE(0x8000, 0x854, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_HANDLE_DUP_DOWNGRADE          CTL_CODE(0x8000, 0x855, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DISABLE_PATCHGUARD            CTL_CODE(0x8000, 0x856, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_RESTORE_PATCHGUARD            CTL_CODE(0x8000, 0x857, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_PATCHGUARD              CTL_CODE(0x8000, 0x858, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_DSE                    CTL_CODE(0x8000, 0x859, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SET_IDT_LIMIT              CTL_CODE(0x8000, 0x85A, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define CALLBACK_TYPE_OB_PROCESS   0
 #define CALLBACK_TYPE_OB_THREAD    1
@@ -291,6 +296,16 @@ typedef struct _DSE_CONTROL_OUTPUT {
 	ULONG     Status;
 } DSE_CONTROL_OUTPUT, * PDSE_CONTROL_OUTPUT;
 
+typedef struct _PG_CONTROL_OUTPUT {
+	ULONG     PgContextOffset;
+	ULONG     _Pad0;
+	ULONG_PTR OriginalValue;
+	ULONG_PTR CurrentValue;
+	BOOLEAN   IsPatched;
+	UCHAR     _Pad1[7];
+	ULONG     Status;
+} PG_CONTROL_OUTPUT, * PPG_CONTROL_OUTPUT;
+
 #define DEBUG_VAR_COUNT 6
 
 typedef struct _DEBUG_VAR_ENTRY {
@@ -379,6 +394,21 @@ typedef struct _PIDDB_CACHE_ENUM_OUTPUT {
 	ULONG_PTR TableAddress;
 	PIDDB_CACHE_ENTRY_INFO Entries[PIDDB_CACHE_MAX_ENTRIES];
 } PIDDB_CACHE_ENUM_OUTPUT, * PPIDDB_CACHE_ENUM_OUTPUT;
+
+typedef struct _IDT_LIMIT_INPUT {
+	USHORT NewEntryCount;
+} IDT_LIMIT_INPUT, * PIDT_LIMIT_INPUT;
+
+typedef struct _IDT_LIMIT_OUTPUT {
+	ULONG_PTR OldBase;
+	USHORT    OldLimit;
+	USHORT    OldEntryCount;
+	ULONG_PTR NewBase;
+	USHORT    NewLimit;
+	USHORT    NewEntryCount;
+	USHORT    EntrySize;
+	BOOLEAN   Changed;
+} IDT_LIMIT_OUTPUT, * PIDT_LIMIT_OUTPUT;
 
 typedef struct _DRIVER_ENUM_ENTRY {
 	WCHAR ServiceName[128];
@@ -2068,6 +2098,28 @@ BOOLEAN RestoreDse(PDSE_CONTROL_OUTPUT Output = NULL)
 	return Success;
 }
 
+BOOLEAN QueryDse(PDSE_CONTROL_OUTPUT Output)
+{
+	if (Output == NULL)
+	{
+		G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+		return FALSE;
+	}
+
+	ZeroMemory(Output, sizeof(*Output));
+	DWORD BytesReturned = 0;
+	BOOLEAN Success = SendIoctlWithOutput(IOCTL_QUERY_DSE, NULL, 0,
+		Output, sizeof(*Output), &BytesReturned);
+
+	if (Success && Output->Status != 0)
+	{
+		G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
+		return FALSE;
+	}
+
+	return Success;
+}
+
 BOOLEAN EnableDebug()
 {
 	return SendIoctl(IOCTL_ENABLE_DEBUG, NULL, 0);
@@ -2089,6 +2141,68 @@ BOOLEAN QueryDebugState(PDEBUG_STATE_OUTPUT Output)
 	ZeroMemory(Output, sizeof(*Output));
 	DWORD BytesReturned = 0;
 	BOOLEAN Success = SendIoctlWithOutput(IOCTL_QUERY_DEBUG_STATE, NULL, 0,
+		Output, sizeof(*Output), &BytesReturned);
+
+	if (Success && Output->Status != 0)
+	{
+		G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
+		return FALSE;
+	}
+
+	return Success;
+}
+
+BOOLEAN DisablePatchGuard(PPG_CONTROL_OUTPUT Output = NULL)
+{
+	PG_CONTROL_OUTPUT Result = {};
+
+	DWORD BytesReturned = 0;
+	BOOLEAN Success = SendIoctlWithOutput(IOCTL_DISABLE_PATCHGUARD, NULL, 0,
+		&Result, sizeof(Result), &BytesReturned);
+
+	if (Output != NULL)
+		*Output = Result;
+
+	if (Success && Result.Status != 0)
+	{
+		G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.Status);
+		return FALSE;
+	}
+
+	return Success;
+}
+
+BOOLEAN RestorePatchGuard(PPG_CONTROL_OUTPUT Output = NULL)
+{
+	PG_CONTROL_OUTPUT Result = {};
+
+	DWORD BytesReturned = 0;
+	BOOLEAN Success = SendIoctlWithOutput(IOCTL_RESTORE_PATCHGUARD, NULL, 0,
+		&Result, sizeof(Result), &BytesReturned);
+
+	if (Output != NULL)
+		*Output = Result;
+
+	if (Success && Result.Status != 0)
+	{
+		G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.Status);
+		return FALSE;
+	}
+
+	return Success;
+}
+
+BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output)
+{
+	if (Output == NULL)
+	{
+		G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+		return FALSE;
+	}
+
+	ZeroMemory(Output, sizeof(*Output));
+	DWORD BytesReturned = 0;
+	BOOLEAN Success = SendIoctlWithOutput(IOCTL_QUERY_PATCHGUARD, NULL, 0,
 		Output, sizeof(*Output), &BytesReturned);
 
 	if (Success && Output->Status != 0)
@@ -2406,4 +2520,11 @@ BOOL DuplicateAndDowngradeHandleKernel(ULONG SourcePid, ULONG SourceHandle,
 
 	G_LastMultiDrvError = Output.Status;
 	return NT_SUCCESS(Output.Status);
+}
+
+BOOLEAN SetIdtLimit()
+{
+	BOOLEAN Success = SendIoctl(IOCTL_SET_IDT_LIMIT, 0, 0);
+
+	return Success;
 }

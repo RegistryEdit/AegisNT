@@ -17,18 +17,27 @@ public:
         RefreshIndicator->hide();
         RefreshButton = MakeButton("Refresh", true);
         SearchEdit = new SearchLineEdit;
-        SearchEdit->setPlaceholderText("Search service name, display, or path");
-        SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(360);
+        ConfigureSearchLineEdit(SearchEdit, "Search service name, display, or path", KStandardSearchWidth);
+        ConfigureActionButton(RefreshButton);
         Toolbar->addWidget(SearchEdit);
         Toolbar->addStretch();
         Toolbar->addWidget(RefreshIndicator);
         Toolbar->addWidget(RefreshButton);
         Layout->addLayout(Toolbar);
         Table = MakeTable({"Service", "Display Name", "State", "Start Type", "PID", "Path"});
+        Table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        Table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        Table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        Table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+        Table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+        Table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
         Table->setContextMenuPolicy(Qt::CustomContextMenu);
         Layout->addWidget(Table, 1);
-        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { Populate(); });
+        SearchDebounceTimer = new QTimer(this);
+        SearchDebounceTimer->setSingleShot(true);
+        SearchDebounceTimer->setInterval(KSearchDebounceMs);
+        QObject::connect(SearchDebounceTimer, &QTimer::timeout, this, [this] { Populate(); });
+        QObject::connect(SearchEdit, &QLineEdit::textChanged, this, [this] { SearchDebounceTimer->start(); });
         QObject::connect(RefreshButton, &QPushButton::clicked, this, [this] { Refresh(true); });
         QObject::connect(Table, &QWidget::customContextMenuRequested, this, [this](const QPoint &P) { ShowMenu(P); });
         Refresh();
@@ -39,10 +48,7 @@ private:
     {
         if (Refreshing.exchange(true))
             return;
-        RefreshButton->setEnabled(false);
-        RefreshButton->setText("Refreshing...");
-        RefreshIndicator->show();
-        RefreshIndicator->start();
+        SetRefreshUiState(RefreshButton, RefreshIndicator, nullptr, true);
         QPointer<ServiceManagerPage> Page(this);
         std::thread([Page, ShowResult] {
             std::vector<ServiceRow> Result;
@@ -120,16 +126,7 @@ private:
                     return;
                 Page->Refreshing = false;
                 Page->Rows = std::move(Result);
-                if (Page->RefreshIndicator)
-                {
-                    Page->RefreshIndicator->stop();
-                    Page->RefreshIndicator->hide();
-                }
-                if (Page->RefreshButton)
-                {
-                    Page->RefreshButton->setText("Refresh");
-                    Page->RefreshButton->setEnabled(true);
-                }
+                SetRefreshUiState(Page->RefreshButton, Page->RefreshIndicator, nullptr, false);
                 Page->Populate();
                 if (ShowResult)
                     ShowSuccessNotice(Page, "Service", "Service list refreshed.");
@@ -140,8 +137,8 @@ private:
     void Populate()
     {
         const QString Query = SearchEdit->text().trimmed();
-        Table->clearContents();
-        Table->setRowCount(0);
+        std::vector<const ServiceRow *> VisibleRows;
+        VisibleRows.reserve(Rows.size());
         for (const auto &Svc : Rows)
         {
             if (!Query.isEmpty() &&
@@ -149,16 +146,23 @@ private:
                 !Svc.DisplayName.contains(Query, Qt::CaseInsensitive) &&
                 !Svc.BinaryPath.contains(Query, Qt::CaseInsensitive))
                 continue;
-            int R = Table->rowCount();
-            Table->insertRow(R);
-            Table->setItem(R, 0, new QTableWidgetItem(Svc.Name));
-            Table->setItem(R, 1, new QTableWidgetItem(Svc.DisplayName));
-            Table->setItem(R, 2, new QTableWidgetItem(Svc.State));
-            Table->setItem(R, 3, new QTableWidgetItem(Svc.StartType));
-            Table->setItem(R, 4, new QTableWidgetItem(Svc.Pid ? QString::number(Svc.Pid) : "-"));
-            Table->setItem(R, 5, new QTableWidgetItem(Svc.BinaryPath));
-            Table->setRowHeight(R, KCompactTableRowHeight);
+            VisibleRows.push_back(&Svc);
         }
+        SetTableRefreshEnabled(Table, false);
+        Table->clearContents();
+        Table->setRowCount(static_cast<int>(VisibleRows.size()));
+        for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
+        {
+            const ServiceRow &Svc = *VisibleRows[Row];
+            Table->setItem(Row, 0, new QTableWidgetItem(Svc.Name));
+            Table->setItem(Row, 1, new QTableWidgetItem(Svc.DisplayName));
+            Table->setItem(Row, 2, new QTableWidgetItem(Svc.State));
+            Table->setItem(Row, 3, new QTableWidgetItem(Svc.StartType));
+            Table->setItem(Row, 4, new QTableWidgetItem(Svc.Pid ? QString::number(Svc.Pid) : "-"));
+            Table->setItem(Row, 5, new QTableWidgetItem(Svc.BinaryPath));
+            Table->setRowHeight(Row, KCompactTableRowHeight);
+        }
+        SetTableRefreshEnabled(Table, true);
     }
 
     void ShowMenu(const QPoint &Pos)
@@ -232,6 +236,7 @@ private:
     }
 
     SearchLineEdit *SearchEdit{};
+    QTimer *SearchDebounceTimer{};
     PushButton *RefreshButton{};
     IndeterminateProgressRing *RefreshIndicator{};
     TableWidget *Table{};

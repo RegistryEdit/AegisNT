@@ -86,7 +86,7 @@ class RegistryManagerPage final : public QWidget
         auto *AddressLayout = new QHBoxLayout;
         ConfigureToolbarLayout(AddressLayout);
         AddressEdit = new LineEdit;
-        AddressEdit->setPlaceholderText("HKLM\\Software\\... or \\Registry\\Machine\\...");
+        ConfigureLineEdit(AddressEdit, "HKLM\\Software\\... or \\Registry\\Machine\\...");
         auto *BrowseButton = new PushButton("Browse", Fluent::IconType::FOLDER);
         auto *RefreshButton = new ToolButton(Fluent::IconType::SYNC);
         RefreshButton->setFixedSize(36, 36);
@@ -101,9 +101,7 @@ class RegistryManagerPage final : public QWidget
         auto *ActionLayout = new QHBoxLayout;
         ConfigureToolbarLayout(ActionLayout);
         SearchEdit = new SearchLineEdit;
-        SearchEdit->setPlaceholderText("Search key, value name, type, or data");
-        SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(340);
+        ConfigureSearchLineEdit(SearchEdit, "Search key, value name, type, or data", KStandardSearchWidth);
         auto *NewKeyButton = new PushButton("New key", Fluent::IconType::FOLDER_ADD);
         auto *NewValueButton = new PushButton("New value", Fluent::IconType::DOCUMENT);
         ModifyButton = new PushButton("Modify", Fluent::IconType::CODE);
@@ -194,9 +192,7 @@ class RegistryManagerPage final : public QWidget
         auto *Toolbar = new QHBoxLayout;
         ConfigureToolbarLayout(Toolbar);
         ProtectedSearchEdit = new SearchLineEdit;
-        ProtectedSearchEdit->setPlaceholderText("Search protected paths");
-        ProtectedSearchEdit->setClearButtonEnabled(true);
-        ProtectedSearchEdit->setMaximumWidth(340);
+        ConfigureSearchLineEdit(ProtectedSearchEdit, "Search protected paths", KStandardSearchWidth);
         ProtectedCountLabel = new BodyLabel("0 paths");
         UnprotectButton = new PushButton("Unprotect", Fluent::IconType::CERTIFICATE);
         UnprotectButton->setEnabled(false);
@@ -609,8 +605,7 @@ class RegistryManagerPage final : public QWidget
                 continue;
             VisibleRows.push_back(Index);
         }
-        ValueTable->setSortingEnabled(false);
-        ValueTable->setUpdatesEnabled(false);
+        SetTableRefreshEnabled(ValueTable, false);
         ValueTable->clearContents();
         ValueTable->setRowCount(static_cast<int>(VisibleRows.size()));
         for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
@@ -626,8 +621,7 @@ class RegistryManagerPage final : public QWidget
             ValueTable->setItem(Row, 4, new QTableWidgetItem(Value.Data));
             ValueTable->setRowHeight(Row, KCompactTableRowHeight);
         }
-        ValueTable->setUpdatesEnabled(true);
-        ValueTable->setSortingEnabled(true);
+        SetTableRefreshEnabled(ValueTable, true, true);
         ValueCountLabel->setText(Query.isEmpty()
             ? QString("%1 value%2").arg(Rows.size()).arg(Rows.size() == 1 ? "" : "s")
             : QString("%1 of %2").arg(VisibleRows.size()).arg(Rows.size()));
@@ -874,8 +868,7 @@ class RegistryManagerPage final : public QWidget
                 continue;
             VisibleRows.push_back(&Entry);
         }
-        ProtectedTable->setSortingEnabled(false);
-        ProtectedTable->setUpdatesEnabled(false);
+        SetTableRefreshEnabled(ProtectedTable, false);
         ProtectedTable->clearContents();
         ProtectedTable->setRowCount(static_cast<int>(VisibleRows.size()));
         for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row) {
@@ -886,8 +879,7 @@ class RegistryManagerPage final : public QWidget
             ProtectedTable->setItem(Row, 1, new QTableWidgetItem(Entry.KernelPath));
             ProtectedTable->setRowHeight(Row, KCompactTableRowHeight);
         }
-        ProtectedTable->setUpdatesEnabled(true);
-        ProtectedTable->setSortingEnabled(true);
+        SetTableRefreshEnabled(ProtectedTable, true, true);
         if (ProtectedCountLabel)
             ProtectedCountLabel->setText(Query.isEmpty()
                 ? QString("%1 path%2").arg(ProtectedEntries.size()).arg(ProtectedEntries.size() == 1 ? "" : "s")

@@ -1618,12 +1618,87 @@ void ConfigurePageLayout(QVBoxLayout *Layout, int Spacing = KCompactPageSpacing)
     Layout->setSpacing(Spacing);
 }
 
+void ConfigureSearchLineEdit(SearchLineEdit *Edit, const QString &Placeholder, int MaximumWidth)
+{
+    if (!Edit)
+        return;
+    Edit->setPlaceholderText(Placeholder);
+    Edit->setClearButtonEnabled(true);
+    Edit->setMaximumWidth(MaximumWidth > 0 ? MaximumWidth : KStandardSearchWidth);
+}
+
+void ConfigureLineEdit(LineEdit *Edit, const QString &Placeholder, int MaximumWidth)
+{
+    if (!Edit)
+        return;
+    Edit->setPlaceholderText(Placeholder);
+    if (MaximumWidth > 0)
+        Edit->setMaximumWidth(MaximumWidth);
+}
+
 PushButton *MakeButton(const QString &Text, bool Primary)
 {
     PushButton *Button = Primary ? static_cast<PushButton *>(new PrimaryPushButton(Text)) : new PushButton(Text);
     Button->setCursor(Qt::PointingHandCursor);
     Button->setMinimumHeight(34);
     return Button;
+}
+
+void ConfigureActionButton(PushButton *Button, int Width, int Height)
+{
+    if (!Button)
+        return;
+    Button->setMinimumWidth(Width);
+    Button->setMaximumWidth(Width);
+    Button->setFixedHeight(Height);
+}
+
+void SetTableRefreshEnabled(QTableWidget *Table, bool Enabled, bool SortingEnabled)
+{
+    if (!Table)
+        return;
+    if (!Enabled)
+    {
+        Table->setSortingEnabled(false);
+        Table->setUpdatesEnabled(false);
+        return;
+    }
+    Table->setUpdatesEnabled(true);
+    Table->setSortingEnabled(SortingEnabled);
+}
+
+void SetRefreshUiState(PushButton *Button, IndeterminateProgressRing *Indicator,
+                       BodyLabel *StatusLabel, bool Refreshing,
+                       const QString &IdleText,
+                       const QString &RefreshingText,
+                       const QString &IdleStatus,
+                       const QString &RefreshingStatus)
+{
+    if (Button)
+    {
+        Button->setEnabled(!Refreshing);
+        Button->setText(Refreshing ? RefreshingText : IdleText);
+    }
+    if (Indicator)
+    {
+        if (Refreshing)
+        {
+            Indicator->show();
+            Indicator->start();
+        }
+        else
+        {
+            Indicator->stop();
+            Indicator->hide();
+        }
+    }
+    if (StatusLabel)
+    {
+        if (Refreshing && !RefreshingStatus.isEmpty())
+            StatusLabel->setText(RefreshingStatus);
+        else if (!Refreshing && !IdleStatus.isEmpty())
+            StatusLabel->setText(IdleStatus);
+    }
 }
 
 void ConnectMenuAction(QAction *Action, QObject *Context, std::function<void()> Handler)

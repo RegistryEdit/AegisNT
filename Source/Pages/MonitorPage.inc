@@ -202,15 +202,14 @@ class MonitorManagerPage final : public QWidget
         Layout->addLayout(Controls);
         auto *FilterLayout = new QHBoxLayout;
         Searches[Index] = new SearchLineEdit;
-        Searches[Index]->setPlaceholderText(Placeholder);
-        Searches[Index]->setClearButtonEnabled(true);
+        ConfigureSearchLineEdit(Searches[Index], Placeholder, 0);
         auto *ClearButton = MakeButton("Clear");
         FilterLayout->addWidget(Searches[Index], 1);
         FilterLayout->addWidget(ClearButton);
         Layout->addLayout(FilterLayout);
         Tables[Index] = MakeTable({"Event"});
         Tables[Index]->setProperty("UseGenericDetailDialog", false);
-        Tables[Index]->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        Tables[Index]->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
         Tables[Index]->setContextMenuPolicy(Qt::CustomContextMenu);
         Layout->addWidget(Tables[Index], 1);
         if (!SearchDebounceTimers[Index])
@@ -239,10 +238,10 @@ class MonitorManagerPage final : public QWidget
         SystemMode->setCurrentIndex(0);
         SystemMode->setMinimumWidth(190);
         SystemFilterPid = new LineEdit;
-        SystemFilterPid->setPlaceholderText("PID filter (0 = all)");
+        ConfigureLineEdit(SystemFilterPid, "PID filter (0 = all)", 150);
         SystemFilterPid->setMaximumWidth(150);
         SystemPathPrefix = new LineEdit;
-        SystemPathPrefix->setPlaceholderText("Path prefix");
+        ConfigureLineEdit(SystemPathPrefix, "Path prefix");
         RegistryPreview = new CheckBox("Registry preview");
         SystemStart = MakeButton("Start", true);
         SystemStop = MakeButton("Stop");
@@ -264,7 +263,7 @@ class MonitorManagerPage final : public QWidget
     {
         auto *Controls = new QHBoxLayout;
         ProcessTarget = new LineEdit;
-        ProcessTarget->setPlaceholderText("Process PID or name");
+        ConfigureLineEdit(ProcessTarget, "Process PID or name");
         ProcessMethod = new ComboBox;
         ProcessMethod->addItems({"R3CreateRemoteThread", "R3NtCreateThreadEx", "R3QueueUserAPC",
                                  "R3SetWindowsHookEx", "R0DllInjectApc", "R0DllInjectThread"});
@@ -302,7 +301,7 @@ class MonitorManagerPage final : public QWidget
     {
         auto *Controls = new QHBoxLayout;
         HttpProxyPort = new LineEdit;
-        HttpProxyPort->setPlaceholderText("Proxy port");
+        ConfigureLineEdit(HttpProxyPort, "Proxy port", 110);
         HttpProxyPort->setText("8443");
         HttpProxyPort->setMaximumWidth(110);
         HttpStart = MakeButton("Start", true);
@@ -328,10 +327,10 @@ class MonitorManagerPage final : public QWidget
         auto *CtrlBar = new QHBoxLayout;
         auto *ExportBtn = MakeButton("Export CSV");
         auto *ClearBtn = MakeButton("Clear");
+        ConfigureActionButton(ExportBtn, 110, KStandardButtonHeight);
+        ConfigureActionButton(ClearBtn);
         HistorySearchEdit = new SearchLineEdit;
-        HistorySearchEdit->setPlaceholderText("Search events by type, PID, process, or detail");
-        HistorySearchEdit->setClearButtonEnabled(true);
-        HistorySearchEdit->setMaximumWidth(340);
+        ConfigureSearchLineEdit(HistorySearchEdit, "Search events by type, PID, process, or detail", KStandardSearchWidth);
         HistoryStatus = new BodyLabel("Persistent event history");
         CtrlBar->addWidget(HistorySearchEdit);
         CtrlBar->addStretch();
@@ -401,7 +400,7 @@ class MonitorManagerPage final : public QWidget
                 continue;
             VisibleRows.push_back(&Event);
         }
-        Tables[Index]->setUpdatesEnabled(false);
+        SetTableRefreshEnabled(Tables[Index], false);
         Tables[Index]->clearContents();
         Tables[Index]->setRowCount(static_cast<int>(VisibleRows.size()));
         for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
@@ -412,7 +411,7 @@ class MonitorManagerPage final : public QWidget
             Tables[Index]->setItem(Row, 0, Item);
             Tables[Index]->setRowHeight(Row, KCompactTableRowHeight);
         }
-        Tables[Index]->setUpdatesEnabled(true);
+        SetTableRefreshEnabled(Tables[Index], true);
     }
 
     void Clear(int Index)
@@ -845,7 +844,7 @@ class MonitorManagerPage final : public QWidget
                 continue;
             VisibleRows.push_back(&Evt);
         }
-        HistoryTable->setUpdatesEnabled(false);
+        SetTableRefreshEnabled(HistoryTable, false);
         HistoryTable->clearContents();
         HistoryTable->setRowCount(static_cast<int>(VisibleRows.size()));
         for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
@@ -858,7 +857,7 @@ class MonitorManagerPage final : public QWidget
             HistoryTable->setItem(Row, 4, new QTableWidgetItem(Evt.Detail));
             HistoryTable->setRowHeight(Row, KCompactTableRowHeight);
         }
-        HistoryTable->setUpdatesEnabled(true);
+        SetTableRefreshEnabled(HistoryTable, true);
         HistoryStatus->setText(QString("Events: %1").arg(HistoryRows.size()));
     }
 
@@ -883,12 +882,21 @@ class MonitorManagerPage final : public QWidget
     void showEvent(QShowEvent *Event) override
     {
         QWidget::showEvent(Event);
+        if (UpdateTimer)
+            UpdateTimer->start(150);
         const int Index = Pages->currentIndex();
         if (Index >= 0 && Index < 4)
         {
             DisplayedVersions[Index] = SharedState->Streams[Index].Version.load(std::memory_order_relaxed);
             Populate(Index);
         }
+    }
+
+    void hideEvent(QHideEvent *Event) override
+    {
+        if (UpdateTimer)
+            UpdateTimer->stop();
+        QWidget::hideEvent(Event);
     }
 };
 

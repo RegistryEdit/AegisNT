@@ -2,6 +2,7 @@
   <Configurations>
     <Platform Name="x64" />
   </Configurations>
+  <Project Path="AegisNT.vcxproj" Id="5b98a043-9b4f-4515-a626-a4dbcfd98954" />
   <Project Path="Drivers/MonitorDrv/MonitorDrv.vcxproj">
     <Deploy />
   </Project>
@@ -18,5 +19,4 @@
   <Project Path="ModulesProject/Payload/PixelSmash/PixelSmash.vcxproj" Id="1a3f3ea3-5b6a-493c-83a7-123d7f8f5cee" />
   <Project Path="ModulesProject/Payload/Reverse_tcp/reverse_tcp.vcxproj" Id="f814031a-0939-47bf-b5f3-4cb668b07049" />
   <Project Path="ModulesProject/Payload/Server/RemoteServer.vcxproj" Id="a1b2c3d4-e5f6-7890-abcd-ef1234567890" />
-  <Project Path="AegisNT.vcxproj" Id="5b98a043-9b4f-4515-a626-a4dbcfd98954" />
 </Solution>

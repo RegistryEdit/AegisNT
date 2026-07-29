@@ -24,6 +24,16 @@ PushButton *MakeButton(const QString &Text, bool Primary = false);
 FluentLabelBase *MakeLabel(const QString &Text, int PixelSize, const QColor &Color,
                            QFont::Weight Weight = QFont::Normal);
 void ConfigureToolbarLayout(QHBoxLayout *Layout, int Spacing = 6);
+void ConfigureSearchLineEdit(SearchLineEdit *Edit, const QString &Placeholder, int MaximumWidth = 0);
+void ConfigureLineEdit(LineEdit *Edit, const QString &Placeholder, int MaximumWidth = 0);
+void ConfigureActionButton(PushButton *Button, int Width = 92, int Height = 32);
+void SetTableRefreshEnabled(QTableWidget *Table, bool Enabled, bool SortingEnabled = false);
+void SetRefreshUiState(PushButton *Button, IndeterminateProgressRing *Indicator,
+                       BodyLabel *StatusLabel, bool Refreshing,
+                       const QString &IdleText = "Refresh",
+                       const QString &RefreshingText = "Refreshing...",
+                       const QString &IdleStatus = QString(),
+                       const QString &RefreshingStatus = QString());
 void InstallFluentScrollBar(QAbstractScrollArea *Area, Qt::Orientation Orientation);
 QString ApplicationStyleSheet(int MaterialOverride = -1);
 void ShowSuccessNotice(QWidget *Parent, const QString &Title, const QString &Content);
@@ -56,6 +66,10 @@ constexpr int KCompactToolbarSpacing = 6;
 constexpr int KCompactPageSpacing = 10;
 constexpr int KCompactTableRowHeight = 32;
 constexpr int KSearchDebounceMs = 150;
+constexpr int KStandardSearchWidth = 340;
+constexpr int KStandardWideSearchWidth = 380;
+constexpr int KStandardButtonWidth = 92;
+constexpr int KStandardButtonHeight = 32;
 constexpr int KDefaultThemeCornerRadius = 8;
 constexpr int KDefaultThemeDensity = 98;
 constexpr int KDefaultThemeFontScale = 100;

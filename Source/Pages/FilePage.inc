@@ -47,11 +47,9 @@ class FileExplorerPage final : public QWidget
         UpButton = CreateNavigationButton(Fluent::IconType::UP, "Up one level");
         RefreshButton = CreateNavigationButton(Fluent::IconType::SYNC, "Refresh");
         AddressEdit = new LineEdit;
-        AddressEdit->setPlaceholderText("Path");
+        ConfigureLineEdit(AddressEdit, "Path");
         SearchEdit = new SearchLineEdit;
-        SearchEdit->setPlaceholderText("Search this folder");
-        SearchEdit->setClearButtonEnabled(true);
-        SearchEdit->setMaximumWidth(240);
+        ConfigureSearchLineEdit(SearchEdit, "Search this folder", 240);
         NavigationLayout->addWidget(BackButton);
         NavigationLayout->addWidget(ForwardButton);
         NavigationLayout->addWidget(UpButton);
@@ -123,10 +121,9 @@ class FileExplorerPage final : public QWidget
         ConfigurePageLayout(ProtectedLayout, 8);
         auto *ProtectedToolbar = new QHBoxLayout;
         ConfigureToolbarLayout(ProtectedToolbar);
-        auto *ProtectedTitle = MakeLabel("ProtectedFiles", 13, KTextPrimary, QFont::DemiBold);
         UnprotectButton = MakeButton("Unprotect", true);
+        ConfigureActionButton(UnprotectButton);
         UnprotectButton->setEnabled(false);
-        ProtectedToolbar->addWidget(ProtectedTitle);
         ProtectedToolbar->addStretch();
         ProtectedToolbar->addWidget(UnprotectButton);
         ProtectedLayout->addLayout(ProtectedToolbar);
@@ -146,6 +143,10 @@ class FileExplorerPage final : public QWidget
         auto *MonitorCurrentButton = MakeButton("Monitor current folder");
         MonitorStopButton = MakeButton("Stop");
         MonitorClearButton = MakeButton("Clear");
+        ConfigureActionButton(BrowseMonitorButton);
+        ConfigureActionButton(MonitorCurrentButton, 140, KStandardButtonHeight);
+        ConfigureActionButton(MonitorStopButton);
+        ConfigureActionButton(MonitorClearButton);
         MonitorStopButton->setEnabled(false);
         MonitorToolbar->addWidget(BrowseMonitorButton);
         MonitorToolbar->addWidget(MonitorCurrentButton);
@@ -158,16 +159,13 @@ class FileExplorerPage final : public QWidget
 
         auto *WatchInfoLayout = new QHBoxLayout;
         ConfigureToolbarLayout(WatchInfoLayout);
-        auto *WatchTitle = MakeLabel("WatchedDirectory", 13, KTextPrimary, QFont::DemiBold);
         MonitorDirectoryLabel = new BodyLabel("-");
         MonitorDirectoryLabel->setWordWrap(true);
-        WatchInfoLayout->addWidget(WatchTitle);
         WatchInfoLayout->addWidget(MonitorDirectoryLabel, 1);
         MonitorLayout->addLayout(WatchInfoLayout);
 
         MonitorSearchEdit = new SearchLineEdit;
-        MonitorSearchEdit->setPlaceholderText("Search time, operation, process, PID, or path");
-        MonitorSearchEdit->setClearButtonEnabled(true);
+        ConfigureSearchLineEdit(MonitorSearchEdit, "Search time, operation, process, PID, or path");
         MonitorLayout->addWidget(MonitorSearchEdit);
 
         MonitorTable = MakeTable({"Time", "Operation", "Process", "PID", "Path"});
@@ -177,9 +175,9 @@ class FileExplorerPage final : public QWidget
         MonitorTable->setWordWrap(false);
         MonitorTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         MonitorTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-        MonitorTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        MonitorTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
         MonitorTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-        MonitorTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+        MonitorTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
         MonitorLayout->addWidget(MonitorTable, 1);
 
         Pages->addWidget(ExplorerPage);
@@ -254,6 +252,8 @@ class FileExplorerPage final : public QWidget
         MonitorRefreshTimer = new QTimer(this);
         MonitorRefreshTimer->setInterval(150);
         QObject::connect(MonitorRefreshTimer, &QTimer::timeout, this, [this] {
+            if (!isVisible() || !Pages || Pages->currentIndex() != 2)
+                return;
             const uint64_t Version = MonitorVersion.load(std::memory_order_relaxed);
             if (DisplayedMonitorVersion != Version) {
                 DisplayedMonitorVersion = Version;
@@ -667,7 +667,7 @@ class FileExplorerPage final : public QWidget
             }
             VisibleRows.push_back(&Entry);
         }
-        MonitorTable->setUpdatesEnabled(false);
+        SetTableRefreshEnabled(MonitorTable, false);
         MonitorTable->clearContents();
         MonitorTable->setRowCount(static_cast<int>(VisibleRows.size()));
         for (int Row = 0; Row < static_cast<int>(VisibleRows.size()); ++Row)
@@ -685,7 +685,7 @@ class FileExplorerPage final : public QWidget
             MonitorTable->setItem(Row, 4, PathItem);
             MonitorTable->setRowHeight(Row, KCompactTableRowHeight);
         }
-        MonitorTable->setUpdatesEnabled(true);
+        SetTableRefreshEnabled(MonitorTable, true);
     }
 
     void ShowMonitorDetails(int Row)
@@ -796,6 +796,7 @@ class FileExplorerPage final : public QWidget
 
     void RefreshProtectedTable()
     {
+        SetTableRefreshEnabled(ProtectedTable, false);
         ProtectedTable->clearContents();
         ProtectedTable->setRowCount(ProtectedFiles.size());
         for (int Row = 0; Row < ProtectedFiles.size(); ++Row)
@@ -808,6 +809,7 @@ class FileExplorerPage final : public QWidget
             ProtectedTable->setItem(Row, 1, new QTableWidgetItem(Entry.DisplayPath));
             ProtectedTable->setRowHeight(Row, KCompactTableRowHeight);
         }
+        SetTableRefreshEnabled(ProtectedTable, true);
         UnprotectButton->setEnabled(false);
     }
 
@@ -951,5 +953,20 @@ class FileExplorerPage final : public QWidget
     QStringList History;
     QList<ProtectedFileEntry> ProtectedFiles;
     int HistoryIndex = -1;
+
+  protected:
+    void showEvent(QShowEvent *Event) override
+    {
+        QWidget::showEvent(Event);
+        if (MonitorRefreshTimer)
+            MonitorRefreshTimer->start();
+    }
+
+    void hideEvent(QHideEvent *Event) override
+    {
+        if (MonitorRefreshTimer)
+            MonitorRefreshTimer->stop();
+        QWidget::hideEvent(Event);
+    }
 };
 
