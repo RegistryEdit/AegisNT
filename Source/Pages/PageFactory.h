@@ -8,6 +8,7 @@ QWidget *CreateMonitorPage();
 QWidget *CreateRegistryPage();
 QWidget *CreateFilePage();
 QWidget *CreateWindowPage();
+QWidget *CreateDiskPage();
 QWidget *CreateMemoryPage();
 QWidget *CreateTablePage();
 QWidget *CreateCallbackPage();

@@ -1,12 +1,10 @@
 #include "AppContext.h"
 
-namespace AegisNT
-{
+namespace AegisNT {
 
-AppContext &ApplicationContext()
-{
-    static AppContext Context;
-    return Context;
+AppContext &ApplicationContext() {
+  static AppContext Context;
+  return Context;
 }
 
 } // namespace AegisNT

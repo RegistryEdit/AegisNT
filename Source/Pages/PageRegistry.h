@@ -4,16 +4,14 @@
 
 #include <array>
 
-namespace AegisNT
-{
+namespace AegisNT {
 
-struct PageDefinition
-{
-    const char *Title;
-    const char *Subtitle;
-    Fluent::IconType Icon;
+struct PageDefinition {
+  const char *Title;
+  const char *Subtitle;
+  Fluent::IconType Icon;
 };
 
-const std::array<PageDefinition, 17> &PageDefinitions();
+const std::array<PageDefinition, 18> &PageDefinitions();
 
 } // namespace AegisNT

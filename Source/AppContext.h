@@ -5,20 +5,20 @@
 
 #include <atomic>
 
-namespace AegisNT
-{
+namespace AegisNT {
 
-struct AppContext
-{
-    QJsonObject Configuration;
-    QJsonObject ChineseTranslations;
-    QString ActiveLanguage = QStringLiteral("en_US");
+struct AppContext {
+  QJsonObject Configuration;
+  QJsonObject ChineseTranslations;
+  QString ActiveLanguage = QStringLiteral("en_US");
 
-    bool ModulesScanned = false;
-    std::atomic_bool ModuleRunning = false;
-    QString RunningModulePath;
-    QString ConsoleTranscript = QStringLiteral("[*] Console ready. Module output will appear here.\n");
-    QString ModuleTranscript;
+  bool ModulesScanned = false;
+  std::atomic_bool ModuleRunning = false;
+  std::atomic_bool DriverShutdownPerformed = false;
+  QString RunningModulePath;
+  QString ConsoleTranscript =
+      QStringLiteral("[*] Console ready. Module output will appear here.\n");
+  QString ModuleTranscript;
 };
 
 AppContext &ApplicationContext();

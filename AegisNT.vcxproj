@@ -132,6 +132,7 @@
     <None Include="Source\Pages\RegistryPage.inc" />
     <None Include="Source\Pages\FilePage.inc" />
     <None Include="Source\Pages\WindowPage.inc" />
+    <None Include="Source\Pages\DiskPage.inc" />
     <None Include="Source\Pages\DriverPage.inc" />
     <None Include="Source\Pages\ServicePage.inc" />
     <None Include="Source\Pages\SettingsPage.inc" />
@@ -146,6 +147,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
+    <ClInclude Include="Platform\DiskDrvCall.h" />
     <ClInclude Include="Platform\UserSecurityInfo.h" />
   </ItemGroup>
   <ItemGroup>
