@@ -1251,7 +1251,7 @@ private:
       return;
     if (Pid == GetCurrentProcessId()) {
       ShowWarningNotice(this, "Task",
-                        "Operations on WindowsToolV2 itself are disabled.");
+                        "Operations on AegisNT itself are disabled.");
       return;
     }
     const QString Name = Process->Name;
@@ -1937,7 +1937,7 @@ private:
               Menu, "Terminate", [this, Dialog, Threads, Pid, SelectedTids] {
                 if (Pid == GetCurrentProcessId()) {
                   ShowWarningNotice(this, "Terminate thread",
-                                    "Thread operations on WindowsToolV2 itself "
+                                    "Thread operations on AegisNT itself "
                                     "are disabled.");
                   return;
                 }
@@ -2028,7 +2028,7 @@ private:
             if (Pid == GetCurrentProcessId()) {
               ShowWarningNotice(
                   this, Suspend ? "Suspend thread" : "Resume thread",
-                  "Thread operations on WindowsToolV2 itself are disabled.");
+                  "Thread operations on AegisNT itself are disabled.");
               return;
             }
             EnableDebugPrivilege();

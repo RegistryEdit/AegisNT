@@ -2,6 +2,9 @@
   <Configurations>
     <Platform Name="x64" />
   </Configurations>
+  <Folder Name="/解决方案项/">
+    <File Path="ModuleTemplate.cpp" />
+  </Folder>
   <Project Path="AegisNT.vcxproj" Id="5b98a043-9b4f-4515-a626-a4dbcfd98954" />
   <Project Path="Drivers/DiskDrv/DiskDrv.vcxproj">
     <Deploy />

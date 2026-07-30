@@ -19,6 +19,7 @@
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QHostAddress>
+#include <QImageReader>
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -107,6 +108,7 @@
 #include <sddl.h>
 #include <tlhelp32.h>
 #include <userenv.h>
+#include <wincodec.h>
 #ifdef ERROR
 #undef ERROR
 #endif
@@ -153,8 +155,70 @@
 #pragma comment(lib, "Wtsapi32.lib")
 #pragma comment(lib, "Userenv.lib")
 #pragma comment(lib, "Ole32.lib")
+#pragma comment(lib, "Windowscodecs.lib")
 
 namespace {
+
+QImage LoadImageWithWic(const QString &Path) {
+  IWICImagingFactory *Factory = nullptr;
+  HRESULT Hr =
+      CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                       IID_PPV_ARGS(&Factory));
+  if (FAILED(Hr) || !Factory)
+    return {};
+
+  IWICBitmapDecoder *Decoder = nullptr;
+  Hr = Factory->CreateDecoderFromFilename(
+      reinterpret_cast<LPCWSTR>(Path.utf16()), nullptr, GENERIC_READ,
+      WICDecodeMetadataCacheOnLoad, &Decoder);
+  if (FAILED(Hr) || !Decoder) {
+    Factory->Release();
+    return {};
+  }
+
+  IWICBitmapFrameDecode *Frame = nullptr;
+  Hr = Decoder->GetFrame(0, &Frame);
+  if (FAILED(Hr) || !Frame) {
+    Decoder->Release();
+    Factory->Release();
+    return {};
+  }
+
+  IWICFormatConverter *Converter = nullptr;
+  Hr = Factory->CreateFormatConverter(&Converter);
+  if (FAILED(Hr) || !Converter) {
+    Frame->Release();
+    Decoder->Release();
+    Factory->Release();
+    return {};
+  }
+
+  Hr = Converter->Initialize(Frame, GUID_WICPixelFormat32bppPBGRA,
+                             WICBitmapDitherTypeNone, nullptr, 0.0,
+                             WICBitmapPaletteTypeCustom);
+  UINT Width = 0;
+  UINT Height = 0;
+  if (SUCCEEDED(Hr))
+    Hr = Converter->GetSize(&Width, &Height);
+
+  QImage Image;
+  if (SUCCEEDED(Hr) && Width > 0 && Height > 0) {
+    Image = QImage(static_cast<int>(Width), static_cast<int>(Height),
+                   QImage::Format_ARGB32_Premultiplied);
+    if (Image.isNull() ||
+        FAILED(Converter->CopyPixels(
+            nullptr, static_cast<UINT>(Image.bytesPerLine()),
+            static_cast<UINT>(Image.sizeInBytes()), Image.bits()))) {
+      Image = QImage();
+    }
+  }
+
+  Converter->Release();
+  Frame->Release();
+  Decoder->Release();
+  Factory->Release();
+  return Image;
+}
 
 #ifndef DIRECTORY_QUERY
 #define DIRECTORY_QUERY 0x0001
@@ -2651,9 +2715,9 @@ QWidget *CreatePageBody(int Index) {
   }
 }
 
-class WindowsToolWindow final : public QWidget {
+class AegisNTWindow final : public QWidget {
 public:
-  WindowsToolWindow() {
+  AegisNTWindow() {
     setAttribute(Qt::WA_DontCreateNativeAncestors);
     WindowAgent = new QWK::WidgetWindowAgent(this);
     WindowAgent->setup(this);
@@ -2735,7 +2799,7 @@ protected:
     if (std::clamp(ConfigurationValue("Theme", "BackgroundMaterial",
                                       KDefaultThemeBackgroundMaterial)
                        .toInt(),
-                   0, 2) == 2)
+                   0, 2) != 0)
       ScheduleBackdropRefresh(this);
   }
 
@@ -2830,8 +2894,16 @@ private:
   }
 
   void RebuildWallpaperCache(const QString &Path, int Mode) {
-    if (CachedWallpaperPath != Path)
-      WallpaperSource = QPixmap(Path);
+    if (CachedWallpaperPath != Path || WallpaperSource.isNull()) {
+      QImageReader Reader(Path);
+      Reader.setAutoTransform(true);
+      Reader.setDecideFormatFromContent(true);
+      QImage Image = Reader.read();
+      if (Image.isNull())
+        Image = LoadImageWithWic(Path);
+      WallpaperSource =
+          Image.isNull() ? QPixmap() : QPixmap::fromImage(Image);
+    }
     CachedWallpaperPath = Path;
     CachedWallpaperMode = Mode;
     CachedWallpaperSize = size();
@@ -3012,7 +3084,7 @@ int main(int Argc, char *Argv[]) {
 
   int Result = 0;
   {
-    WindowsToolWindow Window;
+    AegisNTWindow Window;
     const QRect Available = Window.screen()->availableGeometry();
     const int ConfiguredWidth =
         ConfigurationValue("Application", "Width", 1600).toInt();

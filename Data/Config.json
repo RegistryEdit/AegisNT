@@ -60,6 +60,7 @@
         "InputSurfaceColor": "#FFFFFF",
         "MutedTextColor": "#667287",
         "PageBackgroundColor": "#F4F6FA",
+        "Preset": "default_blue",
         "PopupSurfaceColor": "#FFFFFF",
         "SelectionTextColor": "#FFFFFF",
         "SuccessColor": "#1E8A5D",

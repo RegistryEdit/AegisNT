@@ -66,6 +66,13 @@ struct ThemePalette {
   QColor Success;
 };
 
+struct ThemePresetDefinition {
+  const char *Id;
+  const char *Label;
+  ThemePalette Light;
+  ThemePalette Dark;
+};
+
 constexpr bool KDefaultThemeDarkMode = false;
 constexpr int KCompactToolbarSpacing = 6;
 constexpr int KCompactPageSpacing = 10;
@@ -80,8 +87,10 @@ constexpr int KDefaultThemeDensity = 98;
 constexpr int KDefaultThemeFontScale = 100;
 constexpr int KDefaultThemeWallpaperOpacity = 28;
 constexpr int KDefaultThemeBackgroundMaterial = 1;
+constexpr const char *KDefaultThemePreset = "default_blue";
+constexpr const char *KCustomThemePreset = "custom";
 
-const ThemePalette &DefaultThemePalette() {
+const ThemePalette &DefaultLightThemePalette() {
   static const ThemePalette Palette{
       QColor("#2E6CFF"), QColor("#3E7BFF"), QColor("#2458D9"),
       QColor("#F4F6FA"), QColor("#FFFFFF"), QColor("#F8FAFD"),
@@ -92,11 +101,98 @@ const ThemePalette &DefaultThemePalette() {
   return Palette;
 }
 
-void ApplyDefaultThemeValues(QJsonObject &ThemeObject) {
-  const ThemePalette &Palette = DefaultThemePalette();
-  ThemeObject.insert("DarkMode", KDefaultThemeDarkMode);
-  ThemeObject.insert("BackgroundMaterial", KDefaultThemeBackgroundMaterial);
-  ThemeObject.insert("WallpaperOpacity", KDefaultThemeWallpaperOpacity);
+const ThemePalette &DefaultDarkThemePalette() {
+  static const ThemePalette Palette{
+      QColor("#5B8CFF"), QColor("#79A2FF"), QColor("#3F72F0"),
+      QColor("#11161F"), QColor("#18212F"), QColor("#202B3A"),
+      QColor("#121A26"), QColor("#18212F"), QColor("#141D2A"),
+      QColor("#202B3A"), QColor("#2A3547"), QColor("#243043"),
+      QColor("#F3F6FB"), QColor("#93A3BC"), QColor("#FFFFFF"),
+      QColor("#FF6B5E"), QColor("#FFB347"), QColor("#39C98A")};
+  return Palette;
+}
+
+const ThemePalette &DefaultThemePalette(bool DarkMode) {
+  return DarkMode ? DefaultDarkThemePalette() : DefaultLightThemePalette();
+}
+
+const std::array<ThemePresetDefinition, 4> &BuiltInThemePresets() {
+  static const std::array<ThemePresetDefinition, 4> Presets{{
+      {"default_blue",
+       "Default Blue",
+       DefaultLightThemePalette(),
+       DefaultDarkThemePalette()},
+      {"cyan",
+       "Cyan",
+       {QColor("#0FA3B1"), QColor("#26B7C4"), QColor("#0C8794"),
+        QColor("#F2FBFC"), QColor("#FFFFFF"), QColor("#F4FDFE"),
+        QColor("#E2F3F6"), QColor("#FFFFFF"), QColor("#FFFFFF"),
+        QColor("#FFFFFF"), QColor("#C6E2E7"), QColor("#D7EEF1"),
+        QColor("#14212A"), QColor("#5D7484"), QColor("#FFFFFF"),
+        QColor("#C53D32"), QColor("#D98A14"), QColor("#1E8A5D")},
+       {QColor("#39C5D1"), QColor("#54D3DE"), QColor("#1FAAB8"),
+        QColor("#0F171D"), QColor("#15232D"), QColor("#1C2E3A"),
+        QColor("#101A22"), QColor("#15232D"), QColor("#12202A"),
+        QColor("#1C2E3A"), QColor("#284150"), QColor("#213744"),
+        QColor("#ECF7FB"), QColor("#8FAABC"), QColor("#FFFFFF"),
+        QColor("#FF6B5E"), QColor("#FFB347"), QColor("#39C98A")}},
+      {"indigo",
+       "Indigo",
+       {QColor("#5B5CE6"), QColor("#7072F0"), QColor("#4546C7"),
+        QColor("#F3F4FE"), QColor("#FFFFFF"), QColor("#F7F7FF"),
+        QColor("#E9EBFA"), QColor("#FFFFFF"), QColor("#FFFFFF"),
+        QColor("#FFFFFF"), QColor("#D3D8F1"), QColor("#E3E6F8"),
+        QColor("#171C32"), QColor("#697392"), QColor("#FFFFFF"),
+        QColor("#C53D32"), QColor("#D98A14"), QColor("#1E8A5D")},
+       {QColor("#8A8CFF"), QColor("#A0A2FF"), QColor("#6D6FF4"),
+        QColor("#11131F"), QColor("#191D33"), QColor("#232845"),
+        QColor("#13172A"), QColor("#191D33"), QColor("#15192D"),
+        QColor("#232845"), QColor("#2B3152"), QColor("#252B48"),
+        QColor("#F4F5FF"), QColor("#9CA5CB"), QColor("#FFFFFF"),
+        QColor("#FF6B5E"), QColor("#FFB347"), QColor("#39C98A")}},
+      {"graphite",
+       "Graphite",
+       {QColor("#4E6A91"), QColor("#5E7CA6"), QColor("#3F597D"),
+        QColor("#F2F4F7"), QColor("#FFFFFF"), QColor("#F7F8FA"),
+        QColor("#E7EBF0"), QColor("#FFFFFF"), QColor("#FFFFFF"),
+        QColor("#FFFFFF"), QColor("#D2D8E0"), QColor("#E0E5EC"),
+        QColor("#1B222C"), QColor("#677587"), QColor("#FFFFFF"),
+        QColor("#C53D32"), QColor("#D98A14"), QColor("#1E8A5D")},
+       {QColor("#7F9BC3"), QColor("#98B1D4"), QColor("#627EA6"),
+        QColor("#101317"), QColor("#181D24"), QColor("#212730"),
+        QColor("#12161C"), QColor("#181D24"), QColor("#141920"),
+        QColor("#212730"), QColor("#2C3440"), QColor("#252C36"),
+        QColor("#EFF3F8"), QColor("#95A2B4"), QColor("#FFFFFF"),
+        QColor("#FF6B5E"), QColor("#FFB347"), QColor("#39C98A")}},
+  }};
+  return Presets;
+}
+
+const ThemePresetDefinition *FindThemePreset(const QString &Id) {
+  for (const ThemePresetDefinition &Preset : BuiltInThemePresets()) {
+    if (Id.compare(QLatin1String(Preset.Id), Qt::CaseInsensitive) == 0)
+      return &Preset;
+  }
+  return nullptr;
+}
+
+QString NormalizeThemePresetId(const QString &Id) {
+  const ThemePresetDefinition *Preset = FindThemePreset(Id);
+  if (Preset)
+    return QString::fromLatin1(Preset->Id);
+  return Id.compare(QLatin1String(KCustomThemePreset), Qt::CaseInsensitive) ==
+                 0
+             ? QString::fromLatin1(KCustomThemePreset)
+             : QString();
+}
+
+const ThemePalette &PaletteForPreset(const ThemePresetDefinition &Preset,
+                                     bool DarkMode) {
+  return DarkMode ? Preset.Dark : Preset.Light;
+}
+
+void ApplyThemeColorValues(QJsonObject &ThemeObject,
+                           const ThemePalette &Palette) {
   ThemeObject.insert("AccentColor",
                      Palette.Accent.name(QColor::HexRgb).toUpper());
   ThemeObject.insert("AccentHoverColor",
@@ -141,6 +237,73 @@ void ApplyDefaultThemeValues(QJsonObject &ThemeObject) {
                      Palette.CardSurface.name(QColor::HexRgb).toUpper());
 }
 
+void ApplyPaletteValues(QJsonObject &ThemeObject, const ThemePalette &Palette) {
+  ThemeObject.insert("DarkMode", KDefaultThemeDarkMode);
+  ThemeObject.insert("BackgroundMaterial", KDefaultThemeBackgroundMaterial);
+  ThemeObject.insert("WallpaperOpacity", KDefaultThemeWallpaperOpacity);
+  ThemeObject.insert("Preset", KDefaultThemePreset);
+  ApplyThemeColorValues(ThemeObject, Palette);
+}
+
+void ApplyThemePreset(QJsonObject &ThemeObject, const QString &PresetId,
+                      bool DarkMode) {
+  const ThemePresetDefinition *Preset = FindThemePreset(PresetId);
+  if (!Preset)
+    return;
+  ThemeObject.insert("Preset", Preset->Id);
+  ApplyThemeColorValues(ThemeObject, PaletteForPreset(*Preset, DarkMode));
+}
+
+void ApplyDefaultThemeValues(QJsonObject &ThemeObject,
+                             bool DarkMode = KDefaultThemeDarkMode) {
+  ThemeObject.insert("DarkMode", DarkMode);
+  ThemeObject.insert("BackgroundMaterial", KDefaultThemeBackgroundMaterial);
+  ThemeObject.insert("WallpaperOpacity", KDefaultThemeWallpaperOpacity);
+  ThemeObject.insert("Preset", KDefaultThemePreset);
+  ApplyThemeColorValues(ThemeObject, DefaultThemePalette(DarkMode));
+}
+
+bool ThemeObjectMatchesPalette(const QJsonObject &ThemeObject,
+                               const ThemePalette &Palette) {
+  const std::array<std::pair<const char *, QColor>, 18> Entries{{
+      {"AccentColor", Palette.Accent},
+      {"AccentHoverColor", Palette.AccentHover},
+      {"AccentPressedColor", Palette.AccentPressed},
+      {"PageBackgroundColor", Palette.PageBackground},
+      {"CardSurfaceColor", Palette.CardSurface},
+      {"SurfaceElevatedColor", Palette.ElevatedSurface},
+      {"SurfaceSunkenColor", Palette.SunkenSurface},
+      {"InputSurfaceColor", Palette.InputSurface},
+      {"TableSurfaceColor", Palette.TableSurface},
+      {"PopupSurfaceColor", Palette.PopupSurface},
+      {"BorderColor", Palette.Border},
+      {"DividerColor", Palette.Divider},
+      {"TextColor", Palette.Text},
+      {"MutedTextColor", Palette.MutedText},
+      {"SelectionTextColor", Palette.SelectionText},
+      {"DangerColor", Palette.Danger},
+      {"WarningColor", Palette.Warning},
+      {"SuccessColor", Palette.Success},
+  }};
+  for (const auto &[Key, Color] : Entries) {
+    if (ThemeObject.value(Key).toString().toUpper() !=
+        Color.name(QColor::HexRgb).toUpper())
+      return false;
+  }
+  return ThemeObject.value("BackgroundColor").toString().toUpper() ==
+             Palette.PageBackground.name(QColor::HexRgb).toUpper() &&
+         ThemeObject.value("SurfaceColor").toString().toUpper() ==
+             Palette.CardSurface.name(QColor::HexRgb).toUpper();
+}
+
+QString InferThemePresetId(const QJsonObject &ThemeObject, bool DarkMode) {
+  for (const ThemePresetDefinition &Preset : BuiltInThemePresets()) {
+    if (ThemeObjectMatchesPalette(ThemeObject, PaletteForPreset(Preset, DarkMode)))
+      return QString::fromLatin1(Preset.Id);
+  }
+  return QString::fromLatin1(KCustomThemePreset);
+}
+
 QColor BlendColors(const QColor &Base, const QColor &Overlay, qreal Amount) {
   const qreal Ratio = std::clamp(Amount, 0.0, 1.0);
   return QColor::fromRgbF(
@@ -157,7 +320,9 @@ QColor WithAlpha(const QColor &Color, int Alpha) {
 }
 
 ThemePalette CurrentThemePalette() {
-  const ThemePalette &Defaults = DefaultThemePalette();
+  const bool DarkMode =
+      ConfigurationValue("Theme", "DarkMode", KDefaultThemeDarkMode).toBool();
+  const ThemePalette &Defaults = DefaultThemePalette(DarkMode);
   ThemePalette Palette;
   Palette.Accent = ConfiguredColor("AccentColor", Defaults.Accent);
   Palette.AccentHover =
@@ -196,9 +361,12 @@ ThemePalette CurrentThemePalette() {
 
 void EnsureThemeConfiguration() {
   QJsonObject ThemeObject = Configuration.value("Theme").toObject();
-  const ThemePalette &Defaults = DefaultThemePalette();
-  const std::array<std::pair<const char *, QJsonValue>, 23> DefaultEntries{
+  const bool DarkMode =
+      ThemeObject.value("DarkMode").toBool(KDefaultThemeDarkMode);
+  const ThemePalette &Defaults = DefaultThemePalette(DarkMode);
+  const std::array<std::pair<const char *, QJsonValue>, 24> DefaultEntries{
       {{"DarkMode", KDefaultThemeDarkMode},
+       {"Preset", KDefaultThemePreset},
        {"BackgroundMaterial", KDefaultThemeBackgroundMaterial},
        {"WallpaperPath", ""},
        {"WallpaperMode", 0},
@@ -238,8 +406,13 @@ void EnsureThemeConfiguration() {
       Changed = true;
     }
   }
-  if (ThemeObject.contains("Preset")) {
-    ThemeObject.remove("Preset");
+  const QString NormalizedPreset =
+      NormalizeThemePresetId(ThemeObject.value("Preset").toString());
+  if (NormalizedPreset.isEmpty()) {
+    ThemeObject.insert("Preset", InferThemePresetId(ThemeObject, DarkMode));
+    Changed = true;
+  } else if (ThemeObject.value("Preset").toString() != NormalizedPreset) {
+    ThemeObject.insert("Preset", NormalizedPreset);
     Changed = true;
   }
   if (ThemeObject.contains("MenuCornerRadius")) {
@@ -322,6 +495,69 @@ QColor ConfiguredColor(const QString &Key, const QColor &Fallback) {
   return Color.isValid() ? Color : Fallback;
 }
 
+void ReplaceThemeColorIfMatchesDefault(QJsonObject &ThemeObject,
+                                       const char *Key,
+                                       const QColor &From,
+                                       const QColor &To) {
+  const QString Current = ThemeObject.value(Key).toString().toUpper();
+  if (Current.isEmpty() || Current == From.name(QColor::HexRgb).toUpper())
+    ThemeObject.insert(Key, To.name(QColor::HexRgb).toUpper());
+}
+
+void SyncThemeDefaultsForMode(QJsonObject &ThemeObject, bool DarkMode) {
+  const QString PresetId =
+      NormalizeThemePresetId(ThemeObject.value("Preset").toString());
+  if (const ThemePresetDefinition *Preset = FindThemePreset(PresetId)) {
+    ThemeObject.insert("DarkMode", DarkMode);
+    ApplyThemePreset(ThemeObject, Preset->Id, DarkMode);
+    return;
+  }
+  const ThemePalette &From = DefaultThemePalette(!DarkMode);
+  const ThemePalette &To = DefaultThemePalette(DarkMode);
+  ThemeObject.insert("DarkMode", DarkMode);
+  ThemeObject.insert("Preset", KCustomThemePreset);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "AccentColor", From.Accent,
+                                    To.Accent);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "AccentHoverColor",
+                                    From.AccentHover, To.AccentHover);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "AccentPressedColor",
+                                    From.AccentPressed, To.AccentPressed);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "PageBackgroundColor",
+                                    From.PageBackground, To.PageBackground);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "CardSurfaceColor",
+                                    From.CardSurface, To.CardSurface);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "SurfaceElevatedColor",
+                                    From.ElevatedSurface, To.ElevatedSurface);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "SurfaceSunkenColor",
+                                    From.SunkenSurface, To.SunkenSurface);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "InputSurfaceColor",
+                                    From.InputSurface, To.InputSurface);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "TableSurfaceColor",
+                                    From.TableSurface, To.TableSurface);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "PopupSurfaceColor",
+                                    From.PopupSurface, To.PopupSurface);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "BorderColor", From.Border,
+                                    To.Border);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "DividerColor", From.Divider,
+                                    To.Divider);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "TextColor", From.Text,
+                                    To.Text);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "MutedTextColor",
+                                    From.MutedText, To.MutedText);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "SelectionTextColor",
+                                    From.SelectionText, To.SelectionText);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "DangerColor", From.Danger,
+                                    To.Danger);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "WarningColor", From.Warning,
+                                    To.Warning);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "SuccessColor", From.Success,
+                                    To.Success);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "BackgroundColor",
+                                    From.PageBackground, To.PageBackground);
+  ReplaceThemeColorIfMatchesDefault(ThemeObject, "SurfaceColor",
+                                    From.CardSurface, To.CardSurface);
+}
+
 QColor PrimaryTextColor() { return CurrentThemePalette().Text; }
 
 QColor MutedTextColor() { return CurrentThemePalette().MutedText; }
@@ -356,6 +592,8 @@ bool ApplyWindowBackdrop(QWidget *Window, int Material) {
   int EffectiveMaterial = 0;
   if (Material == 1) {
     Supported = WindowAgent->setWindowAttribute("mica", true);
+    if (!Supported)
+      Supported = WindowAgent->setWindowAttribute("mica-alt", true);
     if (Supported)
       EffectiveMaterial = 1;
   } else if (Material == 2) {
@@ -477,19 +715,43 @@ QString ApplicationStyleSheet(int MaterialOverride) {
                        0, 2);
   const bool WallpaperEnabled =
       !ConfigurationValue("Theme", "WallpaperPath", "").toString().isEmpty();
-  if (Material == 1)
-    PageBackground = WithAlpha(PageBackground, 214);
-  else if (Material == 2)
-    PageBackground = WithAlpha(PageBackground, 184);
-  if (WallpaperEnabled)
-    PageBackground.setAlpha(std::min(PageBackground.alpha(), 168));
+  if (Material == 1) {
+    PageBackground = WithAlpha(PageBackground, 72);
+    CardSurface = WithAlpha(CardSurface, 176);
+    ElevatedSurface = WithAlpha(ElevatedSurface, 196);
+    SunkenSurface = WithAlpha(SunkenSurface, 152);
+    InputSurface = WithAlpha(InputSurface, 170);
+    TableSurface = WithAlpha(TableSurface, 166);
+    PopupSurface = WithAlpha(PopupSurface, 208);
+  } else if (Material == 2) {
+    PageBackground = WithAlpha(PageBackground, 148);
+    CardSurface = WithAlpha(CardSurface, 220);
+    ElevatedSurface = WithAlpha(ElevatedSurface, 232);
+    SunkenSurface = WithAlpha(SunkenSurface, 206);
+    InputSurface = WithAlpha(InputSurface, 216);
+    TableSurface = WithAlpha(TableSurface, 210);
+    PopupSurface = WithAlpha(PopupSurface, 234);
+  }
+  if (WallpaperEnabled) {
+    PageBackground.setAlpha(std::min(PageBackground.alpha(), 92));
+    CardSurface.setAlpha(std::min(CardSurface.alpha(), 206));
+    ElevatedSurface.setAlpha(std::min(ElevatedSurface.alpha(), 220));
+    SunkenSurface.setAlpha(std::min(SunkenSurface.alpha(), 184));
+    InputSurface.setAlpha(std::min(InputSurface.alpha(), 202));
+    TableSurface.setAlpha(std::min(TableSurface.alpha(), 196));
+    PopupSurface.setAlpha(std::min(PopupSurface.alpha(), 224));
+  }
   const int HeaderPadding = std::clamp(qRound(6.0 * Density / 100.0), 4, 8);
   const int MenuVerticalPadding =
       std::clamp(qRound(7.0 * Density / 100.0), 5, 9);
-  const QColor HoverOverlay = BlendColors(CardSurface, AccentHover, 0.12);
-  const QColor PressedOverlay = BlendColors(CardSurface, AccentPressed, 0.18);
+  const QColor HoverOverlay = BlendColors(
+      CardSurface, AccentHover, Material == 1 ? 0.08 : 0.12);
+  const QColor PressedOverlay = BlendColors(
+      CardSurface, AccentPressed, Material == 1 ? 0.12 : 0.18);
   const QColor InputBorder = BlendColors(Border, Accent, 0.18);
-  const QColor SidebarSurface = BlendColors(CardSurface, ElevatedSurface, 0.35);
+  QColor SidebarSurface = BlendColors(CardSurface, ElevatedSurface, 0.35);
+  if (Material == 1)
+    SidebarSurface.setAlpha(std::min(SidebarSurface.alpha(), 156));
   QString Style = R"QSS(
         QFrame#Sidebar, QWidget#Brand { background: {{SIDEBAR_SURFACE}}; border: none; }
         QWidget#WindowBody { background: transparent; }

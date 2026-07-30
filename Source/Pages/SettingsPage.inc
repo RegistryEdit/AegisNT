@@ -68,19 +68,103 @@ QWidget *CreateSettingsPage() {
 
   AddSection("Theme");
 
+  const auto ThemeColorButtons =
+      std::make_shared<QMap<QString, PushButton *>>();
+  const auto SyncThemeColorButtons = std::make_shared<std::function<void()>>();
+
   auto *DarkMode = new SwitchButton;
   DarkMode->setChecked(
       ConfigurationValue("Theme", "DarkMode", KDefaultThemeDarkMode).toBool());
   AddSetting("Dark mode", "Switch between the light and dark QFluent themes.",
              DarkMode);
   QObject::connect(DarkMode, &SwitchButton::checkedChanged, Content,
-                   [Content, ThemeUiSyncing](bool Checked) {
+                   [Content, ThemeUiSyncing, SyncThemeColorButtons](bool Checked) {
                      if (*ThemeUiSyncing)
                        return;
-                     SetConfigurationValueTransient("Theme", "DarkMode",
-                                                    Checked);
+                     QJsonObject ThemeObject = ConfigurationSection("Theme");
+                     SyncThemeDefaultsForMode(ThemeObject, Checked);
+                     Configuration.insert("Theme", ThemeObject);
+                     if (*SyncThemeColorButtons)
+                       (*SyncThemeColorButtons)();
                      QueueThemeApply(Content->window(), true, true);
                    });
+
+  auto *ThemePreset = new ComboBox;
+  ThemePreset->addItems(
+      {"Default Blue", "Cyan", "Indigo", "Graphite", "Custom"});
+  ThemePreset->setMinimumWidth(170);
+  const auto PresetIndexForId = [ThemePreset](const QString &PresetId) {
+    for (int Index = 0; Index < ThemePreset->count(); ++Index) {
+      if (ThemePreset->itemText(Index).compare("Default Blue",
+                                               Qt::CaseInsensitive) == 0 &&
+          PresetId == "default_blue")
+        return Index;
+      if (ThemePreset->itemText(Index).compare("Cyan", Qt::CaseInsensitive) ==
+              0 &&
+          PresetId == "cyan")
+        return Index;
+      if (ThemePreset->itemText(Index).compare("Indigo", Qt::CaseInsensitive) ==
+              0 &&
+          PresetId == "indigo")
+        return Index;
+      if (ThemePreset->itemText(Index).compare("Graphite",
+                                               Qt::CaseInsensitive) == 0 &&
+          PresetId == "graphite")
+        return Index;
+      if (ThemePreset->itemText(Index).compare("Custom", Qt::CaseInsensitive) ==
+              0 &&
+          PresetId == "custom")
+        return Index;
+    }
+    return 0;
+  };
+  const auto PresetIdForIndex = [ThemePreset](int Index) -> QString {
+    if (Index < 0 || Index >= ThemePreset->count())
+      return {};
+    const QString Text = ThemePreset->itemText(Index);
+    if (Text.compare("Default Blue", Qt::CaseInsensitive) == 0)
+      return "default_blue";
+    if (Text.compare("Cyan", Qt::CaseInsensitive) == 0)
+      return "cyan";
+    if (Text.compare("Indigo", Qt::CaseInsensitive) == 0)
+      return "indigo";
+    if (Text.compare("Graphite", Qt::CaseInsensitive) == 0)
+      return "graphite";
+    if (Text.compare("Custom", Qt::CaseInsensitive) == 0)
+      return "custom";
+    return {};
+  };
+  ThemePreset->setCurrentIndex(PresetIndexForId(
+      NormalizeThemePresetId(
+          ConfigurationValue("Theme", "Preset", KDefaultThemePreset)
+              .toString())));
+  AddSetting("Preset theme", "Apply a predefined color theme.", ThemePreset);
+  QObject::connect(
+      ThemePreset, &ComboBox::currentIndexChanged, Content,
+      [Content, DarkMode, ThemePreset, PresetIdForIndex, PresetIndexForId,
+       ThemeUiSyncing, SyncThemeColorButtons](int Index) {
+        if (*ThemeUiSyncing)
+          return;
+        const QString PresetId = PresetIdForIndex(Index);
+        if (PresetId.isEmpty())
+          return;
+        if (PresetId == "custom") {
+          *ThemeUiSyncing = true;
+          const QSignalBlocker BlockPreset(ThemePreset);
+          ThemePreset->setCurrentIndex(PresetIndexForId(
+              NormalizeThemePresetId(
+                  ConfigurationValue("Theme", "Preset", KDefaultThemePreset)
+                      .toString())));
+          *ThemeUiSyncing = false;
+          return;
+        }
+        QJsonObject ThemeObject = ConfigurationSection("Theme");
+        ApplyThemePreset(ThemeObject, PresetId, DarkMode->isChecked());
+        Configuration.insert("Theme", ThemeObject);
+        if (*SyncThemeColorButtons)
+          (*SyncThemeColorButtons)();
+        QueueThemeApply(Content->window(), true, true);
+      });
 
   auto *BackgroundMaterial = new ComboBox;
   BackgroundMaterial->addItems({"Off", "Mica", "Acrylic"});
@@ -209,9 +293,9 @@ QWidget *CreateSettingsPage() {
       return Palette.Success;
     return QColor();
   };
-  QMap<QString, PushButton *> ThemeColorButtons;
   const auto AddColorSetting = [AddSetting, Content, UpdateColorButton,
-                                ThemeUiSyncing](const QString &Title,
+                                ThemeUiSyncing, ThemePreset,
+                                PresetIndexForId](const QString &Title,
                                                 const QString &Description,
                                                 const QString &Key,
                                                 const QColor &Fallback) {
@@ -227,7 +311,7 @@ QWidget *CreateSettingsPage() {
     QObject::connect(
         ColorButton, &QPushButton::clicked, Content,
         [Content, ColorButton, UpdateColorButton, Key, Fallback, Title,
-         ThemeUiSyncing] {
+         ThemeUiSyncing, ThemePreset, PresetIndexForId] {
           if (*ThemeUiSyncing)
             return;
           ColorDialog Dialog(ConfiguredColor(Key, Fallback), "Select " + Title,
@@ -267,9 +351,15 @@ QWidget *CreateSettingsPage() {
           if (Dialog.exec() != QDialog::Accepted)
             return;
           const QColor Selected = Dialog.color();
-          SetConfigurationValueTransient(
-              "Theme", Key, Selected.name(QColor::HexRgb).toUpper());
+          QJsonObject ThemeObject = ConfigurationSection("Theme");
+          ThemeObject.insert(Key, Selected.name(QColor::HexRgb).toUpper());
+          ThemeObject.insert("Preset", KCustomThemePreset);
+          Configuration.insert("Theme", ThemeObject);
           UpdateColorButton(ColorButton, Selected);
+          *ThemeUiSyncing = true;
+          const QSignalBlocker BlockPreset(ThemePreset);
+          ThemePreset->setCurrentIndex(PresetIndexForId("custom"));
+          *ThemeUiSyncing = false;
           QueueThemeApply(Content->window(), true, true);
         });
     return ColorButton;
@@ -326,12 +416,12 @@ QWidget *CreateSettingsPage() {
       [&](const QString &Title, const QString &Description, const QString &Key,
           const QColor &Fallback) -> PushButton * {
     PushButton *Button = AddColorSetting(Title, Description, Key, Fallback);
-    ThemeColorButtons.insert(Key, Button);
+    ThemeColorButtons->insert(Key, Button);
     return Button;
   };
-  const auto SyncThemeColorButtons = [&ThemeColorButtons, UpdateColorButton,
-                                      ResolveThemeColor] {
-    for (auto It = ThemeColorButtons.begin(); It != ThemeColorButtons.end();
+  *SyncThemeColorButtons = [ThemeColorButtons, UpdateColorButton,
+                            ResolveThemeColor] {
+    for (auto It = ThemeColorButtons->begin(); It != ThemeColorButtons->end();
          ++It)
       UpdateColorButton(It.value(), ResolveThemeColor(It.key()));
   };
@@ -465,16 +555,17 @@ QWidget *CreateSettingsPage() {
              ResetTheme);
   QObject::connect(
       ResetTheme, &QPushButton::clicked, Content,
-      [Content, DarkMode, BackgroundMaterial, WallpaperPath, ClearWallpaper,
-       WallpaperMode, CornerRadius, FontScale, Density, WallpaperOpacity,
-       SyncThemeColorButtons, ThemeUiSyncing] {
+      [Content, DarkMode, ThemePreset, PresetIndexForId, BackgroundMaterial,
+       WallpaperPath, ClearWallpaper, WallpaperMode, CornerRadius, FontScale,
+       Density, WallpaperOpacity, SyncThemeColorButtons, ThemeUiSyncing] {
         QJsonObject ThemeObject = ConfigurationSection("Theme");
-        ApplyDefaultThemeValues(ThemeObject);
+        ApplyDefaultThemeValues(ThemeObject, DarkMode->isChecked());
         ThemeObject.insert("WallpaperPath", "");
         ThemeObject.insert("WallpaperMode", 0);
         Configuration.insert("Theme", ThemeObject);
         *ThemeUiSyncing = true;
         const QSignalBlocker BlockDarkMode(DarkMode);
+        const QSignalBlocker BlockThemePreset(ThemePreset);
         const QSignalBlocker BlockBackgroundMaterial(BackgroundMaterial);
         const QSignalBlocker BlockWallpaperMode(WallpaperMode);
         const QSignalBlocker BlockCornerRadius(CornerRadius);
@@ -488,10 +579,12 @@ QWidget *CreateSettingsPage() {
             ConfigurationValue("Theme", "BackgroundMaterial",
                                KDefaultThemeBackgroundMaterial)
                 .toInt());
+        ThemePreset->setCurrentIndex(PresetIndexForId("default_blue"));
         WallpaperPath->clear();
         ClearWallpaper->setEnabled(false);
         WallpaperMode->setCurrentIndex(0);
-        SyncThemeColorButtons();
+        if (*SyncThemeColorButtons)
+          (*SyncThemeColorButtons)();
         CornerRadius->setValue(ConfigurationValue("Theme", "CornerRadius",
                                                   KDefaultThemeCornerRadius)
                                    .toInt());
