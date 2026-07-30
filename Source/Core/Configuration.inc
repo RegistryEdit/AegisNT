@@ -809,8 +809,8 @@ QString ApplicationStyleSheet(int MaterialOverride) {
         QFrame#settingRow QLabel { color: {{TEXT}}; }
         QLabel[TextRole="Muted"] { color: {{MUTED_TEXT}}; }
         QLabel, QAbstractButton, QLineEdit, QTextEdit, QPlainTextEdit,
-        QTreeView, QTableView, QTableWidget { color: {{TEXT}}; }
-        QTreeView, QTableView, QTableWidget, QLineEdit, QTextEdit, QPlainTextEdit {
+        QTreeView, QTableView, QTableWidget, QListWidget { color: {{TEXT}}; }
+        QTreeView, QTableView, QTableWidget, QListWidget, QLineEdit, QTextEdit, QPlainTextEdit {
             selection-background-color: {{ACCENT}};
             selection-color: {{SELECTION_TEXT}};
         }
@@ -823,12 +823,30 @@ QString ApplicationStyleSheet(int MaterialOverride) {
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QAbstractSpinBox:focus, QComboBox:focus {
             border: 1px solid {{ACCENT}};
         }
-        QTreeView, QTableView, QTableWidget {
+        QTreeView, QTableView, QTableWidget, QListWidget {
             background: {{TABLE_SURFACE}};
             alternate-background-color: {{TABLE_ALT_SURFACE}};
             border: 1px solid {{DIVIDER}};
             border-radius: {{SMALL_RADIUS}}px;
             gridline-color: {{DIVIDER}};
+        }
+        QListWidget#PayloadShellHostList {
+            padding: 6px;
+        }
+        QListWidget#PayloadShellHostList::item {
+            border: 1px solid transparent;
+            border-radius: {{SMALL_RADIUS}}px;
+            padding: 8px 10px;
+            margin: 0;
+        }
+        QListWidget#PayloadShellHostList::item:hover {
+            background: {{HOVER_SURFACE}};
+            border: 1px solid {{BORDER}};
+        }
+        QListWidget#PayloadShellHostList::item:selected {
+            background: {{ACCENT}};
+            color: {{SELECTION_TEXT}};
+            border: 1px solid {{ACCENT}};
         }
         QHeaderView::section {
             color: {{TEXT}};
