@@ -833,6 +833,26 @@ QString ApplicationStyleSheet(int MaterialOverride) {
         QListWidget#PayloadShellHostList {
             padding: 6px;
         }
+        QListWidget#HandleLabViewList {
+            padding: 6px;
+            background: {{CARD_SURFACE}};
+        }
+        QListWidget#HandleLabViewList::item {
+            border: 1px solid transparent;
+            border-radius: {{SMALL_RADIUS}}px;
+            padding: 9px 12px;
+            margin: 1px 0;
+            font-weight: 500;
+        }
+        QListWidget#HandleLabViewList::item:hover {
+            background: {{HOVER_SURFACE}};
+            border: 1px solid {{BORDER}};
+        }
+        QListWidget#HandleLabViewList::item:selected {
+            background: {{ACCENT}};
+            color: {{SELECTION_TEXT}};
+            border: 1px solid {{ACCENT}};
+        }
         QListWidget#PayloadShellHostList::item {
             border: 1px solid transparent;
             border-radius: {{SMALL_RADIUS}}px;

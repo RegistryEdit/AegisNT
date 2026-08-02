@@ -5,6 +5,7 @@ QWidget *CreateTablePage() {
     std::array<bool, 5> Available{};
     PIDDB_CACHE_ENUM_OUTPUT PiDDB{};
     bool PiDDBAvailable = false;
+    bool PiDDBQueried = false;
     DWORD ErrorCode = ERROR_SUCCESS;
     bool Success = false;
   };
@@ -12,6 +13,7 @@ QWidget *CreateTablePage() {
     std::shared_ptr<TableQueryResult> Result =
         std::make_shared<TableQueryResult>();
     std::atomic_bool Refreshing = false;
+    std::atomic_bool TabLoading = false;
   };
 
   auto *Page = new QWidget;
@@ -88,7 +90,7 @@ QWidget *CreateTablePage() {
       }
       return;
     }
-    if (Tab == 5 && Result->PiDDBAvailable) {
+    if (Tab == 5 && Result->PiDDBQueried && Result->PiDDBAvailable) {
       AddRow("-", "PiDDBCacheTable",
              QString("0x%1")
                  .arg(Result->PiDDB.TableAddress, sizeof(ULONG_PTR) * 2, 16,
@@ -97,6 +99,9 @@ QWidget *CreateTablePage() {
              QString("%1 of %2 entries")
                  .arg(Result->PiDDB.Count)
                  .arg(Result->PiDDB.TotalCount));
+      if (Result->PiDDB.Count == 0) {
+        AddRow("-", "(no entries)", "-", "PiDDB cache is present but returned 0 entries");
+      }
       for (ULONG Index = 0; Index < Result->PiDDB.Count; ++Index) {
         const PIDDB_CACHE_ENTRY_INFO &Entry = Result->PiDDB.Entries[Index];
         const QString Name = Entry.DriverName[0]
@@ -149,8 +154,87 @@ QWidget *CreateTablePage() {
     } else
       AddRow("-", "PiDDBCacheTable", Hex(Summary.PiDDBCacheTable));
   };
+  const auto LoadTabAsync = std::make_shared<std::function<void(int, bool)>>();
+  *LoadTabAsync = [Page, Kind, Status, Refresh, RefreshIndicator, State,
+                   Populate](int Tab, bool ShowResult) {
+    if (Tab < 0 || State->Refreshing.load())
+      return;
+
+    const std::shared_ptr<TableQueryResult> Result = State->Result;
+    const bool AlreadyLoaded =
+        (Tab < 5 && Result->Available[Tab]) || (Tab == 5 && Result->PiDDBQueried);
+    if (AlreadyLoaded) {
+      Populate();
+      return;
+    }
+
+    if (State->TabLoading.exchange(true))
+      return;
+
+    Refresh->setEnabled(false);
+    RefreshIndicator->show();
+    RefreshIndicator->start();
+    Status->setText(QString("Loading %1...")
+                        .arg(Kind->itemText(Tab)));
+
+    QPointer<QWidget> SafePage(Page);
+    std::thread([SafePage, Kind, Status, Refresh, RefreshIndicator, State,
+                 Populate, Tab, ShowResult] {
+      DWORD ErrorCode = ERROR_SUCCESS;
+      bool Success = false;
+      if (Tab >= 0 && Tab < 5) {
+        Success = QuerySystemTableEntries(static_cast<ULONG>(Tab),
+                                          &State->Result->Entries[Tab]) != FALSE;
+        State->Result->Available[Tab] = Success;
+        if (Success) {
+          if (Tab == 2)
+            ServiceNamesForTable(SYSTEM_TABLE_KIND_SSDT);
+          else if (Tab == 3)
+            ServiceNamesForTable(SYSTEM_TABLE_KIND_SHADOW_SSDT);
+        }
+      } else if (Tab == 5) {
+        Success = QueryPiDDBCacheEntries(&State->Result->PiDDB) != FALSE;
+        ErrorCode = G_LastMultiDrvError;
+        State->Result->PiDDBQueried = true;
+        State->Result->PiDDBAvailable =
+            Success || ErrorCode == ERROR_NOT_FOUND;
+      }
+      if (!(Tab == 5 && ErrorCode == ERROR_NOT_FOUND))
+        ErrorCode = G_LastMultiDrvError;
+
+      QMetaObject::invokeMethod(
+          qApp,
+          [SafePage, Kind, Status, Refresh, RefreshIndicator, State, Populate,
+           Tab, ShowResult, Success, ErrorCode] {
+            State->TabLoading = false;
+            RefreshIndicator->stop();
+            RefreshIndicator->hide();
+            Refresh->setEnabled(true);
+            if (!SafePage)
+              return;
+
+            if (!Success &&
+                !(Tab == 5 && State->Result->PiDDBQueried &&
+                  State->Result->PiDDBAvailable)) {
+              const QString Message =
+                  QString("Load failed (error %1)").arg(ErrorCode);
+              Status->setText(Message);
+              if (ShowResult)
+                ShowErrorNotice(SafePage, "Table", Message);
+              return;
+            }
+
+            if (Kind->currentIndex() == Tab)
+              Populate();
+            Status->setText(QString("Loaded %1").arg(Kind->itemText(Tab)));
+            if (ShowResult)
+              ShowSuccessNotice(SafePage, "Table", "Selected table loaded.");
+          },
+          Qt::QueuedConnection);
+    }).detach();
+  };
   const auto Query = [Page, Status, Refresh, RefreshIndicator, State,
-                      Populate](bool ShowResult) {
+                      Populate, Kind, LoadTabAsync](bool ShowResult) {
     if (State->Refreshing.exchange(true))
       return;
     Refresh->setEnabled(false);
@@ -159,26 +243,16 @@ QWidget *CreateTablePage() {
     RefreshIndicator->start();
     Status->setText("Reading system tables...");
     QPointer<QWidget> SafePage(Page);
+    const int SelectedTab = Kind->currentIndex();
     std::thread([SafePage, Status, Refresh, RefreshIndicator, State, Populate,
-                 ShowResult] {
+                 ShowResult, SelectedTab, LoadTabAsync] {
       auto Result = std::make_shared<TableQueryResult>();
       Result->Success = QuerySystemTables(&Result->Summary) != FALSE;
       Result->ErrorCode = G_LastMultiDrvError;
-      if (Result->Success) {
-        for (ULONG TableKind = 0; TableKind < Result->Entries.size();
-             ++TableKind)
-          Result->Available[TableKind] =
-              QuerySystemTableEntries(TableKind, &Result->Entries[TableKind]) !=
-              FALSE;
-        Result->PiDDBAvailable =
-            QueryPiDDBCacheEntries(&Result->PiDDB) != FALSE;
-        ServiceNamesForTable(SYSTEM_TABLE_KIND_SSDT);
-        ServiceNamesForTable(SYSTEM_TABLE_KIND_SHADOW_SSDT);
-      }
       QMetaObject::invokeMethod(
           qApp,
           [SafePage, Status, Refresh, RefreshIndicator, State, Populate,
-           Result = std::move(Result), ShowResult] {
+           Result = std::move(Result), ShowResult, SelectedTab, LoadTabAsync] {
             State->Result = Result;
             State->Refreshing = false;
             RefreshIndicator->stop();
@@ -194,15 +268,12 @@ QWidget *CreateTablePage() {
               if (ShowResult)
                 ShowErrorNotice(SafePage, "Table", Message);
             } else {
-              const int AvailableCount =
-                  static_cast<int>(std::count(Result->Available.begin(),
-                                              Result->Available.end(), true)) +
-                  (Result->PiDDBAvailable ? 1 : 0);
-              Status->setText(QString("Updated from MultiDrv (%1/6 tables)")
-                                  .arg(AvailableCount));
+              Status->setText("System table summary updated.");
               if (ShowResult)
                 ShowSuccessNotice(SafePage, "Table",
                                   "System tables updated from MultiDrv.");
+              if (SelectedTab >= 0)
+                (*LoadTabAsync)(SelectedTab, false);
             }
             Populate();
           },
@@ -210,7 +281,10 @@ QWidget *CreateTablePage() {
     }).detach();
   };
   QObject::connect(Kind, &ComboBox::currentIndexChanged, Page,
-                   [Populate](int) { Populate(); });
+                   [Populate, LoadTabAsync](int Index) {
+                     Populate();
+                     (*LoadTabAsync)(Index, false);
+                   });
   QObject::connect(Search, &QLineEdit::textChanged, Page,
                    [Populate] { Populate(); });
   QObject::connect(Refresh, &QPushButton::clicked, Page,

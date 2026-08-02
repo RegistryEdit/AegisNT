@@ -1862,6 +1862,9 @@ private:
                              {"Name", "Base", "Size", "Path", "Source"});
     auto *Memory = AddTable("memory", "Memory", Fluent::IconType::TILES,
                             {"Base", "Size", "State", "Protect", "Type"});
+    auto *Eprocess =
+        AddTable("eprocess", "EPROCESS", Fluent::IconType::LAYOUT,
+                 {"Member", "Value", "Raw / Notes"});
     auto *Mitigations =
         AddTable("mitigations", "Mitigations", Fluent::IconType::CERTIFICATE,
                  {"Property", "Value", "Source"});
@@ -1872,8 +1875,9 @@ private:
     InstallFluentScrollBar(PebText, Qt::Vertical);
     Tabs->addTab("peb", "PEB", Fluent::IconType::CODE);
     Pages->addWidget(PebText);
-    const std::array<QTableWidget *, 7> InspectorTables{
-        Summary, Token, Threads, Handles, Modules, Memory, Mitigations};
+    const std::array<QTableWidget *, 8> InspectorTables{
+        Summary, Token, Threads, Handles, Modules, Memory, Eprocess,
+        Mitigations};
     for (QTableWidget *Table : InspectorTables)
       Table->verticalHeader()->setDefaultSectionSize(KCompactTableRowHeight);
     const auto ApplyInspectorSearch = [InspectorSearch, Pages, PebText,
@@ -2187,6 +2191,16 @@ private:
                 qApp->clipboard()->setText(Text);
                 ShowSuccessNotice(this, "Handle", "Handle information copied.");
               });
+          AddMenuAction(
+              Menu, "Open in HandleLab",
+              [this, OwnerPid, HandleValue] {
+                AegisNT::ApplicationContext().HandleLabPresetPid = OwnerPid;
+                AegisNT::ApplicationContext().HandleLabPresetSearch =
+                    QString("0x%1").arg(HandleValue, 0, 16).toUpper();
+                ShowSuccessNotice(
+                    this, "HandleLab",
+                    "Handle preset prepared. Open HandleLab to inspect it.");
+              });
           ReleaseMenuAfterClose(Menu);
           Menu->exec(Handles->viewport()->mapToGlobal(Position));
         });
@@ -2201,7 +2215,7 @@ private:
     auto RefreshBusy = std::make_shared<std::atomic_bool>(false);
     auto RefreshInspector = std::make_shared<std::function<void()>>();
     *RefreshInspector = [SafeDialog, Pid, Summary, Token, Threads, Handles,
-                         Modules, Memory, Mitigations, PebText, Loading,
+                         Modules, Memory, Eprocess, Mitigations, PebText, Loading,
                          LoadStatus, InspectorSearch, HasSelectedProcess,
                          StaticSummaryRows, RefreshBusy] {
       if (!SafeDialog || RefreshBusy->exchange(true))
@@ -2210,19 +2224,21 @@ private:
       Loading->start();
       LoadStatus->setText("Refreshing process data...");
       std::thread([SafeDialog, Pid, Summary, Token, Threads, Handles, Modules,
-                   Memory, Mitigations, PebText, Loading, LoadStatus,
+                   Memory, Eprocess, Mitigations, PebText, Loading, LoadStatus,
                    InspectorSearch, HasSelectedProcess, StaticSummaryRows,
                    RefreshBusy] {
         UserTokenInfo TokenInfo;
         const bool TokenOk = QueryUserTokenInfo(Pid, TokenInfo);
-        std::vector<MDV2_RECORD> ProcessRows, ThreadRows, HandleRows,
-            ModuleRows, MemoryRows;
+        std::vector<MDV2_RECORD> ProcessRows, EprocessRows, ThreadRows,
+            HandleRows, ModuleRows, MemoryRows;
         std::vector<InspectorHandleRow> UserHandleRows;
-        MDV2_LIST_HEADER ProcessHeader{}, ThreadHeader{}, HandleHeader{},
-            ModuleHeader{}, MemoryHeader{};
+        MDV2_LIST_HEADER ProcessHeader{}, EprocessHeader{}, ThreadHeader{},
+            HandleHeader{}, ModuleHeader{}, MemoryHeader{};
         DWORD UserHandleError = ERROR_SUCCESS;
         const bool KernelProcessOk = QueryProcessRecordsV2(
             Pid, IOCTL_QUERY_PROCESS_V2, ProcessRows, &ProcessHeader);
+        const bool KernelEprocessOk = QueryProcessRecordsV2(
+            Pid, IOCTL_QUERY_EPROCESS_V2, EprocessRows, &EprocessHeader);
         const bool KernelThreadOk = QueryProcessRecordsV2(
             Pid, IOCTL_ENUM_THREADS_V2, ThreadRows, &ThreadHeader);
         const bool KernelHandleOk = QueryProcessRecordsV2(
@@ -2260,16 +2276,18 @@ private:
         QMetaObject::invokeMethod(
             qApp,
             [SafeDialog, Summary, Token, Threads, Handles, Modules, Memory,
-             Mitigations, PebText, Loading, LoadStatus, InspectorSearch,
+             Eprocess, Mitigations, PebText, Loading, LoadStatus, InspectorSearch,
              TokenInfo = std::move(TokenInfo), TokenOk,
              ProcessRows = std::move(ProcessRows),
+             EprocessRows = std::move(EprocessRows),
              ThreadRows = std::move(ThreadRows),
              HandleRows = std::move(HandleRows),
              UserHandleRows = std::move(UserHandleRows),
              ModuleRows = std::move(ModuleRows),
-             MemoryRows = std::move(MemoryRows), ProcessHeader, HandleHeader,
-             ModuleHeader, UserHandleOk, UserHandleError, KernelProcessOk,
-             KernelThreadOk, KernelHandleOk, KernelModuleOk, KernelMemoryOk,
+             MemoryRows = std::move(MemoryRows), ProcessHeader, EprocessHeader,
+             HandleHeader, ModuleHeader, UserHandleOk, UserHandleError,
+             KernelProcessOk, KernelEprocessOk, KernelThreadOk, KernelHandleOk,
+             KernelModuleOk, KernelMemoryOk,
              PebOutput = std::move(PebOutput), HasSelectedProcess,
              MitigationEntries = std::move(MitigationEntries), Pid,
              StaticSummaryRows, RefreshBusy]() mutable {
@@ -2278,14 +2296,16 @@ private:
                 return;
               }
               for (QTableWidget *Table : {Summary, Token, Threads, Handles,
-                                          Modules, Memory, Mitigations}) {
+                                          Modules, Memory, Eprocess,
+                                          Mitigations}) {
                 Table->setUpdatesEnabled(false);
                 Table->setSortingEnabled(false);
               }
               while (Summary->rowCount() > StaticSummaryRows)
                 Summary->removeRow(Summary->rowCount() - 1);
               for (QTableWidget *Table :
-                   {Token, Threads, Handles, Modules, Memory, Mitigations})
+                   {Token, Threads, Handles, Modules, Memory, Eprocess,
+                    Mitigations})
                 Table->setRowCount(0);
               const auto Add = [InspectorSearch](QTableWidget *Table,
                                                  const QStringList &Values) {
@@ -2342,6 +2362,7 @@ private:
                 Add(Summary, {"Private bytes", FormatBytes(R.Value[7])});
                 if (R.Path[0])
                   Add(Summary, {"Path", QString::fromWCharArray(R.Path)});
+
               } else
                 Add(Summary,
                     {"Kernel query",
@@ -2349,6 +2370,43 @@ private:
                          .arg(static_cast<quint32>(ProcessHeader.Status), 8, 16,
                               QLatin1Char('0'))
                          .toUpper()});
+              if (KernelEprocessOk && !EprocessRows.empty()) {
+                for (const auto &Row : EprocessRows) {
+                  const QString Member =
+                      Row.Name[0] ? QString::fromWCharArray(Row.Name) : "-";
+                  const QString Value =
+                      Row.Path[0] ? QString::fromWCharArray(Row.Path) : "-";
+                  QString Notes;
+                  if (Row.Value[0] != 0)
+                    Notes = QString("offset=0x%1")
+                                .arg(Row.Value[0], 0, 16)
+                                .toUpper();
+                  if (Row.Detail[0]) {
+                    const QString Detail = QString::fromWCharArray(Row.Detail);
+                    Notes = Notes.isEmpty() ? Detail : Notes + " | " + Detail;
+                  }
+                  if (Row.Status != 0) {
+                    const QString StatusText =
+                        QString("status=0x%1")
+                            .arg(static_cast<quint32>(Row.Status), 8, 16,
+                                 QLatin1Char('0'))
+                            .toUpper();
+                    Notes = Notes.isEmpty() ? StatusText
+                                            : Notes + " | " + StatusText;
+                  }
+                  Add(Eprocess, {Member, Value, Notes});
+                }
+              }
+              if ((!KernelEprocessOk || EprocessRows.empty()) &&
+                  Eprocess->rowCount() == 0) {
+                Add(Eprocess,
+                    {"Kernel query",
+                     QString("0x%1")
+                         .arg(static_cast<quint32>(EprocessHeader.Status), 8, 16,
+                              QLatin1Char('0'))
+                         .toUpper(),
+                     "EPROCESS data unavailable"});
+              }
               Add(Token,
                   {"User",
                    TokenOk ? TokenInfo.User
@@ -2472,7 +2530,8 @@ private:
                 PebText->find(InspectorSearch->text().trimmed());
               }
               for (QTableWidget *Table : {Summary, Token, Threads, Handles,
-                                          Modules, Memory, Mitigations}) {
+                                          Modules, Memory, Eprocess,
+                                          Mitigations}) {
                 Table->setSortingEnabled(true);
                 Table->setUpdatesEnabled(true);
               }

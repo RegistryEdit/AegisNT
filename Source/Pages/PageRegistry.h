@@ -12,6 +12,6 @@ struct PageDefinition {
   Fluent::IconType Icon;
 };
 
-const std::array<PageDefinition, 18> &PageDefinitions();
+const std::array<PageDefinition, 20> &PageDefinitions();
 
 } // namespace AegisNT

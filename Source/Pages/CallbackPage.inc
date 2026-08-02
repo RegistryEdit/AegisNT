@@ -121,6 +121,14 @@ QWidget *CreateCallbackPage() {
   Table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
   Layout->addWidget(Table, 1);
   const auto State = std::make_shared<CallbackPageState>();
+  const auto ShowCallbackResult = [Page](bool Success, DWORD ErrorCode,
+                                         const QString &SuccessText) {
+    if (Success && ErrorCode == ERROR_SUCCESS)
+      ShowSuccessNotice(Page, "Callback", SuccessText);
+    else
+      ShowErrorNotice(Page, "Callback",
+                      QString("Operation failed (error %1)").arg(ErrorCode));
+  };
   const auto Populate = [Search, TypeFilter, Table, State,
                          DescribeCallbackType] {
     const QString Query = Search->text().trimmed();
@@ -252,7 +260,7 @@ QWidget *CreateCallbackPage() {
                    [Query] { Query(true); });
   QObject::connect(
       Table, &QWidget::customContextMenuRequested, Page,
-      [Page, Table, State, Query](const QPoint &Position) {
+      [Page, Table, State, Query, ShowCallbackResult](const QPoint &Position) {
         const QModelIndex Index = Table->indexAt(Position);
         if (!Index.isValid())
           return;
@@ -274,7 +282,7 @@ QWidget *CreateCallbackPage() {
         ConnectMenuAction(
             Remove, Page,
             [Page = QPointer<QWidget>(Page), State, Address, Type, Flags,
-             Query] {
+             Query, ShowCallbackResult] {
               if (!Page)
                 return;
               if ((Flags & CALLBACK_FLAG_CAN_REMOVE) == 0) {
@@ -298,7 +306,8 @@ QWidget *CreateCallbackPage() {
                 return;
               }
               QPointer<QWidget> SafePage(Page);
-              std::thread([SafePage, State, Address, Type, Query] {
+              std::thread([SafePage, State, Address, Type, Query,
+                           ShowCallbackResult] {
                 CALLBACK_REMOVE_INPUT Input = {};
                 Input.Type = Type;
                 Input.Address = Address;
@@ -307,17 +316,13 @@ QWidget *CreateCallbackPage() {
                 const DWORD ErrorCode = G_LastMultiDrvError;
                 QMetaObject::invokeMethod(
                     qApp,
-                    [SafePage, State, Success, ErrorCode, Query] {
+                    [SafePage, State, Success, ErrorCode, Query,
+                     ShowCallbackResult] {
                       State->Removing = false;
                       if (!SafePage)
                         return;
-                      if (!Success || ErrorCode != ERROR_SUCCESS)
-                        ShowErrorNotice(SafePage, "Callback",
-                                        QString("Operation failed (error %1)")
-                                            .arg(ErrorCode));
-                      else
-                        ShowSuccessNotice(SafePage, "Callback",
-                                          "Callback removed successfully.");
+                      ShowCallbackResult(Success, ErrorCode,
+                                         "Callback removed successfully.");
                       Query(false);
                     },
                     Qt::QueuedConnection);

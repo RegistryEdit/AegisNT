@@ -177,6 +177,8 @@
   CTL_CODE(0x8000, 0x859, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_SET_IDT_LIMIT                                                    \
   CTL_CODE(0x8000, 0x85A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_EPROCESS_V2                                                \
+  CTL_CODE(0x8000, 0x85B, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define CALLBACK_TYPE_OB_PROCESS 0
 #define CALLBACK_TYPE_OB_THREAD 1

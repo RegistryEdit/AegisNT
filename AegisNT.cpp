@@ -139,11 +139,13 @@
 #include <atomic>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -2670,6 +2672,10 @@ QWidget *CreateWindowPage() { return new WindowManagerPage; }
 
 #include "Source/Pages/KernelInspectorPage.inc"
 
+#include "Source/Pages/HandleLabPage.inc"
+
+#include "Source/Pages/SnapshotLabPage.inc"
+
 #include "Source/Pages/SettingsPage.inc"
 
 QWidget *CreatePageBody(int Index) {
@@ -2709,6 +2715,10 @@ QWidget *CreatePageBody(int Index) {
   case 16:
     return CreateServiceManagerPage();
   case 17:
+    return CreateHandleLabPage();
+  case 18:
+    return CreateSnapshotLabPage();
+  case 19:
     return CreateDiskPage();
   default:
     return new QWidget;
@@ -2941,31 +2951,52 @@ private:
     NavigationPanelWidget->setReturnButtonVisible(false);
     NavigationPanelWidget->setCollapsible(false);
     NavigationPanelWidget->setAcrylicEnabled(false);
-    for (int Index = 0;
-         Index < static_cast<int>(AegisNT::PageDefinitions().size()); ++Index) {
-      if (Index == 6) {
-        NavigationPanelWidget->addItem(
-            "kernel", CreateFluentIcon(Fluent::IconType::DEVELOPER_TOOLS),
-            "Kernel", nullptr, false, NavigationPanel::ItemPosition::SCROLL,
-            "Kernel");
-      } else if (Index == 10) {
-        NavigationPanelWidget->addItem(
-            "module", CreateFluentIcon(Fluent::IconType::LIBRARY), "Module",
-            nullptr, false, NavigationPanel::ItemPosition::SCROLL, "Module");
-      }
+    const auto AddPageItem = [this](int Index, const QString &ParentRoute = {}) {
       const auto &Page = AegisNT::PageDefinitions()[Index];
       const QString Route = QString::number(Index);
-      QString ParentRoute;
-      if ((Index >= 6 && Index <= 9) || Index == 15 || Index == 16 ||
-          Index == 17)
-        ParentRoute = "kernel";
-      else if (Index >= 10 && Index <= 12)
-        ParentRoute = "module";
       NavigationPanelWidget->addItem(
           Route, CreateFluentIcon(Page.Icon), Page.Title,
           [this, Index] { SelectPage(Index); }, true,
           NavigationPanel::ItemPosition::SCROLL, Page.Title, ParentRoute);
-    }
+    };
+
+    for (int Index : {0, 1, 2, 3, 4, 5})
+      AddPageItem(Index);
+
+    NavigationPanelWidget->addItem(
+        "kernel", CreateFluentIcon(Fluent::IconType::DEVELOPER_TOOLS),
+        "Kernel", nullptr, false, NavigationPanel::ItemPosition::SCROLL,
+        "Kernel");
+    NavigationPanelWidget->addItem(
+        "kernel-overview", CreateFluentIcon(Fluent::IconType::SEARCH),
+        "Overview", nullptr, false, NavigationPanel::ItemPosition::SCROLL,
+        "Overview", "kernel");
+    for (int Index : {15})
+      AddPageItem(Index, "kernel-overview");
+
+    NavigationPanelWidget->addItem(
+        "kernel-execution",
+        CreateFluentIcon(Fluent::IconType::DEVELOPER_TOOLS), "Execution",
+        nullptr, false, NavigationPanel::ItemPosition::SCROLL, "Execution",
+        "kernel");
+    for (int Index : {6, 16, 17, 18, 7, 8, 9})
+      AddPageItem(Index, "kernel-execution");
+
+    NavigationPanelWidget->addItem(
+        "kernel-storage", CreateFluentIcon(Fluent::IconType::SAVE), "Storage",
+        nullptr, false, NavigationPanel::ItemPosition::SCROLL, "Storage",
+        "kernel");
+    for (int Index : {19})
+      AddPageItem(Index, "kernel-storage");
+
+    NavigationPanelWidget->addItem(
+        "module", CreateFluentIcon(Fluent::IconType::LIBRARY), "Module",
+        nullptr, false, NavigationPanel::ItemPosition::SCROLL, "Module");
+    for (int Index : {10, 11, 12})
+      AddPageItem(Index, "module");
+
+    for (int Index : {13, 14})
+      AddPageItem(Index);
     Layout->addWidget(NavigationPanelWidget, 1);
     NavigationPanelWidget->expand(false);
     return Sidebar;

@@ -2,8 +2,8 @@
 
 namespace AegisNT {
 
-const std::array<PageDefinition, 18> &PageDefinitions() {
-  static constexpr std::array<PageDefinition, 18> Pages{{
+const std::array<PageDefinition, 20> &PageDefinitions() {
+  static constexpr std::array<PageDefinition, 20> Pages{{
       {"Information",
        "Application overview, environment status, and system information.",
        Fluent::IconType::INFO},
@@ -39,6 +39,12 @@ const std::array<PageDefinition, 18> &PageDefinitions() {
        Fluent::IconType::SEARCH},
       {"ServiceManager", "Windows services and kernel driver management.",
        Fluent::IconType::DEVELOPER_TOOLS},
+      {"HandleLab",
+       "Enumerate, correlate, and operate on system handles across processes.",
+       Fluent::IconType::LINK},
+      {"SnapshotLab",
+       "Capture, persist, and compare process, driver, and callback snapshots.",
+       Fluent::IconType::SEARCH},
       {"Disk", "DiskDrv protection, blocked events, and one-shot allow tokens.",
        Fluent::IconType::SAVE},
   }};

@@ -10,11 +10,12 @@ AegisNT is a Windows x64 system inspection, process management, and kernel debug
 
 - **System and task management**: Inspect processes, threads, tokens, modules, memory, PEB data, handles, and mitigation policies with live updates.
 - **Process operations**: Terminate, suspend, resume, configure PPL or critical-process state, manipulate tokens, inject DLLs, and manage protection rules.
-- **Handle management**: View raw and decoded access masks, select permissions by object type, close handles, duplicate handles, or reduce their permissions.
+- **Handle management**: Includes the system-wide `HandleLab` page for handle triage by process, type, object, and risk, with close, duplicate, and downgrade actions.
 - **System monitoring**: Capture process, thread, image, registry, file, and network events.
 - **Registry and file tools**: Browse, edit, monitor, and configure protection rules.
 - **Window management**: Enumerate windows, change window state, and configure driver-backed window protection.
 - **Driver and kernel inspection**: Manage driver services and inspect kernel modules, objects, callbacks, MiniFilters, WFP, NDIS, security state, and system tables.
+- **Kernel analysis views**: `KernelInspector` covers filters, networking, security state, synchronization objects, sessions, and related kernel inspection workflows.
 - **Memory tools**: Read, write, and inspect process memory through user-mode APIs or `MultiDrv`.
 - **Module system**: Load independent feature modules. The repository includes ARP, HTTP/2, and payload-related example projects.
 - **Customizable UI**: QFluent-based interface with configurable theme colors, backgrounds, font scaling, density, and window opacity.
@@ -39,6 +40,17 @@ When a driver is unavailable, supported queries fall back to Windows user-mode A
 |-- Installer/              # Inno Setup installer
 `-- External/               # Third-party and supporting code
 ```
+
+## Navigation Layout
+
+The desktop navigation is currently organized as follows:
+
+- **Information / Task / Monitor / Registry / File / Window**: core system pages and user-mode tooling
+- **Kernel / Overview**: `KernelInspector`
+- **Kernel / Execution**: `Driver`, `ServiceManager`, `HandleLab`, `Memory`, `Table`, `Callback`
+- **Kernel / Storage**: `Disk`
+- **Module**: `Payload`, `ModuleRun`, `ModuleManager`
+- **Console / Settings**: debugging console, theme, language, and path configuration
 
 ## Requirements
 

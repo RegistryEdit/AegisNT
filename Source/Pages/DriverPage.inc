@@ -208,6 +208,12 @@ public:
   }
 
 private:
+  void BeginDriverTableUpdate() {
+    SetTableRefreshEnabled(DriverTable, false);
+  }
+  void EndDriverTableUpdate() {
+    SetTableRefreshEnabled(DriverTable, true);
+  }
   void ShowLoadDriverDialog() {
     auto *Dialog = new QDialog(this);
     Dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -584,6 +590,8 @@ private:
       DriverRefreshResult Result;
       DRIVER_ENUM_HEADER Header{};
       std::vector<DRIVER_ENUM_ENTRY> Entries;
+      QHash<QString, QPair<QString, QString>> DriverDecorationCache;
+      QHash<QString, UserFileTrustInfo> TrustCache;
       Result.Success = QueryDriverEntries(Entries, &Header);
       Result.ErrorCode = G_LastMultiDrvError;
       Result.NtStatus = Header.NtStatus;
@@ -603,137 +611,117 @@ private:
           Row.ImageBase = Entry.ImageBase;
           Row.ImageSize = Entry.ImageSize;
           Row.Path = NormalizeUserDriverPath(Row.Path);
-          std::vector<MDV2_RECORD> DetailRecords;
-          MDV2_LIST_HEADER DetailHeader{};
-          const QStringList DetailCandidates{
-              Row.Name,
-              Row.Name.isEmpty() ? QString() : "\\Driver\\" + Row.Name,
-              Row.DisplayName, QFileInfo(Row.Path).completeBaseName()};
-          for (const QString &Candidate : DetailCandidates) {
-            if (Candidate.isEmpty())
-              continue;
-            DetailRecords.clear();
-            if (QueryNamedDriverRecordsV2(Candidate.toStdWString(),
-                                          DetailRecords, &DetailHeader) &&
-                !DetailRecords.empty()) {
-              QStringList Symbols;
-              QStringList Links;
-              const auto AppendUnique = [](QStringList &List,
-                                           const QString &Text) {
-                if (!Text.isEmpty() &&
-                    !List.contains(Text, Qt::CaseInsensitive))
-                  List.append(Text);
-              };
-              for (const MDV2_RECORD &Record : DetailRecords) {
-                const QString RecordName =
-                    QString::fromWCharArray(Record.Name).trimmed();
-                const QString RecordType =
-                    QString::fromWCharArray(Record.TypeName).trimmed();
-                const QString RecordPath =
-                    QString::fromWCharArray(Record.Path).trimmed();
-                const QString RecordDetail =
-                    QString::fromWCharArray(Record.Detail).trimmed();
-                const QString RecordAddress = DriverRecordAddressText(Record);
-                const QString RecordLabel =
-                    !RecordName.isEmpty()
-                        ? RecordName
-                        : (!RecordPath.isEmpty()
-                               ? RecordPath
-                               : (!RecordDetail.isEmpty() ? RecordDetail
-                                                          : RecordAddress));
-                const bool LooksLikeDevice =
-                    Record.Kind == 15 ||
-                    RecordType.contains("Device", Qt::CaseInsensitive) ||
-                    RecordPath.contains("\\Device\\", Qt::CaseInsensitive) ||
-                    RecordDetail.contains("\\Device\\", Qt::CaseInsensitive);
-                const bool LooksLikeSymbol =
-                    Record.Kind == 8 ||
-                    RecordType.contains("Symbol", Qt::CaseInsensitive) ||
-                    RecordType.contains("Dispatch", Qt::CaseInsensitive) ||
-                    RecordPath.contains("Dispatch", Qt::CaseInsensitive) ||
-                    RecordDetail.contains("Dispatch", Qt::CaseInsensitive);
-                const bool LooksLikeLink =
-                    RecordType.contains("SymbolicLink", Qt::CaseInsensitive) ||
-                    RecordType.contains("Link", Qt::CaseInsensitive) ||
-                    RecordPath.contains("\\DosDevices\\",
-                                        Qt::CaseInsensitive) ||
-                    RecordDetail.contains("\\DosDevices\\",
-                                          Qt::CaseInsensitive);
-                if (LooksLikeLink) {
-                  const QString TargetText =
-                      !RecordDetail.isEmpty()
-                          ? RecordDetail
-                          : (!RecordPath.isEmpty() ? RecordPath
-                                                   : RecordAddress);
-                  AppendUnique(Links, TargetText.isEmpty()
-                                          ? RecordLabel
-                                          : RecordLabel + " -> " + TargetText);
-                } else if (LooksLikeDevice) {
-                  AppendUnique(Links, RecordLabel.isEmpty()
-                                          ? (RecordPath.isEmpty() ? RecordDetail
-                                                                  : RecordPath)
-                                          : RecordLabel);
-                } else if (LooksLikeSymbol) {
-                  AppendUnique(Symbols,
-                               RecordLabel + (RecordAddress.isEmpty()
-                                                  ? QString()
-                                                  : " @ " + RecordAddress));
-                }
-              }
-              if (Symbols.isEmpty() && Links.isEmpty()) {
+          const QString DecorationKey =
+              (!Row.Name.isEmpty() ? Row.Name
+                                   : QFileInfo(Row.Path).completeBaseName())
+                  .trimmed()
+                  .toCaseFolded();
+          if (!DecorationKey.isEmpty() &&
+              DriverDecorationCache.contains(DecorationKey)) {
+            const auto Cached = DriverDecorationCache.value(DecorationKey);
+            Row.SymbolNames = Cached.first;
+            Row.DeviceLinks = Cached.second;
+          } else if (Row.State == SERVICE_RUNNING || Row.DriverObject != 0 ||
+                     Row.ImageBase != 0) {
+            std::vector<MDV2_RECORD> DetailRecords;
+            MDV2_LIST_HEADER DetailHeader{};
+            const QStringList DetailCandidates{
+                Row.Name,
+                Row.Name.isEmpty() ? QString() : "\\Driver\\" + Row.Name,
+                QFileInfo(Row.Path).completeBaseName()};
+            for (const QString &Candidate : DetailCandidates) {
+              if (Candidate.isEmpty())
+                continue;
+              DetailRecords.clear();
+              if (QueryNamedDriverRecordsV2(Candidate.toStdWString(),
+                                            DetailRecords, &DetailHeader) &&
+                  !DetailRecords.empty()) {
+                QStringList Symbols;
+                QStringList Links;
+                const auto AppendUnique = [](QStringList &List,
+                                             const QString &Text) {
+                  if (!Text.isEmpty() &&
+                      !List.contains(Text, Qt::CaseInsensitive))
+                    List.append(Text);
+                };
                 for (const MDV2_RECORD &Record : DetailRecords) {
                   const QString RecordName =
                       QString::fromWCharArray(Record.Name).trimmed();
+                  const QString RecordType =
+                      QString::fromWCharArray(Record.TypeName).trimmed();
                   const QString RecordPath =
                       QString::fromWCharArray(Record.Path).trimmed();
                   const QString RecordDetail =
                       QString::fromWCharArray(Record.Detail).trimmed();
                   const QString RecordAddress = DriverRecordAddressText(Record);
-                  const QString Fallback =
+                  const QString RecordLabel =
                       !RecordName.isEmpty()
                           ? RecordName
                           : (!RecordPath.isEmpty()
                                  ? RecordPath
                                  : (!RecordDetail.isEmpty() ? RecordDetail
                                                             : RecordAddress));
-                  const bool LooksLikeNamedLink =
-                      RecordName.contains("\\Device\\", Qt::CaseInsensitive) ||
-                      RecordName.contains("\\DosDevices\\",
-                                          Qt::CaseInsensitive) ||
+                  const bool LooksLikeDevice =
+                      Record.Kind == 15 ||
+                      RecordType.contains("Device", Qt::CaseInsensitive) ||
                       RecordPath.contains("\\Device\\", Qt::CaseInsensitive) ||
+                      RecordDetail.contains("\\Device\\", Qt::CaseInsensitive);
+                  const bool LooksLikeSymbol =
+                      Record.Kind == 8 ||
+                      RecordType.contains("Symbol", Qt::CaseInsensitive) ||
+                      RecordType.contains("Dispatch", Qt::CaseInsensitive) ||
+                      RecordPath.contains("Dispatch", Qt::CaseInsensitive) ||
+                      RecordDetail.contains("Dispatch", Qt::CaseInsensitive);
+                  const bool LooksLikeLink =
+                      RecordType.contains("SymbolicLink",
+                                          Qt::CaseInsensitive) ||
+                      RecordType.contains("Link", Qt::CaseInsensitive) ||
                       RecordPath.contains("\\DosDevices\\",
                                           Qt::CaseInsensitive) ||
-                      RecordDetail.contains("\\Device\\",
-                                            Qt::CaseInsensitive) ||
                       RecordDetail.contains("\\DosDevices\\",
                                             Qt::CaseInsensitive);
-                  if (!Fallback.isEmpty())
-                    AppendUnique(Symbols, Fallback);
-                  if (LooksLikeNamedLink) {
-                    const QString LinkText =
-                        RecordPath.contains("\\Device\\",
-                                            Qt::CaseInsensitive) ||
-                                RecordPath.contains("\\DosDevices\\",
-                                                    Qt::CaseInsensitive)
-                            ? RecordPath
-                            : (RecordDetail.contains("\\Device\\",
-                                                     Qt::CaseInsensitive) ||
-                                       RecordDetail.contains(
-                                           "\\DosDevices\\",
-                                           Qt::CaseInsensitive)
-                                   ? RecordDetail
-                                   : RecordName);
-                    AppendUnique(Links, LinkText);
+                  if (LooksLikeLink) {
+                    const QString TargetText =
+                        !RecordDetail.isEmpty()
+                            ? RecordDetail
+                            : (!RecordPath.isEmpty() ? RecordPath
+                                                     : RecordAddress);
+                    AppendUnique(Links, TargetText.isEmpty()
+                                            ? RecordLabel
+                                            : RecordLabel + " -> " + TargetText);
+                  } else if (LooksLikeDevice) {
+                    AppendUnique(Links, RecordLabel.isEmpty()
+                                            ? (RecordPath.isEmpty()
+                                                   ? RecordDetail
+                                                   : RecordPath)
+                                            : RecordLabel);
+                  } else if (LooksLikeSymbol) {
+                    AppendUnique(Symbols,
+                                 RecordLabel + (RecordAddress.isEmpty()
+                                                    ? QString()
+                                                    : " @ " + RecordAddress));
                   }
                 }
+                Row.SymbolNames = Symbols.join(" | ");
+                Row.DeviceLinks = Links.join(" | ");
+                if (!DecorationKey.isEmpty()) {
+                  DriverDecorationCache.insert(
+                      DecorationKey,
+                      qMakePair(Row.SymbolNames, Row.DeviceLinks));
+                }
+                break;
               }
-              Row.SymbolNames = Symbols.join(" | ");
-              Row.DeviceLinks = Links.join(" | ");
-              break;
             }
           }
-          if (QFileInfo::exists(Row.Path))
-            Row.Trust = QueryUserFileTrustCached(Row.Path);
+          if (!Row.Path.isEmpty()) {
+            const QString TrustKey = QDir::toNativeSeparators(Row.Path).toCaseFolded();
+            if (TrustCache.contains(TrustKey))
+              Row.Trust = TrustCache.value(TrustKey);
+            else if (QFileInfo::exists(Row.Path)) {
+              Row.Trust = QueryUserFileTrustCached(Row.Path);
+              TrustCache.insert(TrustKey, Row.Trust);
+            }
+          }
           Row.SearchText =
               (Row.Name + ' ' + Row.DisplayName + ' ' + Row.Path + ' ' +
                Row.RegistryPath + ' ' + Row.SymbolNames + ' ' +
@@ -782,7 +770,7 @@ private:
     }).detach();
   }
   void Populate() {
-    SetTableRefreshEnabled(DriverTable, false);
+    BeginDriverTableUpdate();
     QHash<QString, int> ExistingRows;
     ExistingRows.reserve(DriverTable->rowCount());
     for (int Row = 0; Row < DriverTable->rowCount(); ++Row) {
@@ -810,7 +798,7 @@ private:
         continue;
       FillDriverTableRow(Row, Driver);
     }
-    SetTableRefreshEnabled(DriverTable, true);
+    EndDriverTableUpdate();
     ApplySearchFilter();
   }
   int FindDriverTableRow(const QString &Name) const {
@@ -901,14 +889,14 @@ private:
       return;
     const QString Query = SearchEdit->text().trimmed().toCaseFolded();
     const bool HasQuery = !Query.isEmpty();
-    SetTableRefreshEnabled(DriverTable, false);
+    BeginDriverTableUpdate();
     for (int Row = 0; Row < DriverTable->rowCount(); ++Row) {
       QTableWidgetItem *Item = DriverTable->item(Row, 0);
       const QString SearchText =
           Item ? Item->data(Qt::UserRole + 1).toString() : QString();
       DriverTable->setRowHidden(Row, HasQuery && !SearchText.contains(Query));
     }
-    SetTableRefreshEnabled(DriverTable, true);
+    EndDriverTableUpdate();
   }
   SearchLineEdit *SearchEdit = nullptr;
   QTimer *SearchDebounceTimer = nullptr;

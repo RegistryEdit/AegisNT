@@ -20,5 +20,7 @@ QWidget *CreateSettingsPage();
 QWidget *CreateKernelInspectorPage();
 QWidget *CreateDriverPage();
 QWidget *CreateServiceManagerPage();
+QWidget *CreateHandleLabPage();
+QWidget *CreateSnapshotLabPage();
 
 QWidget *CreatePageBody(int Index);

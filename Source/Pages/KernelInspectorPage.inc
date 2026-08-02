@@ -369,6 +369,14 @@ QWidget *CreateKernelInspectorPage() {
                    &ComboBox::setCurrentIndex);
   TabSelector->setCurrentIndex(0);
   Pages->setCurrentIndex(0);
+  const auto TriggerRefresh = [Refresh] {
+    QTimer::singleShot(0, Refresh, &QPushButton::click);
+  };
+  const auto ResetDataTable = [](QTableWidget *Table) {
+    Table->setSortingEnabled(false);
+    Table->clearContents();
+    Table->setRowCount(0);
+  };
   const auto ApplyKernelControlView = [KernelControlsUi, KernelControlCache]() {
     if (!KernelControlsUi->Table)
       return;
