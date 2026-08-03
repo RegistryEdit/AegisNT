@@ -14,6 +14,7 @@ QWidget *CreateTablePage() {
         std::make_shared<TableQueryResult>();
     std::atomic_bool Refreshing = false;
     std::atomic_bool TabLoading = false;
+    std::vector<MDV2_RECORD> Modules;
   };
 
   auto *Page = new QWidget;
@@ -23,7 +24,7 @@ QWidget *CreateTablePage() {
   ConfigureToolbarLayout(Toolbar);
   auto *Kind = new ComboBox;
   Kind->addItems({"InterruptDescriptorTable", "I/O Timer", "SSDT", "ShadowSSDT",
-                  "GlobalDescriptorTable", "PiDDBCacheTable"});
+                  "GlobalDescriptorTable", "PiDDBCacheTable", "CPU Registers"});
   Kind->setCurrentIndex(0);
   Kind->setMinimumWidth(300);
   auto *Search = new SearchLineEdit;
@@ -42,7 +43,7 @@ QWidget *CreateTablePage() {
   Toolbar->addWidget(RefreshIndicator);
   Toolbar->addWidget(Refresh);
   Layout->addLayout(Toolbar);
-  auto *Table = MakeTable({"Index", "Name", "Address", "Metadata"});
+  auto *Table = MakeTable({"Index", "Name", "Address", "Module / Symbol", "State", "Metadata"});
   Table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   Table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
   Layout->addWidget(Table, 1);
@@ -54,12 +55,21 @@ QWidget *CreateTablePage() {
     const std::shared_ptr<TableQueryResult> Result = State->Result;
     const SYSTEM_TABLES_OUTPUT &Summary = Result->Summary;
     const QString SearchText = Search->text().trimmed();
-    const auto AddRow = [Table,
+    const auto AddRow = [Table, State,
                          SearchText](const QString &Index, const QString &Name,
                                      const QString &Address,
-                                     const QString &Metadata = QString()) {
+                                     const QString &Metadata = QString(),
+                                     quint64 TargetAddress = 0) {
+      AegisNT::KernelResearch::AddressInfo Owner;
+      if (TargetAddress)
+        Owner = AegisNT::KernelResearch::ResolveAddress(TargetAddress, State->Modules);
+      const QString Ownership = TargetAddress
+          ? (Owner.Module.isEmpty() ? QString("-") : Owner.Module + QString("+0x%1").arg(Owner.Rva, 0, 16).toUpper()) +
+                (Owner.Symbol.isEmpty() ? QString() : " | " + Owner.Symbol)
+          : QString("-");
+      const QString OwnershipState = TargetAddress ? Owner.Status : QString("-");
       if (!SearchText.isEmpty() &&
-          !(Index + " " + Name + " " + Address + " " + Metadata)
+          !(Index + " " + Name + " " + Address + " " + Ownership + " " + OwnershipState + " " + Metadata)
                .contains(SearchText, Qt::CaseInsensitive))
         return;
       const int Row = Table->rowCount();
@@ -67,7 +77,12 @@ QWidget *CreateTablePage() {
       Table->setItem(Row, 0, new QTableWidgetItem(Index));
       Table->setItem(Row, 1, new QTableWidgetItem(Name));
       Table->setItem(Row, 2, new QTableWidgetItem(Address));
-      Table->setItem(Row, 3, new QTableWidgetItem(Metadata));
+      Table->setItem(Row, 3, new QTableWidgetItem(Ownership));
+      auto *StateItem = new QTableWidgetItem(OwnershipState);
+      if (OwnershipState == "OutsideModule")
+        StateItem->setForeground(QColor(220, 70, 70));
+      Table->setItem(Row, 4, StateItem);
+      Table->setItem(Row, 5, new QTableWidgetItem(Metadata));
       Table->setRowHeight(Row, KCompactTableRowHeight);
     };
     if (Tab < 5 && Result->Available[Tab]) {
@@ -78,7 +93,7 @@ QWidget *CreateTablePage() {
               .arg(Output.TableBase, sizeof(ULONG_PTR) * 2, 16,
                    QLatin1Char('0'))
               .toUpper(),
-          QString("%1 of %2 entries").arg(Output.Count).arg(Output.TotalCount));
+          QString("%1 of %2 entries").arg(Output.Count).arg(Output.TotalCount), Output.TableBase);
       for (ULONG Index = 0; Index < Output.Count; ++Index) {
         const SYSTEM_TABLE_ENTRY &Entry = Output.Entries[Index];
         AddRow(
@@ -86,7 +101,7 @@ QWidget *CreateTablePage() {
             QString("0x%1")
                 .arg(Entry.Address, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0'))
                 .toUpper(),
-            QString::number(Entry.ArgumentBytes));
+            QString::number(Entry.ArgumentBytes), Entry.Address);
       }
       return;
     }
@@ -151,8 +166,18 @@ QWidget *CreateTablePage() {
     } else if (Tab == 4) {
       AddRow("-", "GDT Base", Hex(Summary.GdtBase));
       AddRow("-", "GDT Limit", QString::number(Summary.GdtLimit));
-    } else
+    } else if (Tab == 5)
       AddRow("-", "PiDDBCacheTable", Hex(Summary.PiDDBCacheTable));
+    else {
+      AddRow("-", "CR0", Hex(Summary.Cr0), "Protection and paging controls");
+      AddRow("-", "CR2", Hex(Summary.Cr2), "Last page-fault linear address");
+      AddRow("-", "CR3", Hex(Summary.Cr3), "Current page-table root");
+      AddRow("-", "CR4", Hex(Summary.Cr4), "Extended processor controls");
+      AddRow("-", "IA32_LSTAR", Hex(Summary.MsrLstar), "64-bit syscall entry");
+      AddRow("-", "IA32_STAR", Hex(Summary.MsrStar), "Syscall segment selectors");
+      AddRow("-", "IA32_FMASK", Hex(Summary.MsrFmask), "Syscall RFLAGS mask");
+      AddRow("-", "IA32_EFER", Hex(Summary.MsrEfer), "Extended feature enable");
+    }
   };
   const auto LoadTabAsync = std::make_shared<std::function<void(int, bool)>>();
   *LoadTabAsync = [Page, Kind, Status, Refresh, RefreshIndicator, State,
@@ -161,7 +186,7 @@ QWidget *CreateTablePage() {
       return;
 
     const std::shared_ptr<TableQueryResult> Result = State->Result;
-    const bool AlreadyLoaded =
+    const bool AlreadyLoaded = Tab == 6 ||
         (Tab < 5 && Result->Available[Tab]) || (Tab == 5 && Result->PiDDBQueried);
     if (AlreadyLoaded) {
       Populate();
@@ -198,6 +223,8 @@ QWidget *CreateTablePage() {
         State->Result->PiDDBQueried = true;
         State->Result->PiDDBAvailable =
             Success || ErrorCode == ERROR_NOT_FOUND;
+      } else if (Tab == 6) {
+        Success = true;
       }
       if (!(Tab == 5 && ErrorCode == ERROR_NOT_FOUND))
         ErrorCode = G_LastMultiDrvError;
@@ -249,11 +276,16 @@ QWidget *CreateTablePage() {
       auto Result = std::make_shared<TableQueryResult>();
       Result->Success = QuerySystemTables(&Result->Summary) != FALSE;
       Result->ErrorCode = G_LastMultiDrvError;
+      const auto Modules = AegisNT::KernelResearch::QueryAll(IOCTL_ENUM_KERNEL_MODULES_V2);
+      auto &Symbols = AegisNT::KernelResearch::SymbolService::Instance();
+      Symbols.Initialize();
+      Symbols.ReloadModules(Modules);
       QMetaObject::invokeMethod(
           qApp,
           [SafePage, Status, Refresh, RefreshIndicator, State, Populate,
-           Result = std::move(Result), ShowResult, SelectedTab, LoadTabAsync] {
+           Result = std::move(Result), Modules, ShowResult, SelectedTab, LoadTabAsync] {
             State->Result = Result;
+            State->Modules = Modules;
             State->Refreshing = false;
             RefreshIndicator->stop();
             RefreshIndicator->hide();

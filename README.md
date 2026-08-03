@@ -15,8 +15,11 @@ AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调�
 - **注册表与文件工具**：浏览、编辑、监控和配置保护规则。
 - **窗口管理**：枚举窗口、修改窗口状态，并通过驱动配置窗口保护。
 - **驱动与内核检查**：管理驱动服务，检查内核模块、对象、回调、MiniFilter、WFP、NDIS、安全状态和系统表。
+- **驱动对象检查**：Driver Inspector 展示 IRP MajorFunction、Fast I/O dispatch、DeviceObject/AttachedDevice/NextDevice 链及函数地址符号归属。
 - **内核分析视图**：`KernelInspector` 提供过滤器、网络、安全状态、同步对象与会话等内核检查能力。
+- **内核研究中心**：通过 Microsoft 公共符号缓存解析内核地址归属，提供系统表完整性基线、Big Pool 聚合与对象命名空间浏览。
 - **内存工具**：通过用户态 API 或 `MultiDrv` 读取、写入和查看目标进程内存。
+- **事务化内核写入**：写入立即执行，同时静默保存原值，执行写后读回验证、失败自动恢复、会话回滚和 JSONL 审计。
 - **模块系统**：加载独立功能模块，仓库包含 ARP、HTTP/2 和 Payload 相关示例项目。
 - **可定制界面**：QFluent 风格界面，支持主题颜色、背景、字体缩放、密度和窗口透明度设置。
 
@@ -47,6 +50,7 @@ AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调�
 
 - **Information / Task / Monitor / Registry / File / Window**：基础系统信息、任务管理与用户态工具页。
 - **Kernel / Overview**：`KernelInspector`
+- **Kernel / Research**：`KernelResearch`（Symbols、Address Ownership、Integrity、Big Pool、Objects）
 - **Kernel / Execution**：`Driver`、`ServiceManager`、`HandleLab`、`Memory`、`Table`、`Callback`
 - **Kernel / Storage**：`Disk`
 - **Module**：`Payload`、`ModuleRun`、`ModuleManager`

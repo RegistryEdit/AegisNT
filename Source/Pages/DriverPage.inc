@@ -444,13 +444,16 @@ private:
     auto *Pages = new QStackedWidget;
     auto *Overview = MakeTable({"Kind", "Name", "Address", "Value", "Source"});
     auto *Dispatch = MakeTable({"Major function", "Address", "Source"});
+    auto *FastIo = MakeTable({"Fast I/O routine", "Address", "Dispatch", "Owner"});
     auto *Devices = MakeTable(
-        {"Device", "Attached", "Type", "Characteristics", "Flags", "Stack"});
+        {"Device", "Attached", "Next", "Type", "Flags", "Stack", "Driver"});
     Tabs->addTab("overview", "Overview", Fluent::IconType::DOCUMENT);
     Tabs->addTab("dispatch", "Dispatch", Fluent::IconType::CODE);
+    Tabs->addTab("fastio", "Fast I/O", Fluent::IconType::CODE);
     Tabs->addTab("devices", "Devices", Fluent::IconType::FOLDER);
     Pages->addWidget(Overview);
     Pages->addWidget(Dispatch);
+    Pages->addWidget(FastIo);
     Pages->addWidget(Devices);
     QObject::connect(Tabs, &TabBar::currentChanged, Pages,
                      &QStackedWidget::setCurrentIndex);
@@ -472,14 +475,15 @@ private:
     QObject::connect(Close, &QPushButton::clicked, Dialog, &QDialog::accept);
     Dialog->show();
     QPointer<QDialog> SafeDialog(Dialog);
-    std::thread([SafeDialog, Name, Overview, Dispatch, Devices, Loading] {
+    std::thread([SafeDialog, Name, Overview, Dispatch, FastIo, Devices, Loading] {
       std::vector<MDV2_RECORD> Records;
       MDV2_LIST_HEADER Header{};
       QueryNamedDriverRecordsV2(Name.toStdWString(), Records, &Header);
+      const auto Modules = AegisNT::KernelResearch::QueryAll(IOCTL_ENUM_KERNEL_MODULES_V2);
       QMetaObject::invokeMethod(
           qApp,
-          [SafeDialog, Overview, Dispatch, Devices, Loading,
-           Records = std::move(Records), Header] {
+          [SafeDialog, Overview, Dispatch, FastIo, Devices, Loading,
+           Records = std::move(Records), Modules, Header] {
             if (!SafeDialog)
               return;
             if (Loading) {
@@ -501,14 +505,21 @@ private:
               if (Record.Kind == 8)
                 Add(Dispatch, {QString::fromWCharArray(Record.Name), Address,
                                QString::number(Record.Source)});
+              else if (Record.Kind == 16) {
+                const auto Owner = AegisNT::KernelResearch::ResolveAddress(Record.Address, Modules);
+                Add(FastIo, {QString::fromWCharArray(Record.Name), Address,
+                             QString("0x%1").arg(Record.Value[0], 0, 16).toUpper(),
+                             Owner.Module + (Owner.Symbol.isEmpty() ? "" : "!" + Owner.Symbol)});
+              }
               else if (Record.Kind == 15)
                 Add(Devices,
                     {Address,
                      QString("0x%1").arg(Record.Value[0], 0, 16).toUpper(),
+                     QString("0x%1").arg(Record.Value[5], 0, 16).toUpper(),
                      QString::number(Record.Value[1]),
-                     QString("0x%1").arg(Record.Value[2], 0, 16).toUpper(),
                      QString("0x%1").arg(Record.Value[3], 0, 16).toUpper(),
-                     QString::number(Record.Value[4])});
+                     QString::number(Record.Value[4]),
+                     QString("0x%1").arg(Record.Value[6], 0, 16).toUpper()});
               else
                 Add(Overview,
                     {QString::number(Record.Kind),

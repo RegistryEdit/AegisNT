@@ -38,6 +38,7 @@
 #include <QProcessEnvironment>
 #include <QProgressBar>
 #include <QRandomGenerator>
+#include <QUuid>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QScreen>
@@ -103,6 +104,7 @@
 #include <dwmapi.h>
 #include <winioctl.h>
 #include <winternl.h>
+#include <dbghelp.h>
 #include <wtsapi32.h>
 #include <netfw.h>
 #include <sddl.h>
@@ -130,6 +132,7 @@
 #include "Platform/UserProcessCtl.h"
 #include "Platform/UserSecurityInfo.h"
 #include "Source/AppContext.h"
+#include "Source/KernelResearch.h"
 #include "Source/Pages/PageFactory.h"
 #include "Source/Pages/PageRegistry.h"
 #include <openssl/applink.c>
@@ -158,6 +161,7 @@
 #pragma comment(lib, "Userenv.lib")
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Windowscodecs.lib")
+#pragma comment(lib, "Dbghelp.lib")
 
 namespace {
 
@@ -2672,6 +2676,8 @@ QWidget *CreateWindowPage() { return new WindowManagerPage; }
 
 #include "Source/Pages/KernelInspectorPage.inc"
 
+#include "Source/Pages/KernelResearchPage.inc"
+
 #include "Source/Pages/HandleLabPage.inc"
 
 #include "Source/Pages/SnapshotLabPage.inc"
@@ -2720,6 +2726,8 @@ QWidget *CreatePageBody(int Index) {
     return CreateSnapshotLabPage();
   case 19:
     return CreateDiskPage();
+  case 20:
+    return CreateKernelResearchPage();
   default:
     return new QWidget;
   }

@@ -15,8 +15,11 @@ AegisNT is a Windows x64 system inspection, process management, and kernel debug
 - **Registry and file tools**: Browse, edit, monitor, and configure protection rules.
 - **Window management**: Enumerate windows, change window state, and configure driver-backed window protection.
 - **Driver and kernel inspection**: Manage driver services and inspect kernel modules, objects, callbacks, MiniFilters, WFP, NDIS, security state, and system tables.
+- **Driver object inspection**: Driver Inspector shows IRP major functions, Fast I/O dispatch, DeviceObject/AttachedDevice/NextDevice chains, and symbol ownership for function addresses.
 - **Kernel analysis views**: `KernelInspector` covers filters, networking, security state, synchronization objects, sessions, and related kernel inspection workflows.
+- **Kernel research center**: resolves kernel address ownership through the Microsoft public symbol cache and adds integrity baselines, Big Pool aggregation, and object namespace browsing.
 - **Memory tools**: Read, write, and inspect process memory through user-mode APIs or `MultiDrv`.
+- **Transactional kernel writes**: executes staged writes immediately while silently preserving original bytes, verifies by reading back, restores failed writes, supports session rollback, and records JSONL audit events.
 - **Module system**: Load independent feature modules. The repository includes ARP, HTTP/2, and payload-related example projects.
 - **Customizable UI**: QFluent-based interface with configurable theme colors, backgrounds, font scaling, density, and window opacity.
 
@@ -47,6 +50,7 @@ The desktop navigation is currently organized as follows:
 
 - **Information / Task / Monitor / Registry / File / Window**: core system pages and user-mode tooling
 - **Kernel / Overview**: `KernelInspector`
+- **Kernel / Research**: `KernelResearch` (`Symbols`, `Address Ownership`, `Integrity`, `Big Pool`, `Objects`)
 - **Kernel / Execution**: `Driver`, `ServiceManager`, `HandleLab`, `Memory`, `Table`, `Callback`
 - **Kernel / Storage**: `Disk`
 - **Module**: `Payload`, `ModuleRun`, `ModuleManager`

@@ -2,8 +2,8 @@
 
 namespace AegisNT {
 
-const std::array<PageDefinition, 20> &PageDefinitions() {
-  static constexpr std::array<PageDefinition, 20> Pages{{
+const std::array<PageDefinition, 21> &PageDefinitions() {
+  static constexpr std::array<PageDefinition, 21> Pages{{
       {"Information",
        "Application overview, environment status, and system information.",
        Fluent::IconType::INFO},
@@ -47,6 +47,9 @@ const std::array<PageDefinition, 20> &PageDefinitions() {
        Fluent::IconType::SEARCH},
       {"Disk", "DiskDrv protection, blocked events, and one-shot allow tokens.",
        Fluent::IconType::SAVE},
+      {"KernelResearch",
+       "Symbols, integrity baselines, big pool, objects, and address ownership.",
+       Fluent::IconType::SEARCH},
   }};
   return Pages;
 }

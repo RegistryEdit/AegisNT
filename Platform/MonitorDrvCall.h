@@ -47,7 +47,7 @@ struct MonitorWatchDirectoryOutput {
   WCHAR DirectoryPath[260];
 };
 
-#define MONITOR_PROTOCOL_VERSION 2u
+#define MONITOR_PROTOCOL_VERSION 3u
 #define MONITOR_EVENT_FLAG_TRUNCATED 0x00000001u
 #define MONITOR_FILTER_REGISTRY_PREVIEW 0x00000001u
 struct MonitorFilterV2 {
@@ -94,12 +94,16 @@ struct MonitorStatsV2 {
   ULONG64 FileDropped;
   ULONG64 NetworkDropped;
   ULONG64 LastSequence;
+  ULONG QueueCapacity;
+  ULONG SystemHighWatermark;
+  ULONG FileHighWatermark;
+  ULONG NetworkHighWatermark;
 };
 #pragma pack(pop)
 
 static_assert(sizeof(MonitorFilterV2) == 548, "Monitor V2 filter ABI mismatch");
 static_assert(sizeof(MonitorEventV2) == 1664, "Monitor V2 event ABI mismatch");
-static_assert(sizeof(MonitorStatsV2) == 56, "Monitor V2 stats ABI mismatch");
+static_assert(sizeof(MonitorStatsV2) == 72, "Monitor V3 stats ABI mismatch");
 
 static constexpr const WCHAR *EventTypeToString(MonitorEventType T) {
   switch (T) {

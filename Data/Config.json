@@ -4,8 +4,8 @@
         "Height": 1000,
         "Language": "en_US",
         "Opacity": 1,
-        "Title": "Windows Tool",
-        "Version": "2",
+        "Title": "AegisNT",
+        "Version": "3.5.0",
         "Width": 1600
     },
     "Drivers": {
@@ -22,13 +22,8 @@
     },
     "Payload": {
         "Encoder": [
-            "1",
-            "2",
-            "3"
         ],
         "Nop": [
-            "1",
-            "4"
         ]
     },
     "PayloadShell": {

@@ -57,6 +57,7 @@ QWidget *CreateCallbackPage() {
   };
   struct CallbackPageState {
     std::vector<CALLBACK_ENTRY> Rows;
+    std::vector<MDV2_RECORD> Modules;
     std::atomic_bool Refreshing = false;
     std::atomic_bool Removing = false;
   };
@@ -110,7 +111,7 @@ QWidget *CreateCallbackPage() {
   Toolbar->addWidget(RefreshIndicator);
   Toolbar->addWidget(Refresh);
   Layout->addLayout(Toolbar);
-  auto *Table = MakeTable({"Type", "Address", "Module", "Source"});
+  auto *Table = MakeTable({"Type", "Address", "Module / Symbol", "State", "Source"});
   Table->setSelectionMode(QAbstractItemView::SingleSelection);
   Table->setContextMenuPolicy(Qt::CustomContextMenu);
   Table->horizontalHeader()->setSectionResizeMode(
@@ -118,7 +119,8 @@ QWidget *CreateCallbackPage() {
   Table->horizontalHeader()->setSectionResizeMode(
       1, QHeaderView::ResizeToContents);
   Table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-  Table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+  Table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+  Table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
   Layout->addWidget(Table, 1);
   const auto State = std::make_shared<CallbackPageState>();
   const auto ShowCallbackResult = [Page](bool Success, DWORD ErrorCode,
@@ -141,16 +143,18 @@ QWidget *CreateCallbackPage() {
           QString("0x%1")
               .arg(Entry.Address, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0'))
               .toUpper();
-      const QString Module = Entry.ModuleName[0]
-                                 ? QString::fromWCharArray(Entry.ModuleName)
-                                 : "(unknown)";
+      const auto Owner = AegisNT::KernelResearch::ResolveAddress(Entry.Address, State->Modules);
+      const QString DriverModule = Entry.ModuleName[0] ? QString::fromWCharArray(Entry.ModuleName) : QString();
+      const QString Module = Owner.Module.isEmpty() ? (DriverModule.isEmpty() ? "(unknown)" : DriverModule)
+          : Owner.Module + QString("+0x%1").arg(Owner.Rva, 0, 16).toUpper() +
+                (Owner.Symbol.isEmpty() ? QString() : " | " + Owner.Symbol);
       const QString Source = Entry.SourceName[0]
                                  ? QString::fromWCharArray(Entry.SourceName)
                                  : "(unknown)";
       if (TypeFilterText != "All" && Type != TypeFilterText)
         continue;
       if (!Query.isEmpty() &&
-          !(Type + " " + Address + " " + Module + " " + Source)
+          !(Type + " " + Address + " " + Module + " " + Owner.Status + " " + Source)
                .contains(Query, Qt::CaseInsensitive))
         continue;
       const int Row = Table->rowCount();
@@ -165,7 +169,11 @@ QWidget *CreateCallbackPage() {
       Table->setItem(Row, 0, TypeItem);
       Table->setItem(Row, 1, new QTableWidgetItem(Address));
       Table->setItem(Row, 2, new QTableWidgetItem(Module));
-      Table->setItem(Row, 3, new QTableWidgetItem(Source));
+      auto *StateItem = new QTableWidgetItem(Owner.Status);
+      if (Owner.Status == "OutsideModule")
+        StateItem->setForeground(QColor(220, 70, 70));
+      Table->setItem(Row, 3, StateItem);
+      Table->setItem(Row, 4, new QTableWidgetItem(Source));
       Table->setRowHeight(Row, KCompactTableRowHeight);
     }
   };
@@ -182,6 +190,10 @@ QWidget *CreateCallbackPage() {
     std::thread([SafePage, Status, Refresh, RefreshIndicator, State, Populate,
                  DescribeCallbackType, ShowResult] {
       std::vector<CALLBACK_ENTRY> Rows;
+      const auto Modules = AegisNT::KernelResearch::QueryAll(IOCTL_ENUM_KERNEL_MODULES_V2);
+      auto &Symbols = AegisNT::KernelResearch::SymbolService::Instance();
+      Symbols.Initialize();
+      Symbols.ReloadModules(Modules);
       DWORD BytesReturned = 0;
       ULONG Count = 0;
       bool Success =
@@ -215,7 +227,7 @@ QWidget *CreateCallbackPage() {
       QMetaObject::invokeMethod(
           qApp,
           [SafePage, Status, Refresh, RefreshIndicator, State, Populate,
-           DescribeCallbackType, Rows = std::move(Rows), Success, ErrorCode,
+           DescribeCallbackType, Rows = std::move(Rows), Modules, Success, ErrorCode,
            ShowResult]() mutable {
             State->Refreshing = false;
             RefreshIndicator->stop();
@@ -232,6 +244,7 @@ QWidget *CreateCallbackPage() {
                 ShowErrorNotice(SafePage, "Callback", Message);
             } else {
               State->Rows = std::move(Rows);
+              State->Modules = Modules;
               QMap<QString, int> Counts;
               for (const CALLBACK_ENTRY &Entry : State->Rows)
                 Counts[DescribeCallbackType(Entry.Type)]++;

@@ -177,6 +177,22 @@
   CTL_CODE(0x8000, 0x859, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_SET_IDT_LIMIT                                                    \
   CTL_CODE(0x8000, 0x85A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_ADVANCED_V3                                                \
+  CTL_CODE(0x8000, 0x85C, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ADVANCED_OPERATION_V3                                            \
+  CTL_CODE(0x8000, 0x85D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define ADVANCED_KIND_PTE 1u
+#define ADVANCED_KIND_VAD 2u
+#define ADVANCED_KIND_THREAD_STACK 3u
+#define ADVANCED_KIND_SYSTEM_TABLE 4u
+#define ADVANCED_KIND_DRIVER_DISPATCH 5u
+#define ADVANCED_KIND_DRIVER_UNLOAD 6u
+#define ADVANCED_KIND_HARDWARE 7u
+#define ADVANCED_KIND_FIRMWARE 8u
+#define ADVANCED_OP_CAPTURE 1u
+#define ADVANCED_OP_APPLY 2u
+#define ADVANCED_OP_ROLLBACK 3u
 #define IOCTL_QUERY_EPROCESS_V2                                                \
   CTL_CODE(0x8000, 0x85B, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
@@ -442,6 +458,15 @@ typedef struct _SYSTEM_TABLES_OUTPUT {
 
   ULONG_PTR NtoskrnlBase;
   ULONG NtoskrnlSize;
+  ULONG _Pad4;
+  ULONG64 Cr0;
+  ULONG64 Cr2;
+  ULONG64 Cr3;
+  ULONG64 Cr4;
+  ULONG64 MsrLstar;
+  ULONG64 MsrStar;
+  ULONG64 MsrFmask;
+  ULONG64 MsrEfer;
 } SYSTEM_TABLES_OUTPUT, *PSYSTEM_TABLES_OUTPUT;
 
 #define SYSTEM_TABLE_KIND_IDT 0
@@ -556,7 +581,8 @@ enum MDV2_DATA_SOURCE : ULONG {
   Mdv2SourceMemoryMap,
   Mdv2SourceVersionProfile,
   Mdv2SourceSignatureScan,
-  Mdv2SourceCrossView
+  Mdv2SourceCrossView,
+  Mdv2SourceKernelStructure
 };
 enum MDV2_CONFIDENCE : ULONG {
   Mdv2ConfidenceUnavailable = 0,
@@ -618,6 +644,20 @@ typedef struct _MDV2_LIST_OUTPUT {
   MDV2_LIST_HEADER Header;
   MDV2_RECORD Records[1];
 } MDV2_LIST_OUTPUT, *PMDV2_LIST_OUTPUT;
+typedef struct _ADVANCED_OPERATION_INPUT {
+  ULONG Size, Version, Kind, Operation, ProcessId, TargetId;
+  ULONG64 Address, Value, TransactionId;
+  WCHAR Name[128];
+} ADVANCED_OPERATION_INPUT, *PADVANCED_OPERATION_INPUT;
+typedef struct _ADVANCED_OPERATION_OUTPUT {
+  ULONG Size, Version;
+  LONG Status;
+  ULONG Flags;
+  ULONG64 TransactionId, BeforeValue, AfterValue;
+  WCHAR Detail[128];
+} ADVANCED_OPERATION_OUTPUT, *PADVANCED_OPERATION_OUTPUT;
+static_assert(sizeof(ADVANCED_OPERATION_INPUT) == 304, "Advanced V3 input ABI mismatch");
+static_assert(sizeof(ADVANCED_OPERATION_OUTPUT) == 296, "Advanced V3 output ABI mismatch");
 
 static_assert(sizeof(MDV2_QUERY_INPUT) == 808,
               "MultiDrv V2 request ABI mismatch");
@@ -2056,6 +2096,75 @@ inline bool QueryNamedDriverRecordsV2(const std::wstring &DriverName,
   wcsncpy_s(Request.Name, DriverName.c_str(), _TRUNCATE);
   return QueryMultiDrvRecordsV2(IOCTL_QUERY_DRIVER_V2, Request, Records,
                                 Header);
+}
+
+inline bool QueryAdvancedRecordsV3(ULONG Kind, ULONG ProcessId,
+                                   ULONG TargetId, ULONG64 Cursor,
+                                   std::vector<MDV2_RECORD> &Records,
+                                   MDV2_LIST_HEADER *Header = nullptr) {
+  MDV2_QUERY_INPUT Request{};
+  Request.ProcessId = ProcessId;
+  Request.TargetId = Kind;
+  Request.Flags = TargetId;
+  Request.Cursor = Cursor;
+  Request.MaxEntries = MDV2_MAX_PAGE_RECORDS;
+  return QueryMultiDrvRecordsV2(IOCTL_QUERY_ADVANCED_V3, Request, Records,
+                                Header);
+}
+
+inline bool AdvancedOperationV3(const ADVANCED_OPERATION_INPUT &Request,
+                                ADVANCED_OPERATION_OUTPUT *Output) {
+  if (Output == nullptr) {
+    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    return false;
+  }
+  ADVANCED_OPERATION_INPUT Input = Request;
+  Input.Size = sizeof(Input);
+  Input.Version = 3;
+  ZeroMemory(Output, sizeof(*Output));
+  DWORD BytesReturned = 0;
+  if (!SendIoctlWithOutput(IOCTL_ADVANCED_OPERATION_V3, &Input, sizeof(Input),
+                           Output, sizeof(*Output), &BytesReturned))
+    return false;
+  if (BytesReturned != sizeof(*Output) || Output->Size != sizeof(*Output) ||
+      Output->Version != 3) {
+    G_LastMultiDrvError = ERROR_INVALID_DATA;
+    return false;
+  }
+  G_LastMultiDrvDetails.assign(Output->Detail);
+  G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
+  return Output->Status == 0;
+}
+
+inline bool CaptureAdvancedTransactionV3(ULONG Kind, ULONG TargetId,
+                                         ULONG64 Address,
+                                         ADVANCED_OPERATION_OUTPUT *Output) {
+  ADVANCED_OPERATION_INPUT Input{};
+  Input.Kind = Kind;
+  Input.Operation = ADVANCED_OP_CAPTURE;
+  Input.TargetId = TargetId;
+  Input.Address = Address;
+  return AdvancedOperationV3(Input, Output);
+}
+
+inline bool ApplyAdvancedTransactionV3(ULONG Kind, ULONG64 TransactionId,
+                                       ULONG64 Value,
+                                       ADVANCED_OPERATION_OUTPUT *Output) {
+  ADVANCED_OPERATION_INPUT Input{};
+  Input.Kind = Kind;
+  Input.Operation = ADVANCED_OP_APPLY;
+  Input.TransactionId = TransactionId;
+  Input.Value = Value;
+  return AdvancedOperationV3(Input, Output);
+}
+
+inline bool RollbackAdvancedTransactionV3(ULONG Kind, ULONG64 TransactionId,
+                                          ADVANCED_OPERATION_OUTPUT *Output) {
+  ADVANCED_OPERATION_INPUT Input{};
+  Input.Kind = Kind;
+  Input.Operation = ADVANCED_OP_ROLLBACK;
+  Input.TransactionId = TransactionId;
+  return AdvancedOperationV3(Input, Output);
 }
 
 BOOLEAN LoadDriverKernel(const WCHAR *ServiceName, const WCHAR *ImagePath,

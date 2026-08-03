@@ -191,6 +191,11 @@ public:
           }
         });
     UpdateTimer->start(150);
+    TelemetryTimer = new QTimer(this);
+    TelemetryTimer->setInterval(1000);
+    QObject::connect(TelemetryTimer, &QTimer::timeout, this,
+                     [this] { RefreshKernelTelemetry(); });
+    TelemetryTimer->start();
   }
 
   ~MonitorManagerPage() override {
@@ -259,12 +264,14 @@ private:
     SystemStop = MakeButton("Stop");
     SystemStop->setEnabled(false);
     Statuses[0] = new BodyLabel("Stopped");
+    KernelTelemetryStatus = new BodyLabel("V3 telemetry: idle");
     Controls->addWidget(SystemMode);
     Controls->addWidget(SystemFilterPid);
     Controls->addWidget(SystemPathPrefix, 1);
     Controls->addWidget(RegistryPreview);
     Controls->addWidget(SystemStart);
     Controls->addWidget(SystemStop);
+    Controls->addWidget(KernelTelemetryStatus);
     Controls->addWidget(Statuses[0], 1);
     QObject::connect(SystemStart, &QPushButton::clicked, this,
                      [this] { StartSystem(); });
@@ -651,6 +658,7 @@ private:
         if (!Kernel->Start())
           throw std::runtime_error("Kernel monitor start failed");
         Statuses[0]->setText("KernelMode running");
+        RefreshKernelTelemetry();
       } catch (const std::exception &Error) {
         Kernel.reset();
         SystemRunning = false;
@@ -669,6 +677,33 @@ private:
     SystemStart->setEnabled(true);
     SystemStop->setEnabled(false);
     Statuses[0]->setText("Stopped");
+    if (KernelTelemetryStatus)
+      KernelTelemetryStatus->setText("V3 telemetry: idle");
+  }
+
+  void RefreshKernelTelemetry() {
+    if (!KernelTelemetryStatus || !SystemRunning || !SystemMode ||
+        SystemMode->currentIndex() != 1)
+      return;
+    MonitorStatsV2 Stats{};
+    if (!MonitorDrvQueryStatsV2(&Stats)) {
+      KernelTelemetryStatus->setText(
+          QString("V3 telemetry unavailable (%1)").arg(GetLastError()));
+      return;
+    }
+    const quint64 Dropped = Stats.SystemDropped + Stats.FileDropped +
+                            Stats.NetworkDropped;
+    KernelTelemetryStatus->setText(
+        QString("V3 seq %1 | queue S %2/%3 F %4/%5 N %6/%7 (cap %8) | lost %9")
+            .arg(Stats.LastSequence)
+            .arg(Stats.SystemQueued).arg(Stats.SystemHighWatermark)
+            .arg(Stats.FileQueued).arg(Stats.FileHighWatermark)
+            .arg(Stats.NetworkQueued).arg(Stats.NetworkHighWatermark)
+            .arg(Stats.QueueCapacity).arg(Dropped));
+    KernelTelemetryStatus->setToolTip(
+        QString("Dropped: system %1, file %2, network %3")
+            .arg(Stats.SystemDropped).arg(Stats.FileDropped)
+            .arg(Stats.NetworkDropped));
   }
 
   void HandleSystemWorkerExit() {
@@ -1045,10 +1080,12 @@ private:
   std::array<QTimer *, 4> SearchDebounceTimers{};
   uint64_t DisplayedHistoryVersion = 0;
   QTimer *UpdateTimer = nullptr;
+  QTimer *TelemetryTimer = nullptr;
 
   SearchLineEdit *HistorySearchEdit = nullptr;
   TableWidget *HistoryTable = nullptr;
   BodyLabel *HistoryStatus = nullptr;
+  BodyLabel *KernelTelemetryStatus = nullptr;
   QTimer *HistorySearchDebounceTimer = nullptr;
   void PopulateHistory(const QString &Query) {
     if (!HistoryTable)
