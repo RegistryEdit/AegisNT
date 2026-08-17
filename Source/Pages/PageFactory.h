@@ -1,27 +1,28 @@
 #pragma once
 
+#include "CallbackPage.h"
+#include "ConsolePage.h"
+#include "DiskPage.h"
+#include "DriverPage.h"
+#include "FilePage.h"
+#include "HandleLabPage.h"
+#include "KernelInspectorPage.h"
+#include "KernelResearchPage.h"
+#include "MemoryPage.h"
+#include "ModuleManagerPage.h"
+#include "ModuleRunPage.h"
+#include "MonitorPage.h"
+#include "PayloadPage.h"
+#include "RegistryPage.h"
+#include "ServicePage.h"
+#include "SettingsPage.h"
+#include "SnapshotLabPage.h"
+#include "TablePage.h"
+#include "TaskManagerPage.h"
+#include "WindowPage.h"
+
 class QWidget;
 
 QWidget *CreateInformationPage();
-QWidget *CreateTaskPage();
-QWidget *CreateMonitorPage();
-QWidget *CreateRegistryPage();
-QWidget *CreateFilePage();
-QWidget *CreateWindowPage();
-QWidget *CreateDiskPage();
-QWidget *CreateMemoryPage();
-QWidget *CreateTablePage();
-QWidget *CreateCallbackPage();
-QWidget *CreatePayloadPage();
-QWidget *CreateModuleRunPage();
-QWidget *CreateConsolePage();
-QWidget *CreateModuleManagerPage();
-QWidget *CreateSettingsPage();
-QWidget *CreateKernelInspectorPage();
-QWidget *CreateDriverPage();
-QWidget *CreateServiceManagerPage();
-QWidget *CreateHandleLabPage();
-QWidget *CreateSnapshotLabPage();
-QWidget *CreateKernelResearchPage();
 
 QWidget *CreatePageBody(int Index);

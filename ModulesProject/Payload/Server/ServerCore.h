@@ -1,19 +1,21 @@
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#include <objbase.h>
 #include <bcrypt.h>
 #include <gdiplus.h>
 #include <iphlpapi.h>
-#include <objbase.h>
 #include <psapi.h>
 #include <stdio.h>
 #include <tlhelp32.h>
-#include <windows.h>
-#include <winsock2.h>
 #include <winsvc.h>
-#include <ws2tcpip.h>
 
 #include <algorithm>
 #include <atomic>

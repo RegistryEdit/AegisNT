@@ -167,7 +167,7 @@
   CTL_CODE(0x8000, 0x854, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_HANDLE_DUP_DOWNGRADE                                             \
   CTL_CODE(0x8000, 0x855, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_DISABLE_PATCHGUARD                                               \
+ #define IOCTL_DISABLE_PATCHGUARD                                               \
   CTL_CODE(0x8000, 0x856, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_RESTORE_PATCHGUARD                                               \
   CTL_CODE(0x8000, 0x857, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -181,6 +181,16 @@
   CTL_CODE(0x8000, 0x85C, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
 #define IOCTL_ADVANCED_OPERATION_V3                                            \
   CTL_CODE(0x8000, 0x85D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_HIJACK_CONTEXT                                            \
+  CTL_CODE(0x8000, 0x85E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_HIJACK_TRAPFRAME                                          \
+  CTL_CODE(0x8000, 0x85F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_REMOTE_CALL                                               \
+  CTL_CODE(0x8000, 0x860, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_SHELLCODE_INJECT                                          \
+  CTL_CODE(0x8000, 0x861, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_INJECT_AND_HIJACK                                         \
+  CTL_CODE(0x8000, 0x862, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define ADVANCED_KIND_PTE 1u
 #define ADVANCED_KIND_VAD 2u
@@ -658,6 +668,32 @@ typedef struct _ADVANCED_OPERATION_OUTPUT {
 } ADVANCED_OPERATION_OUTPUT, *PADVANCED_OPERATION_OUTPUT;
 static_assert(sizeof(ADVANCED_OPERATION_INPUT) == 304, "Advanced V3 input ABI mismatch");
 static_assert(sizeof(ADVANCED_OPERATION_OUTPUT) == 296, "Advanced V3 output ABI mismatch");
+
+/* ---- Thread Hijack / Remote CALL ---- */
+typedef struct _THREAD_HIJACK_INPUT {
+  ULONG ThreadId;
+  ULONG_PTR TargetRip;
+} THREAD_HIJACK_INPUT, *PTHREAD_HIJACK_INPUT;
+
+typedef struct _THREAD_REMOTE_CALL_INPUT {
+  ULONG ThreadId;
+  ULONG_PTR Function;
+  ULONG_PTR Args[4];
+} THREAD_REMOTE_CALL_INPUT, *PTHREAD_REMOTE_CALL_INPUT;
+
+typedef struct _THREAD_REMOTE_CALL_OUTPUT {
+  LONG Result;
+} THREAD_REMOTE_CALL_OUTPUT, *PTHREAD_REMOTE_CALL_OUTPUT;
+
+typedef struct _SHELLCODE_INJECT_INPUT {
+  ULONG Id;
+  ULONG Size;
+} SHELLCODE_INJECT_INPUT, *PSHELLCODE_INJECT_INPUT;
+
+typedef struct _SHELLCODE_INJECT_OUTPUT {
+  ULONG_PTR AllocatedAddress;
+  LONG Status;
+} SHELLCODE_INJECT_OUTPUT, *PSHELLCODE_INJECT_OUTPUT;
 
 static_assert(sizeof(MDV2_QUERY_INPUT) == 808,
               "MultiDrv V2 request ABI mismatch");
@@ -2763,4 +2799,113 @@ BOOLEAN SetIdtLimit() {
   BOOLEAN Success = SendIoctl(IOCTL_SET_IDT_LIMIT, 0, 0);
 
   return Success;
+}
+
+/* ---- Thread Hijack Operations ---- */
+
+BOOLEAN HijackThreadContext(ULONG ThreadId, ULONG_PTR TargetRip) {
+  G_LastMultiDrvError = ERROR_SUCCESS;
+  if (ThreadId == 0 || TargetRip == 0) {
+    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    return FALSE;
+  }
+
+  THREAD_HIJACK_INPUT Input = {ThreadId, TargetRip};
+  return SendIoctl(IOCTL_THREAD_HIJACK_CONTEXT, &Input, sizeof(Input));
+}
+
+BOOLEAN HijackThreadTrapFrame(ULONG ThreadId, ULONG_PTR TargetRip) {
+  G_LastMultiDrvError = ERROR_SUCCESS;
+  if (ThreadId == 0 || TargetRip == 0) {
+    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    return FALSE;
+  }
+
+  THREAD_HIJACK_INPUT Input = {ThreadId, TargetRip};
+  return SendIoctl(IOCTL_THREAD_HIJACK_TRAPFRAME, &Input, sizeof(Input));
+}
+
+BOOLEAN RemoteCallViaKernel(ULONG ThreadId, ULONG_PTR Function,
+                            ULONG_PTR Arg1, ULONG_PTR Arg2,
+                            ULONG_PTR Arg3, ULONG_PTR Arg4,
+                            PLONG OutResult) {
+  G_LastMultiDrvError = ERROR_SUCCESS;
+  if (ThreadId == 0 || Function == 0 || OutResult == NULL) {
+    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    return FALSE;
+  }
+
+  THREAD_REMOTE_CALL_INPUT  Input  = {ThreadId, Function, {Arg1, Arg2, Arg3, Arg4}};
+  THREAD_REMOTE_CALL_OUTPUT Output = {0};
+
+  DWORD BytesReturned = 0;
+  if (!SendIoctlWithOutput(IOCTL_THREAD_REMOTE_CALL, &Input, sizeof(Input),
+                           &Output, sizeof(Output), &BytesReturned)) {
+    return FALSE;
+  }
+
+  *OutResult = Output.Result;
+  return TRUE;
+}
+
+/* ---- Shellcode Injection + Hijack ---- */
+
+BOOLEAN InjectShellcode(ULONG ProcessId, const UCHAR *Shellcode, ULONG Size,
+                        ULONG_PTR *OutAddress) {
+  G_LastMultiDrvError = ERROR_SUCCESS;
+  if (ProcessId == 0 || Shellcode == NULL || Size == 0 || OutAddress == NULL) {
+    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    return FALSE;
+  }
+
+  DWORD TotalSize = sizeof(SHELLCODE_INJECT_INPUT) + Size;
+  PUCHAR Buffer = (PUCHAR)malloc(TotalSize);
+  if (Buffer == NULL) {
+    G_LastMultiDrvError = ERROR_OUTOFMEMORY;
+    return FALSE;
+  }
+
+  PSHELLCODE_INJECT_INPUT Header = (PSHELLCODE_INJECT_INPUT)Buffer;
+  Header->Id   = ProcessId;
+  Header->Size = Size;
+  memcpy(Buffer + sizeof(SHELLCODE_INJECT_INPUT), Shellcode, Size);
+
+  SHELLCODE_INJECT_OUTPUT Output = {0};
+  DWORD BytesReturned = 0;
+  BOOLEAN Ok = SendIoctlWithOutput(IOCTL_THREAD_SHELLCODE_INJECT, Buffer,
+                                   TotalSize, &Output, sizeof(Output),
+                                   &BytesReturned);
+  free(Buffer);
+  *OutAddress = Output.AllocatedAddress;
+  return Ok;
+}
+
+BOOLEAN InjectAndHijack(ULONG ThreadId, const UCHAR *Shellcode, ULONG Size,
+                        ULONG_PTR *OutAddress) {
+  G_LastMultiDrvError = ERROR_SUCCESS;
+  if (ThreadId == 0 || Shellcode == NULL || Size == 0 || OutAddress == NULL) {
+    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    return FALSE;
+  }
+
+  DWORD TotalSize = sizeof(SHELLCODE_INJECT_INPUT) + Size;
+  PUCHAR Buffer = (PUCHAR)malloc(TotalSize);
+  if (Buffer == NULL) {
+    G_LastMultiDrvError = ERROR_OUTOFMEMORY;
+    return FALSE;
+  }
+
+  PSHELLCODE_INJECT_INPUT Header = (PSHELLCODE_INJECT_INPUT)Buffer;
+  Header->Id   = ThreadId;
+  Header->Size = Size;
+  memcpy(Buffer + sizeof(SHELLCODE_INJECT_INPUT), Shellcode, Size);
+
+  SHELLCODE_INJECT_OUTPUT Output = {0};
+  DWORD BytesReturned = 0;
+  BOOLEAN Ok = SendIoctlWithOutput(IOCTL_THREAD_INJECT_AND_HIJACK, Buffer,
+                                   TotalSize, &Output, sizeof(Output),
+                                   &BytesReturned);
+  free(Buffer);
+  *OutAddress = Output.AllocatedAddress;
+  return Ok;
 }

@@ -4,6 +4,7 @@
 #include <QComboBox>
 #include <QCompleter>
 #include <QCryptographicHash>
+#include <QCloseEvent>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDialog>
@@ -30,6 +31,11 @@
 #include <QMessageBox>
 #include <QMetaProperty>
 #include <QMoveEvent>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QEventLoop>
+#include <QLineEdit>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPixmap>
@@ -43,6 +49,8 @@
 #include <QSaveFile>
 #include <QScreen>
 #include <QSet>
+#include <QSystemTrayIcon>
+#include <QMessageAuthenticationCode>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -62,6 +70,7 @@
 #include <QTreeView>
 #include <QTreeWidget>
 #include <QUrl>
+#include <QMenu>
 #include <QVBoxLayout>
 
 #include <QFluent/CardWidget.h>
@@ -71,6 +80,8 @@
 #include <QFluent/DateTime/TimePicker.h>
 #include <QFluent/Dialog/ColorDialog.h>
 #include <QFluent/Dialog/MessageBoxBase.h>
+#include <QFluent/Dialog/MessageDialog.h>
+#include <QFluent/Menu/RoundMenu.h>
 #include <QFluent/FluentIcon.h>
 #include <QFluent/IconWidget.h>
 #include <QFluent/InfoBar.h>
@@ -2638,51 +2649,51 @@ private:
 
 QWidget *CreateInformationPage() { return new InformationOverviewPage; }
 
-#include "Source/Pages/TaskManagerPage.inc"
+#include "Source/Pages/TaskManagerPage.cpp"
 
 QWidget *CreateTaskPage() { return new TaskManagerPage; }
 
-#include "Source/Pages/MonitorPage.inc"
+#include "Source/Pages/MonitorPage.cpp"
 
 QWidget *CreateMonitorPage() { return new MonitorManagerPage; }
 
-#include "Source/Pages/RegistryPage.inc"
+#include "Source/Pages/RegistryPage.cpp"
 
 QWidget *CreateRegistryPage() { return new RegistryManagerPage; }
 
-#include "Source/Pages/FilePage.inc"
+#include "Source/Pages/FilePage.cpp"
 
 QWidget *CreateFilePage() { return new FileExplorerPage; }
 
-#include "Source/Pages/WindowPage.inc"
+#include "Source/Pages/WindowPage.cpp"
 
 QWidget *CreateWindowPage() { return new WindowManagerPage; }
 
-#include "Source/Pages/DiskPage.inc"
+#include "Source/Pages/DiskPage.cpp"
 
-#include "Source/Pages/MemoryPage.inc"
+#include "Source/Pages/MemoryPage.cpp"
 
-#include "Source/Pages/TablePage.inc"
+#include "Source/Pages/TablePage.cpp"
 
-#include "Source/Pages/CallbackPage.inc"
+#include "Source/Pages/CallbackPage.cpp"
 
-#include "Source/Pages/PayloadPage.inc"
+#include "Source/Pages/PayloadPage.cpp"
 
-#include "Source/Pages/ModuleRunPage.inc"
+#include "Source/Pages/ModuleRunPage.cpp"
 
-#include "Source/Pages/ConsolePage.inc"
+#include "Source/Pages/ConsolePage.cpp"
 
-#include "Source/Pages/ModuleManagerPage.inc"
+#include "Source/Pages/ModuleManagerPage.cpp"
 
-#include "Source/Pages/KernelInspectorPage.inc"
+#include "Source/Pages/KernelInspectorPage.cpp"
 
-#include "Source/Pages/KernelResearchPage.inc"
+#include "Source/Pages/KernelResearchPage.cpp"
 
-#include "Source/Pages/HandleLabPage.inc"
+#include "Source/Pages/HandleLabPage.cpp"
 
-#include "Source/Pages/SnapshotLabPage.inc"
+#include "Source/Pages/SnapshotLabPage.cpp"
 
-#include "Source/Pages/SettingsPage.inc"
+#include "Source/Pages/SettingsPage.cpp"
 
 QWidget *CreatePageBody(int Index) {
   switch (Index) {
@@ -2764,6 +2775,7 @@ public:
 
     ApplyStyleSheet();
     ApplyConfiguredAppearance(this);
+    SetupTrayIcon();
     QTimer::singleShot(0, this, [this] {
       SelectPage(0, false);
       PageStack->setAnimationEnabled(true);
@@ -2774,10 +2786,28 @@ public:
     });
   }
 
+  ~AegisNTWindow() override {
+    if (TrayIcon) {
+      TrayIcon->hide();
+      TrayIcon->deleteLater();
+      TrayIcon = nullptr;
+    }
+  }
+
 protected:
   void showEvent(QShowEvent *Event) override {
     QWidget::showEvent(Event);
     ScheduleBackdropRefresh(this);
+  }
+
+  void closeEvent(QCloseEvent *Event) override {
+    if (TrayIcon && TrayIcon->isVisible() && !AllowWindowClose) {
+      Event->ignore();
+      hide();
+      ShowTrayMessage("AegisNT is still running in the tray.");
+      return;
+    }
+    QWidget::closeEvent(Event);
   }
 
   void paintEvent(QPaintEvent *Event) override {
@@ -2826,6 +2856,15 @@ protected:
     if (Event->type() == QEvent::WindowStateChange) {
       UpdateMaximizeButton();
       ScheduleBackdropRefresh(this);
+      if (isMinimized() && TrayIcon && TrayIcon->isVisible() &&
+          ConfigurationValue("Application", "MinimizeToTray", true).toBool()) {
+        QTimer::singleShot(0, this, [this] {
+          if (TrayIcon && TrayIcon->isVisible() && isMinimized()) {
+            hide();
+            ShowTrayMessage("AegisNT was minimized to the tray.");
+          }
+        });
+      }
     }
   }
 
@@ -2979,7 +3018,7 @@ private:
         "kernel-overview", CreateFluentIcon(Fluent::IconType::SEARCH),
         "Overview", nullptr, false, NavigationPanel::ItemPosition::SCROLL,
         "Overview", "kernel");
-    for (int Index : {15})
+    for (int Index : {15, 20})
       AddPageItem(Index, "kernel-overview");
 
     NavigationPanelWidget->addItem(
@@ -3003,7 +3042,7 @@ private:
     for (int Index : {10, 11, 12})
       AddPageItem(Index, "module");
 
-    for (int Index : {13, 14})
+for (int Index : {13, 14})
       AddPageItem(Index);
     Layout->addWidget(NavigationPanelWidget, 1);
     NavigationPanelWidget->expand(false);
@@ -3073,6 +3112,60 @@ private:
     PageLoaded[Index] = true;
   }
 
+  void SetupTrayIcon() {
+    if (!QSystemTrayIcon::isSystemTrayAvailable())
+      return;
+
+    TrayIcon = new QSystemTrayIcon(this);
+    const QIcon Icon = windowIcon().isNull()
+                           ? style()->standardIcon(QStyle::SP_ComputerIcon)
+                           : windowIcon();
+    TrayIcon->setIcon(Icon);
+    TrayIcon->setToolTip("AegisNT");
+
+    auto *TrayMenu = new RoundMenu("AegisNT", this);
+    auto *RestoreAction = new QAction("Restore", TrayMenu);
+    auto *HideAction = new QAction("Hide", TrayMenu);
+    auto *ExitAction = new QAction("Exit", TrayMenu);
+    TrayMenu->addAction(RestoreAction);
+    TrayMenu->addAction(HideAction);
+    TrayMenu->addSeparator();
+    TrayMenu->addAction(ExitAction);
+
+    ConnectMenuAction(RestoreAction, this, [this] {
+      AllowWindowClose = false;
+      showNormal();
+      raise();
+      activateWindow();
+    });
+    ConnectMenuAction(HideAction, this, [this] {
+      hide();
+      ShowTrayMessage("AegisNT is still running in the tray.");
+    });
+    ConnectMenuAction(ExitAction, this, [this] {
+      AllowWindowClose = true;
+      qApp->quit();
+    });
+    connect(TrayIcon, &QSystemTrayIcon::activated, this,
+            [this](QSystemTrayIcon::ActivationReason Reason) {
+              if (Reason == QSystemTrayIcon::Trigger ||
+                  Reason == QSystemTrayIcon::DoubleClick) {
+                AllowWindowClose = false;
+                showNormal();
+                raise();
+                activateWindow();
+              }
+            });
+
+    TrayIcon->setContextMenu(TrayMenu);
+    TrayIcon->show();
+  }
+
+  void ShowTrayMessage(const QString &Message) {
+    if (TrayIcon && TrayIcon->isVisible())
+      TrayIcon->showMessage("AegisNT", Message, TrayIcon->icon(), 2000);
+  }
+
   void ApplyStyleSheet() { setStyleSheet(ApplicationStyleSheet()); }
 
   NavigationPanel *NavigationPanelWidget = nullptr;
@@ -3088,6 +3181,8 @@ private:
   QSize CachedWallpaperSize;
   QPixmap WallpaperSource;
   QPixmap CachedWallpaper;
+  QSystemTrayIcon *TrayIcon = nullptr;
+  bool AllowWindowClose = false;
 };
 
 } // namespace
@@ -3118,7 +3213,7 @@ int main(int Argc, char *Argv[]) {
   Application.installEventFilter(LanguageFilter);
   QObject::connect(&Application, &QCoreApplication::aboutToQuit,
                    [] { CleanupManagedDriversOnExit(); });
-  EnsureThemeConfiguration();
+EnsureThemeConfiguration();
   ApplyConfiguredAppearance(nullptr);
 
   int Result = 0;

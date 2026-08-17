@@ -50,7 +50,6 @@ The desktop navigation is currently organized as follows:
 
 - **Information / Task / Monitor / Registry / File / Window**: core system pages and user-mode tooling
 - **Kernel / Overview**: `KernelInspector`
-- **Kernel / Research**: `KernelResearch` (`Symbols`, `Address Ownership`, `Integrity`, `Big Pool`, `Objects`)
 - **Kernel / Execution**: `Driver`, `ServiceManager`, `HandleLab`, `Memory`, `Table`, `Callback`
 - **Kernel / Storage**: `Disk`
 - **Module**: `Payload`, `ModuleRun`, `ModuleManager`

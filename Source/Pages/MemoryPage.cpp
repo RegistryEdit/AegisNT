@@ -312,10 +312,10 @@ QWidget *CreateMemoryPage() {
   return Page;
 }
 
-#include "Source/Pages/DriverPage.inc"
+#include "Source/Pages/DriverPage.cpp"
 
 QWidget *CreateDriverPage() { return new DriverManagerPage; }
 
-#include "Source/Pages/ServicePage.inc"
+#include "Source/Pages/ServicePage.cpp"
 
 QWidget *CreateServiceManagerPage() { return new ServiceManagerPage; }

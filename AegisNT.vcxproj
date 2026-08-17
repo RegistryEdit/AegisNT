@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -61,7 +61,8 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
-    <ExternalIncludePath>D:\Qt\6.7.3\msvc2022_64\include\QFluent;D:\Qt\6.7.3\msvc2022_64\include;$(ExternalIncludePath)</ExternalIncludePath>
+    <ExternalIncludePath>D:\OpenSSL-Win64\include;D:\Qt\6.7.3\msvc2022_64\include\QFluent;D:\Qt\6.7.3\msvc2022_64\include;$(ExternalIncludePath)</ExternalIncludePath>
+    <LibraryPath>D:\OpenSSL-Win64\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
     <ExternalIncludePath>D:\Qt\6.7.3\msvc2022_64\include;$(ExternalIncludePath)</ExternalIncludePath>
@@ -76,7 +77,7 @@
     </Link>
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>D:\Qt\6.7.3\msvc2022_64\include\QWindowKit;D:\OpenSSL-Win64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Qt\6.7.3\msvc2022_64\include\QFluent;D:\Qt\6.7.3\msvc2022_64\include\QWindowKit;D:\OpenSSL-Win64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -110,7 +111,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
@@ -125,27 +126,45 @@
     <ClInclude Include="Source\KernelResearch.h" />
     <ClInclude Include="Source\Pages\PageFactory.h" />
     <ClInclude Include="Source\Pages\PageRegistry.h" />
+    <ClInclude Include="Source\Pages\CallbackPage.h" />
+    <ClInclude Include="Source\Pages\ConsolePage.h" />
+    <ClInclude Include="Source\Pages\DiskPage.h" />
+    <ClInclude Include="Source\Pages\DriverPage.h" />
+    <ClInclude Include="Source\Pages\FilePage.h" />
+    <ClInclude Include="Source\Pages\HandleLabPage.h" />
+    <ClInclude Include="Source\Pages\KernelInspectorPage.h" />
+    <ClInclude Include="Source\Pages\MemoryPage.h" />
+    <ClInclude Include="Source\Pages\ModuleManagerPage.h" />
+    <ClInclude Include="Source\Pages\ModuleRunPage.h" />
+    <ClInclude Include="Source\Pages\MonitorPage.h" />
+    <ClInclude Include="Source\Pages\PayloadPage.h" />
+    <ClInclude Include="Source\Pages\RegistryPage.h" />
+    <ClInclude Include="Source\Pages\ServicePage.h" />
+    <ClInclude Include="Source\Pages\SettingsPage.h" />
+    <ClInclude Include="Source\Pages\SnapshotLabPage.h" />
+    <ClInclude Include="Source\Pages\TablePage.h" />
+    <ClInclude Include="Source\Pages\TaskManagerPage.h" />
+    <ClInclude Include="Source\Pages\WindowPage.h" />
     <None Include="Source\Core\Configuration.inc" />
     <None Include="Source\Core\PayloadShell.inc" />
     <None Include="Source\Core\ModuleRuntime.inc" />
-    <None Include="Source\Pages\TaskManagerPage.inc" />
-    <None Include="Source\Pages\MonitorPage.inc" />
-    <None Include="Source\Pages\RegistryPage.inc" />
-    <None Include="Source\Pages\FilePage.inc" />
-    <None Include="Source\Pages\WindowPage.inc" />
-    <None Include="Source\Pages\DiskPage.inc" />
-    <None Include="Source\Pages\DriverPage.inc" />
-    <None Include="Source\Pages\ServicePage.inc" />
-    <None Include="Source\Pages\SettingsPage.inc" />
-    <None Include="Source\Pages\MemoryPage.inc" />
-    <None Include="Source\Pages\TablePage.inc" />
-    <None Include="Source\Pages\CallbackPage.inc" />
-    <None Include="Source\Pages\PayloadPage.inc" />
-    <None Include="Source\Pages\ModuleRunPage.inc" />
-    <None Include="Source\Pages\ConsolePage.inc" />
-    <None Include="Source\Pages\ModuleManagerPage.inc" />
-    <None Include="Source\Pages\KernelInspectorPage.inc" />
-    <None Include="Source\Pages\KernelResearchPage.inc" />
+    <None Include="Source\Pages\TaskManagerPage.cpp" />
+    <None Include="Source\Pages\MonitorPage.cpp" />
+    <None Include="Source\Pages\RegistryPage.cpp" />
+    <None Include="Source\Pages\FilePage.cpp" />
+    <None Include="Source\Pages\WindowPage.cpp" />
+    <None Include="Source\Pages\DiskPage.cpp" />
+    <None Include="Source\Pages\DriverPage.cpp" />
+    <None Include="Source\Pages\ServicePage.cpp" />
+    <None Include="Source\Pages\SettingsPage.cpp" />
+    <None Include="Source\Pages\MemoryPage.cpp" />
+    <None Include="Source\Pages\TablePage.cpp" />
+    <None Include="Source\Pages\CallbackPage.cpp" />
+    <None Include="Source\Pages\PayloadPage.cpp" />
+    <None Include="Source\Pages\ModuleRunPage.cpp" />
+    <None Include="Source\Pages\ConsolePage.cpp" />
+    <None Include="Source\Pages\ModuleManagerPage.cpp" />
+    <None Include="Source\Pages\KernelInspectorPage.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />

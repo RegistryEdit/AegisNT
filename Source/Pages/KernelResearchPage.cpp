@@ -19,8 +19,13 @@ QWidget *CreateKernelResearchPage() {
   Toolbar->addWidget(Refresh);
   Layout->addLayout(Toolbar);
 
-  auto *Tabs = new QTabWidget;
-  Layout->addWidget(Tabs, 1);
+  auto *Tabs = new TabBar;
+  Tabs->setAddButtonVisible(false);
+  Tabs->setTabsClosable(false);
+  Tabs->setMovable(false);
+  Layout->addWidget(Tabs);
+  auto *Pages = new QStackedWidget;
+  Layout->addWidget(Pages, 1);
   const auto MakeResearchTable = [](const QStringList &Headers) {
     auto *Table = MakeTable(Headers);
     Table->setSortingEnabled(true);
@@ -47,11 +52,21 @@ QWidget *CreateKernelResearchPage() {
   Objects->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   Objects->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
   Objects->header()->setSectionResizeMode(3, QHeaderView::Stretch);
-  Tabs->addTab(Symbols, "Symbols");
-  Tabs->addTab(Ownership, "Address Ownership");
-  Tabs->addTab(Integrity, "Integrity");
-  Tabs->addTab(BigPool, "Big Pool");
-  Tabs->addTab(Objects, "Objects");
+  InstallFluentScrollBar(Objects, Qt::Vertical);
+  Tabs->addTab("symbols", "Symbols", Fluent::IconType::CODE);
+  Tabs->addTab("ownership", "Address Ownership", Fluent::IconType::LINK);
+  Tabs->addTab("integrity", "Integrity", Fluent::IconType::CERTIFICATE);
+  Tabs->addTab("bigpool", "Big Pool", Fluent::IconType::TILES);
+  Tabs->addTab("objects", "Objects", Fluent::IconType::FOLDER);
+  Pages->addWidget(Symbols);
+  Pages->addWidget(Ownership);
+  Pages->addWidget(Integrity);
+  Pages->addWidget(BigPool);
+  Pages->addWidget(Objects);
+  QObject::connect(Tabs, &TabBar::currentChanged, Pages,
+                   &QStackedWidget::setCurrentIndex);
+  QObject::connect(Pages, &QStackedWidget::currentChanged, Tabs,
+                   &TabBar::setCurrentIndex);
 
   struct StateData {
     std::vector<MDV2_RECORD> Modules;
@@ -233,7 +248,7 @@ QWidget *CreateKernelResearchPage() {
     RefreshAll();
   });
   QObject::connect(Search, &QLineEdit::textChanged, Page, [=](const QString &Text) {
-    auto *Table = qobject_cast<QTableWidget *>(Tabs->currentWidget());
+    auto *Table = qobject_cast<QTableWidget *>(Pages->currentWidget());
     if (!Table) return;
     for (int Row = 0; Row < Table->rowCount(); ++Row) {
       bool Match = Text.isEmpty();

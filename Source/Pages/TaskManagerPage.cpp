@@ -268,6 +268,76 @@ private:
         .toUpper();
   }
 
+  static bool ParseHexPointerValue(const QString &Text, ULONG_PTR &Value) {
+    QString Clean = Text.trimmed();
+    if (Clean.isEmpty())
+      return false;
+    Clean.replace("0x", "", Qt::CaseInsensitive);
+    Clean.remove(' ');
+    Clean.remove('\t');
+    Clean.remove('\r');
+    Clean.remove('\n');
+    if (Clean.isEmpty())
+      return false;
+
+    bool Ok = false;
+    const qulonglong Parsed = Clean.toULongLong(&Ok, 16);
+    if (!Ok || Parsed > std::numeric_limits<ULONG_PTR>::max())
+      return false;
+
+    Value = static_cast<ULONG_PTR>(Parsed);
+    return true;
+  }
+
+  static bool ParseHexBytes(const QString &Text, QByteArray &Bytes,
+                            QString *ErrorText = nullptr) {
+    QString Clean = Text.trimmed();
+    Clean.replace("0x", "", Qt::CaseInsensitive);
+    Clean.remove(' ');
+    Clean.remove('\t');
+    Clean.remove('\r');
+    Clean.remove('\n');
+    Clean.remove(',');
+    Clean.remove(':');
+    Clean.remove('-');
+
+    if (Clean.isEmpty()) {
+      if (ErrorText)
+        *ErrorText = "Enter shellcode bytes in hex.";
+      return false;
+    }
+
+    for (const QChar Ch : Clean) {
+      const ushort Code = Ch.unicode();
+      if (!((Code >= '0' && Code <= '9') || (Code >= 'a' && Code <= 'f') ||
+            (Code >= 'A' && Code <= 'F'))) {
+        if (ErrorText)
+          *ErrorText = "Shellcode must contain hex bytes only.";
+        return false;
+      }
+    }
+
+    if ((Clean.size() & 1) != 0) {
+      if (ErrorText)
+        *ErrorText = "Shellcode hex length must be even.";
+      return false;
+    }
+
+    Bytes.clear();
+    Bytes.reserve(Clean.size() / 2);
+    for (int Index = 0; Index < Clean.size(); Index += 2) {
+      bool Ok = false;
+      const int Byte = Clean.mid(Index, 2).toInt(&Ok, 16);
+      if (!Ok || Byte < 0 || Byte > 0xFF) {
+        if (ErrorText)
+          *ErrorText = "Shellcode parse failed.";
+        return false;
+      }
+      Bytes.append(static_cast<char>(Byte));
+    }
+    return true;
+  }
+
   static QString FormatProcessCpuTime(quint64 HundredNanoseconds) {
     return FormatDuration(HundredNanoseconds / 10000);
   }
@@ -1417,7 +1487,11 @@ private:
     AddMenuAction(DetailMenu, "PEB", [this, Pid] { ShowPebDetails(Pid); });
     Menu->addMenu(DetailMenu);
 
-    AddMenuAction(Menu, "InjectDLL", [this, Pid] { ShowInjectDllDialog(Pid); });
+    auto *InjectMenu = new RoundMenu("Inject", Menu);
+    AddMenuAction(InjectMenu, "DLL", [this, Pid] { ShowInjectDllDialog(Pid); });
+    AddMenuAction(InjectMenu, "Shellcode",
+                  [this, Pid] { ShowInjectShellcodeDialog(Pid); });
+    Menu->addMenu(InjectMenu);
 
     ReleaseMenuAfterClose(Menu);
     Menu->exec(ProcessTable->viewport()->mapToGlobal(Position));
@@ -1674,6 +1748,241 @@ private:
           QueueApc(Pid, Actions[Index]);
           ReportDriverResult("APC");
         });
+  }
+
+  void ShowInjectShellcodeDialog(DWORD Pid) {
+    bool Ok = false;
+    QString Text = QInputDialog::getMultiLineText(
+        this, "InjectShellcode",
+        QString("Paste shellcode bytes in hex for PID %1.").arg(Pid),
+        "48 31 C0 C3", &Ok);
+    if (!Ok)
+      return;
+
+    QByteArray Shellcode;
+    QString ErrorText;
+    if (!ParseHexBytes(Text, Shellcode, &ErrorText)) {
+      ShowWarningNotice(this, "InjectShellcode", ErrorText);
+      return;
+    }
+
+    ULONG_PTR Address = 0;
+    if (!InjectShellcode(Pid, reinterpret_cast<const UCHAR *>(Shellcode.data()),
+                         static_cast<ULONG>(Shellcode.size()), &Address)) {
+      ShowErrorNotice(this, "InjectShellcode",
+                      QString("Injection failed (error %1).")
+                          .arg(G_LastMultiDrvError));
+      return;
+    }
+
+    const QString AddressText =
+        QString("0x%1").arg(Address, 0, 16).toUpper();
+    AppendConsoleOutput(QString("[+] Shellcode injected.\n"
+                                "    PID: %1\n"
+                                "    Size: %2\n"
+                                "    Address: %3\n")
+                            .arg(Pid)
+                            .arg(Shellcode.size())
+                            .arg(AddressText));
+    ShowSuccessNotice(this, "InjectShellcode",
+                      QString("Shellcode injected at %1.").arg(AddressText));
+  }
+
+  void ShowThreadHijackDialog(DWORD Pid, const std::vector<DWORD> &Tids,
+                              bool UseTrapFrame, const QString &Action) {
+    if (Pid == GetCurrentProcessId()) {
+      ShowWarningNotice(this, Action,
+                        "Thread operations on AegisNT itself are disabled.");
+      return;
+    }
+
+    bool Ok = false;
+    QString Text =
+        QInputDialog::getText(this, Action, "Target RIP:", QLineEdit::Normal,
+                              "0x", &Ok);
+    if (!Ok)
+      return;
+
+    ULONG_PTR TargetRip = 0;
+    if (!ParseHexPointerValue(Text, TargetRip) || TargetRip == 0) {
+      ShowWarningNotice(this, Action, "Enter a valid hex RIP.");
+      return;
+    }
+
+    int SuccessCount = 0;
+    DWORD LastError = ERROR_SUCCESS;
+    for (DWORD Tid : Tids) {
+      const bool Success = UseTrapFrame ? HijackThreadTrapFrame(Tid, TargetRip)
+                                        : HijackThreadContext(Tid, TargetRip);
+      if (Success)
+        ++SuccessCount;
+      else
+        LastError = G_LastMultiDrvError;
+    }
+
+    if (SuccessCount == 0) {
+      ShowErrorNotice(this, Action,
+                      QString("Operation failed (error %1).").arg(LastError));
+      return;
+    }
+
+    const QString RipText = QString("0x%1").arg(TargetRip, 0, 16).toUpper();
+    AppendConsoleOutput(QString("[+] %1 completed.\n"
+                                "    PID: %2\n"
+                                "    RIP: %3\n"
+                                "    Threads: %4/%5\n")
+                            .arg(Action)
+                            .arg(Pid)
+                            .arg(RipText)
+                            .arg(SuccessCount)
+                            .arg(Tids.size()));
+    ShowSuccessNotice(this, Action,
+                      QString("%1 of %2 thread(s) updated.")
+                          .arg(SuccessCount)
+                          .arg(Tids.size()));
+  }
+
+  void ShowRemoteCallDialog(DWORD Pid, const std::vector<DWORD> &Tids) {
+    if (Pid == GetCurrentProcessId()) {
+      ShowWarningNotice(this, "RemoteCall",
+                        "Thread operations on AegisNT itself are disabled.");
+      return;
+    }
+
+    const auto ReadValue = [this](const QString &Title,
+                                  const QString &Label,
+                                  ULONG_PTR &Value) -> bool {
+      bool Ok = false;
+      const QString Text = QInputDialog::getText(
+          this, Title, Label, QLineEdit::Normal, "0x0", &Ok);
+      if (!Ok)
+        return false;
+      if (!ParseHexPointerValue(Text, Value)) {
+        ShowWarningNotice(this, Title,
+                          QString("Enter a valid hex value for %1.")
+                              .arg(Label));
+        return false;
+      }
+      return true;
+    };
+
+    ULONG_PTR Function = 0;
+    ULONG_PTR Arg1 = 0;
+    ULONG_PTR Arg2 = 0;
+    ULONG_PTR Arg3 = 0;
+    ULONG_PTR Arg4 = 0;
+    if (!ReadValue("RemoteCall", "Function address:", Function) ||
+        !ReadValue("RemoteCall", "Arg1:", Arg1) ||
+        !ReadValue("RemoteCall", "Arg2:", Arg2) ||
+        !ReadValue("RemoteCall", "Arg3:", Arg3) ||
+        !ReadValue("RemoteCall", "Arg4:", Arg4))
+      return;
+
+    int SuccessCount = 0;
+    DWORD LastError = ERROR_SUCCESS;
+    QStringList Results;
+    for (DWORD Tid : Tids) {
+      LONG Result = 0;
+      if (RemoteCallViaKernel(Tid, Function, Arg1, Arg2, Arg3, Arg4,
+                              &Result)) {
+        ++SuccessCount;
+        Results << QString("    TID %1 => 0x%2")
+                       .arg(Tid)
+                       .arg(static_cast<quint32>(Result), 8, 16,
+                            QLatin1Char('0'))
+                       .toUpper();
+      } else {
+        LastError = G_LastMultiDrvError;
+      }
+    }
+
+    if (SuccessCount == 0) {
+      ShowErrorNotice(this, "RemoteCall",
+                      QString("Operation failed (error %1).").arg(LastError));
+      return;
+    }
+
+    const QString FunctionText =
+        QString("0x%1").arg(Function, 0, 16).toUpper();
+    const QString Arg1Text = QString("0x%1").arg(Arg1, 0, 16).toUpper();
+    const QString Arg2Text = QString("0x%1").arg(Arg2, 0, 16).toUpper();
+    const QString Arg3Text = QString("0x%1").arg(Arg3, 0, 16).toUpper();
+    const QString Arg4Text = QString("0x%1").arg(Arg4, 0, 16).toUpper();
+    AppendConsoleOutput(QString("[+] Remote call completed.\n"
+                                "    PID: %1\n"
+                                "    Function: %2\n"
+                                "    Args: %3 %4 %5 %6\n%7\n")
+                            .arg(Pid)
+                            .arg(FunctionText)
+                            .arg(Arg1Text)
+                            .arg(Arg2Text)
+                            .arg(Arg3Text)
+                            .arg(Arg4Text)
+                            .arg(Results.join('\n')));
+    ShowSuccessNotice(this, "RemoteCall",
+                      QString("%1 of %2 thread(s) processed.")
+                          .arg(SuccessCount)
+                          .arg(Tids.size()));
+  }
+
+  void ShowInjectAndHijackDialog(DWORD Pid, const std::vector<DWORD> &Tids) {
+    if (Pid == GetCurrentProcessId()) {
+      ShowWarningNotice(this, "InjectAndHijack",
+                        "Thread operations on AegisNT itself are disabled.");
+      return;
+    }
+
+    bool Ok = false;
+    QString Text = QInputDialog::getMultiLineText(
+        this, "InjectAndHijack",
+        QString("Paste shellcode bytes in hex for PID %1.").arg(Pid),
+        "48 31 C0 C3", &Ok);
+    if (!Ok)
+      return;
+
+    QByteArray Shellcode;
+    QString ErrorText;
+    if (!ParseHexBytes(Text, Shellcode, &ErrorText)) {
+      ShowWarningNotice(this, "InjectAndHijack", ErrorText);
+      return;
+    }
+
+    int SuccessCount = 0;
+    DWORD LastError = ERROR_SUCCESS;
+    ULONG_PTR LastAddress = 0;
+    for (DWORD Tid : Tids) {
+      ULONG_PTR Address = 0;
+      if (InjectAndHijack(Tid, reinterpret_cast<const UCHAR *>(Shellcode.data()),
+                          static_cast<ULONG>(Shellcode.size()), &Address)) {
+        ++SuccessCount;
+        LastAddress = Address;
+      } else {
+        LastError = G_LastMultiDrvError;
+      }
+    }
+
+    if (SuccessCount == 0) {
+      ShowErrorNotice(this, "InjectAndHijack",
+                      QString("Operation failed (error %1).").arg(LastError));
+      return;
+    }
+
+    const QString AddressText =
+        QString("0x%1").arg(LastAddress, 0, 16).toUpper();
+    AppendConsoleOutput(QString("[+] InjectAndHijack completed.\n"
+                                "    PID: %1\n"
+                                "    Size: %2\n"
+                                "    Address: %3\n"
+                                "    Threads: %4/%5\n")
+                            .arg(Pid)
+                            .arg(Shellcode.size())
+                            .arg(AddressText)
+                            .arg(SuccessCount)
+                            .arg(Tids.size()));
+    ShowSuccessNotice(this, "InjectAndHijack",
+                      QString("%1 of %2 thread(s) processed.")
+                          .arg(SuccessCount)
+                          .arg(Tids.size()));
   }
 
   void ConfigurePpl(DWORD Pid) {
@@ -2069,6 +2378,27 @@ private:
                         [ChangeSuspendState] { ChangeSuspendState(true); });
           AddMenuAction(Menu, "Resume",
                         [ChangeSuspendState] { ChangeSuspendState(false); });
+
+          auto *ThreadKernelMenu = new RoundMenu("Kernel", Menu);
+          AddMenuAction(ThreadKernelMenu, "HijackContext",
+                        [this, Pid, SelectedTids] {
+                          ShowThreadHijackDialog(Pid, SelectedTids, false,
+                                                 "HijackContext");
+                        });
+          AddMenuAction(ThreadKernelMenu, "HijackTrapFrame",
+                        [this, Pid, SelectedTids] {
+                          ShowThreadHijackDialog(Pid, SelectedTids, true,
+                                                 "HijackTrapFrame");
+                        });
+          AddMenuAction(ThreadKernelMenu, "RemoteCall",
+                        [this, Pid, SelectedTids] {
+                          ShowRemoteCallDialog(Pid, SelectedTids);
+                        });
+          AddMenuAction(ThreadKernelMenu, "InjectAndHijack",
+                        [this, Pid, SelectedTids] {
+                          ShowInjectAndHijackDialog(Pid, SelectedTids);
+                        });
+          Menu->addMenu(ThreadKernelMenu);
           ReleaseMenuAfterClose(Menu);
           Menu->exec(Threads->viewport()->mapToGlobal(Position));
         });
@@ -2680,7 +3010,9 @@ private:
         MakeLabel("Injection method", 11, KTextPrimary, QFont::DemiBold);
     auto *Method = new ComboBox;
     Method->addItems({"R3CreateRemoteThread", "R3NtCreateThreadEx",
-                      "R3QueueUserAPC", "R3SetWindowsHookEx", "R0DllInjectApc",
+                      "R3QueueUserAPC", "R3SetWindowsHookEx", 
+                      "R3ThreadHijackFallback", "R3ReflectiveInject", 
+                      "R0DllInjectApc",
                       "R0DllInjectThread"});
     Method->setCurrentIndex(0);
     Dialog->viewLayout()->addWidget(Title);
@@ -2727,9 +3059,15 @@ private:
             Result = Inject_SetWindowsHookEx(Pid, WidePath);
             break;
           case 4:
+              Result = Inject_QueueUserAPC(Pid, WidePath);
+              break;
+          case 5:
+              Result = Inject_Reflective(Pid, WidePath);
+              break;
+          case 6:
             Result = DllInjectApc(Pid, WidePath.c_str());
             break;
-          case 5:
+          case 7:
             Result = DllInjectThread(Pid, WidePath.c_str());
             break;
           default:

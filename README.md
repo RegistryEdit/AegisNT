@@ -50,7 +50,6 @@ AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调�
 
 - **Information / Task / Monitor / Registry / File / Window**：基础系统信息、任务管理与用户态工具页。
 - **Kernel / Overview**：`KernelInspector`
-- **Kernel / Research**：`KernelResearch`（Symbols、Address Ownership、Integrity、Big Pool、Objects）
 - **Kernel / Execution**：`Driver`、`ServiceManager`、`HandleLab`、`Memory`、`Table`、`Callback`
 - **Kernel / Storage**：`Disk`
 - **Module**：`Payload`、`ModuleRun`、`ModuleManager`

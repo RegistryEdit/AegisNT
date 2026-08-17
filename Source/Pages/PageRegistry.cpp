@@ -47,9 +47,9 @@ const std::array<PageDefinition, 21> &PageDefinitions() {
        Fluent::IconType::SEARCH},
       {"Disk", "DiskDrv protection, blocked events, and one-shot allow tokens.",
        Fluent::IconType::SAVE},
-      {"KernelResearch",
-       "Symbols, integrity baselines, big pool, objects, and address ownership.",
-       Fluent::IconType::SEARCH},
+{"KernelResearch",
+        "Symbols, integrity baselines, big pool, objects, and address ownership.",
+        Fluent::IconType::SEARCH},
   }};
   return Pages;
 }

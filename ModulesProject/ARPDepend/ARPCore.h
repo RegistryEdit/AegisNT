@@ -1,4 +1,16 @@
 #pragma once
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+
+#include <winsock2.h>
+#include <ws2ipdef.h>
+#include <windows.h>
+
+#include <iphlpapi.h>
+#include <netioapi.h>
+#include <pcap.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstdarg>
@@ -13,13 +25,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <iphlpapi.h>
-#include <netioapi.h>
-#include <pcap.h>
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2ipdef.h>
 
 inline const uint8_t BroadcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 inline const uint8_t ZeroMac[6] = {0, 0, 0, 0, 0, 0};
