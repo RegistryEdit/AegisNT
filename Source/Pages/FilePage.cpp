@@ -498,7 +498,7 @@ private:
       if (!ForceDeleteFile(WidePath.c_str()))
         Failures.append(QString("%1 (error %2)")
                             .arg(QFileInfo(Path).fileName())
-                            .arg(G_LastMultiDrvError));
+                            .arg(G_LastAegisCoreError));
     }
     if (!Failures.isEmpty())
       ShowErrorNotice(this, "Delete (R0)",
@@ -609,7 +609,7 @@ private:
 
     try {
       EnsureFileMonitorWorker();
-      if (!MonitorDrvSetWatchDirectory(NtPath.toStdWString().c_str())) {
+      if (!AegisSentinelSetWatchDirectory(NtPath.toStdWString().c_str())) {
         ShowErrorNotice(this, "File monitor",
                         QString("Kernel watch setup failed (error %1).")
                             .arg(GetLastError()));
@@ -644,7 +644,7 @@ private:
       FileMonitor.reset();
     }
 
-    MonitorDrvClearWatchDirectory();
+    AegisSentinelClearWatchDirectory();
     WatchedDisplayPath.clear();
     WatchedNtPath.clear();
     UpdateMonitorWatchUi(false);

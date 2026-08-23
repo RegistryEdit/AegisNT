@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "x64\\Release\\WinSock2.obj",
+            "outputs": [
+                "x64\\Release\\WinSock2.h.obj.dt.module.json",
+                "x64\\Release\\WinSock2.h.obj.dt.d.json"
+            ],
+            "requires": []
+        }
+    ]
+}

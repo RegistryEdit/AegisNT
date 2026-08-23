@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../Platform/MultiDrvCall.h"
+#include "../Platform/AegisCoreCall.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -51,7 +51,7 @@ inline std::vector<MDV2_RECORD> QueryAll(DWORD Ioctl,
   for (int Page = 0; Page < 256; ++Page) {
     std::vector<MDV2_RECORD> Records;
     MDV2_LIST_HEADER Header{};
-    if (!QueryMultiDrvRecordsV2(Ioctl, Query, Records, &Header))
+    if (!QueryAegisCoreRecordsV2(Ioctl, Query, Records, &Header))
       break;
     Result.insert(Result.end(), Records.begin(), Records.end());
     if (Header.NextCursor == 0)

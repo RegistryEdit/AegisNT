@@ -199,7 +199,7 @@ QWidget *CreateCallbackPage() {
       bool Success =
           SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, &Count,
                               sizeof(Count), &BytesReturned) != FALSE;
-      DWORD ErrorCode = G_LastMultiDrvError;
+      DWORD ErrorCode = G_LastAegisCoreError;
       if (Success && Count) {
         const DWORD Size =
             sizeof(CALLBACK_ENUM_OUTPUT) + (Count - 1) * sizeof(CALLBACK_ENTRY);
@@ -208,7 +208,7 @@ QWidget *CreateCallbackPage() {
         ZeroMemory(Output, Size);
         Success = SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, Output,
                                       Size, &BytesReturned) != FALSE;
-        ErrorCode = G_LastMultiDrvError;
+        ErrorCode = G_LastAegisCoreError;
         if (Success) {
           const size_t MaxEntries = Count;
           const size_t ReturnedEntries = static_cast<size_t>(Output->Count);
@@ -326,7 +326,7 @@ QWidget *CreateCallbackPage() {
                 Input.Address = Address;
                 const bool Success = SendIoctl(IOCTL_REMOVE_CALLBACK_BY_ADDRESS,
                                                &Input, sizeof(Input)) != FALSE;
-                const DWORD ErrorCode = G_LastMultiDrvError;
+                const DWORD ErrorCode = G_LastAegisCoreError;
                 QMetaObject::invokeMethod(
                     qApp,
                     [SafePage, State, Success, ErrorCode, Query,

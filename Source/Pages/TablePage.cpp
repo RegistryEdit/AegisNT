@@ -1,3 +1,5 @@
+#include "../../Platform/AegisCoreCall.h"
+
 QWidget *CreateTablePage() {
   struct TableQueryResult {
     SYSTEM_TABLES_OUTPUT Summary{};
@@ -219,7 +221,7 @@ QWidget *CreateTablePage() {
         }
       } else if (Tab == 5) {
         Success = QueryPiDDBCacheEntries(&State->Result->PiDDB) != FALSE;
-        ErrorCode = G_LastMultiDrvError;
+        ErrorCode = G_LastAegisCoreError;
         State->Result->PiDDBQueried = true;
         State->Result->PiDDBAvailable =
             Success || ErrorCode == ERROR_NOT_FOUND;
@@ -227,7 +229,7 @@ QWidget *CreateTablePage() {
         Success = true;
       }
       if (!(Tab == 5 && ErrorCode == ERROR_NOT_FOUND))
-        ErrorCode = G_LastMultiDrvError;
+        ErrorCode = G_LastAegisCoreError;
 
       QMetaObject::invokeMethod(
           qApp,
@@ -275,7 +277,7 @@ QWidget *CreateTablePage() {
                  ShowResult, SelectedTab, LoadTabAsync] {
       auto Result = std::make_shared<TableQueryResult>();
       Result->Success = QuerySystemTables(&Result->Summary) != FALSE;
-      Result->ErrorCode = G_LastMultiDrvError;
+      Result->ErrorCode = G_LastAegisCoreError;
       const auto Modules = AegisNT::KernelResearch::QueryAll(IOCTL_ENUM_KERNEL_MODULES_V2);
       auto &Symbols = AegisNT::KernelResearch::SymbolService::Instance();
       Symbols.Initialize();
@@ -303,7 +305,7 @@ QWidget *CreateTablePage() {
               Status->setText("System table summary updated.");
               if (ShowResult)
                 ShowSuccessNotice(SafePage, "Table",
-                                  "System tables updated from MultiDrv.");
+                                  "System tables updated from AegisCore.");
               if (SelectedTab >= 0)
                 (*LoadTabAsync)(SelectedTab, false);
             }

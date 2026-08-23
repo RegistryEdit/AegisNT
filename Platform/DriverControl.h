@@ -164,11 +164,12 @@ const wchar_t *DriverDevicePathForService(const wchar_t *ServiceName) {
   if (!ServiceName || !*ServiceName) {
     return nullptr;
   }
-  if (lstrcmpiW(ServiceName, L"MultiDrv") == 0) {
-    return L"\\\\.\\MultiDrv";
+  if (lstrcmpiW(ServiceName, L"Ring0Core") == 0 ||
+      lstrcmpiW(ServiceName, L"AegisCore") == 0) {
+    return L"\\\\.\\AegisCore";
   }
-  if (lstrcmpiW(ServiceName, L"MonitorDrv") == 0) {
-    return L"\\\\.\\MonitorDrv";
+  if (lstrcmpiW(ServiceName, L"AegisSentinel") == 0) {
+    return L"\\\\.\\AegisSentinel";
   }
   if (lstrcmpiW(ServiceName, L"DiskDrv") == 0) {
     return L"\\\\.\\DiskDrv";

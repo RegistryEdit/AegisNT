@@ -595,7 +595,7 @@ private:
     }
     if (G_DeviceHandle == INVALID_HANDLE_VALUE && !OpenDeviceSilent()) {
       const DWORD ErrorCode = GetLastError();
-      G_LastMultiDrvError = ErrorCode;
+      G_LastAegisCoreError = ErrorCode;
       ShowErrorNotice(this, "Window",
                       "Kernel driver is not available.\n" +
                           DescribeWin32ErrorMessage(ErrorCode));
@@ -604,7 +604,7 @@ private:
     if (!ProtectWindowKernel(Pid, Hwnd, WINPROT_ALL)) {
       ShowErrorNotice(this, "Window",
                       QString("Protect failed.\n%1")
-                          .arg(DescribeWin32ErrorMessage(G_LastMultiDrvError)));
+                          .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
       return;
     }
     ProtectedWindows.push_back({Hwnd, Pid, Title, WINPROT_ALL});
@@ -628,7 +628,7 @@ private:
           !UnprotectWindowKernel(Pid, Hwnd))
         Failures.append(QString("0x%1 (error %2)")
                             .arg(Hwnd, 0, 16)
-                            .arg(G_LastMultiDrvError));
+                            .arg(G_LastAegisCoreError));
     }
     for (const auto &P : ToRemove) {
       if (Failures.contains(QString("0x%1").arg(P.Hwnd, 0, 16),

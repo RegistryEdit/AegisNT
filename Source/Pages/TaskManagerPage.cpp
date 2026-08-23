@@ -1288,10 +1288,10 @@ private:
   }
 
   void ReportDriverResult(const QString &Action) {
-    if (G_LastMultiDrvError != ERROR_SUCCESS)
+    if (G_LastAegisCoreError != ERROR_SUCCESS)
       ShowErrorNotice(this, Action,
                       QString("Driver operation failed (error %1).")
-                          .arg(G_LastMultiDrvError));
+                          .arg(G_LastAegisCoreError));
     else {
       ShowSuccessNotice(this, Action, "Operation completed successfully.");
       QTimer::singleShot(250, this, [this] { RefreshProcesses(); });
@@ -1353,7 +1353,7 @@ private:
     AddMenuAction(ProtectMenu, "Protect", [this, SelectedPids] {
       for (DWORD SelectedPid : SelectedPids) {
         ProtectProcess(SelectedPid);
-        if (G_LastMultiDrvError == ERROR_SUCCESS)
+        if (G_LastAegisCoreError == ERROR_SUCCESS)
           ProtectedPids.insert(SelectedPid);
       }
       ReportDriverResult("Protect");
@@ -1361,7 +1361,7 @@ private:
     AddMenuAction(ProtectMenu, "UnProtect", [this, SelectedPids] {
       for (DWORD SelectedPid : SelectedPids) {
         UnprotectProcess(SelectedPid);
-        if (G_LastMultiDrvError == ERROR_SUCCESS)
+        if (G_LastAegisCoreError == ERROR_SUCCESS)
           ProtectedPids.remove(SelectedPid);
       }
       ReportDriverResult("UnProtect");
@@ -1405,7 +1405,7 @@ private:
       const std::optional<ProcessRow> Cached =
           Current ? std::optional<ProcessRow>(*Current) : std::nullopt;
       HideProcess(Pid);
-      if (G_LastMultiDrvError == ERROR_SUCCESS && Cached) {
+      if (G_LastAegisCoreError == ERROR_SUCCESS && Cached) {
         ProcessRow Retained = *Cached;
         Retained.Hidden = true;
         RetainedProcesses[Pid] = Retained;
@@ -1423,7 +1423,7 @@ private:
       const std::optional<ProcessRow> Cached =
           Current ? std::optional<ProcessRow>(*Current) : std::nullopt;
       UnhideProcess(Pid);
-      if (G_LastMultiDrvError == ERROR_SUCCESS && Cached) {
+      if (G_LastAegisCoreError == ERROR_SUCCESS && Cached) {
         ProcessRow Retained = *Cached;
         Retained.Hidden = false;
         RetainedProcesses[Pid] = Retained;
@@ -1546,7 +1546,7 @@ private:
             switch (Index) {
             case 0:
               KillProcess(Pid);
-              Success = G_LastMultiDrvError == ERROR_SUCCESS;
+              Success = G_LastAegisCoreError == ERROR_SUCCESS;
               break;
             case 1:
               PatchThreadRun(Pid);
@@ -1727,7 +1727,7 @@ private:
 
           if (!Success)
             ShowErrorNotice(this, "SetToken",
-                            DescribeSetTokenError(G_LastMultiDrvError));
+                            DescribeSetTokenError(G_LastAegisCoreError));
           else {
             ShowSuccessNotice(this, "SetToken", SuccessText);
             Dialog->accept();
@@ -1771,7 +1771,7 @@ private:
                          static_cast<ULONG>(Shellcode.size()), &Address)) {
       ShowErrorNotice(this, "InjectShellcode",
                       QString("Injection failed (error %1).")
-                          .arg(G_LastMultiDrvError));
+                          .arg(G_LastAegisCoreError));
       return;
     }
 
@@ -1817,7 +1817,7 @@ private:
       if (Success)
         ++SuccessCount;
       else
-        LastError = G_LastMultiDrvError;
+        LastError = G_LastAegisCoreError;
     }
 
     if (SuccessCount == 0) {
@@ -1892,7 +1892,7 @@ private:
                             QLatin1Char('0'))
                        .toUpper();
       } else {
-        LastError = G_LastMultiDrvError;
+        LastError = G_LastAegisCoreError;
       }
     }
 
@@ -1957,7 +1957,7 @@ private:
         ++SuccessCount;
         LastAddress = Address;
       } else {
-        LastError = G_LastMultiDrvError;
+        LastError = G_LastAegisCoreError;
       }
     }
 
@@ -2261,7 +2261,7 @@ private:
                         "Select how to terminate %1 selected thread(s). "
                         "Terminating threads can destabilize their process.")
                         .arg(SelectedTids.size()),
-                    {"R3 (Win32 API)", "R0 (MultiDrv)"},
+                    {"R3 (Win32 API)", "R0 (AegisCore)"},
                     [this, SafeThreads, SelectedTids, Pid](int Method) {
                       int SuccessCount = 0;
                       DWORD LastErrorCode = ERROR_SUCCESS;
@@ -2301,7 +2301,7 @@ private:
                           Mode = "R0";
                           Success = KillThread(SelectedTid, Pid) != FALSE;
                           if (!Success)
-                            LastErrorCode = G_LastMultiDrvError;
+                            LastErrorCode = G_LastAegisCoreError;
                         }
                         if (Success) {
                           ++SuccessCount;
@@ -2426,7 +2426,7 @@ private:
             if (!ForceCloseHandleKernel(OwnerPid, HandleValue))
               ShowErrorNotice(this, "Handle",
                               QString("Force close failed (error %1).")
-                                  .arg(G_LastMultiDrvError));
+                                  .arg(G_LastAegisCoreError));
             else
               ShowSuccessNotice(this, "Handle",
                                 QString("Handle 0x%1 closed.")
@@ -2453,7 +2453,7 @@ private:
                         &NewHandleValue))
                   ShowErrorNotice(this, "Handle",
                                   QString("Downgrade failed (error %1).")
-                                      .arg(G_LastMultiDrvError));
+                                      .arg(G_LastAegisCoreError));
                 else
                   ShowSuccessNotice(
                       this, "Handle",
@@ -2500,7 +2500,7 @@ private:
                         static_cast<ACCESS_MASK>(SelectedMask), &NewHandle))
                   ShowErrorNotice(this, "Handle",
                                   QString("Duplicate failed (error %1).")
-                                      .arg(G_LastMultiDrvError));
+                                      .arg(G_LastAegisCoreError));
                 else
                   ShowSuccessNotice(
                       this, "Handle",
@@ -2522,14 +2522,14 @@ private:
                 ShowSuccessNotice(this, "Handle", "Handle information copied.");
               });
           AddMenuAction(
-              Menu, "Open in HandleLab",
+              Menu, "Open in Handle",
               [this, OwnerPid, HandleValue] {
                 AegisNT::ApplicationContext().HandleLabPresetPid = OwnerPid;
                 AegisNT::ApplicationContext().HandleLabPresetSearch =
                     QString("0x%1").arg(HandleValue, 0, 16).toUpper();
                 ShowSuccessNotice(
-                    this, "HandleLab",
-                    "Handle preset prepared. Open HandleLab to inspect it.");
+                    this, "Handle",
+                    "Handle preset prepared. Open Handle to inspect it.");
               });
           ReleaseMenuAfterClose(Menu);
           Menu->exec(Handles->viewport()->mapToGlobal(Position));
@@ -2561,6 +2561,8 @@ private:
         const bool TokenOk = QueryUserTokenInfo(Pid, TokenInfo);
         std::vector<MDV2_RECORD> ProcessRows, EprocessRows, ThreadRows,
             HandleRows, ModuleRows, MemoryRows;
+        std::vector<ToolModuleInfo> UserModuleRows;
+        std::vector<MEMORY_BASIC_INFORMATION> UserMemoryRows;
         std::vector<InspectorHandleRow> UserHandleRows;
         MDV2_LIST_HEADER ProcessHeader{}, EprocessHeader{}, ThreadHeader{},
             HandleHeader{}, ModuleHeader{}, MemoryHeader{};
@@ -2577,6 +2579,25 @@ private:
             Pid, IOCTL_ENUM_MODULES_V2, ModuleRows, &ModuleHeader);
         const bool KernelMemoryOk = QueryProcessRecordsV2(
             Pid, IOCTL_ENUM_MEMORY_V2, MemoryRows, &MemoryHeader);
+        if (!KernelModuleOk || ModuleRows.empty())
+          ProcessPeb::ReadModuleList(Pid, UserModuleRows);
+        if (!KernelMemoryOk || MemoryRows.empty()) {
+          HANDLE Process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, Pid);
+          if (Process != nullptr) {
+            uintptr_t Address = 0;
+            MEMORY_BASIC_INFORMATION Info{};
+            while (VirtualQueryEx(Process, reinterpret_cast<LPCVOID>(Address),
+                                  &Info, sizeof(Info)) == sizeof(Info)) {
+              UserMemoryRows.push_back(Info);
+              const uintptr_t Next = reinterpret_cast<uintptr_t>(Info.BaseAddress) +
+                                     Info.RegionSize;
+              if (Next <= Address || UserMemoryRows.size() >= 65536)
+                break;
+              Address = Next;
+            }
+            CloseHandle(Process);
+          }
+        }
         const bool UserHandleOk =
             QueryUserModeHandles(Pid, UserHandleRows, UserHandleError);
         std::string PebOutput;
@@ -2615,9 +2636,12 @@ private:
              UserHandleRows = std::move(UserHandleRows),
              ModuleRows = std::move(ModuleRows),
              MemoryRows = std::move(MemoryRows), ProcessHeader, EprocessHeader,
-             HandleHeader, ModuleHeader, UserHandleOk, UserHandleError,
+             HandleHeader, ModuleHeader, MemoryHeader, UserHandleOk,
+             UserHandleError,
              KernelProcessOk, KernelEprocessOk, KernelThreadOk, KernelHandleOk,
              KernelModuleOk, KernelMemoryOk,
+             UserModuleRows = std::move(UserModuleRows),
+             UserMemoryRows = std::move(UserMemoryRows),
              PebOutput = std::move(PebOutput), HasSelectedProcess,
              MitigationEntries = std::move(MitigationEntries), Pid,
              StaticSummaryRows, RefreshBusy]() mutable {
@@ -2762,6 +2786,62 @@ private:
                 if (QTableWidgetItem *Item = Threads->item(Row, 0))
                   Item->setData(Qt::UserRole,
                                 QVariant::fromValue<qulonglong>(R.ThreadId));
+              }
+              if (!ModuleRows.empty()) {
+                for (const auto &R : ModuleRows) {
+                  Add(Modules,
+                      {R.Name[0] ? QString::fromWCharArray(R.Name) : "-",
+                       QString("0x%1").arg(R.Address, 0, 16).toUpper(),
+                       FormatBytes(R.SizeBytes),
+                       R.Path[0] ? QString::fromWCharArray(R.Path) : "-",
+                       SourceName(R.Source)});
+                }
+              }
+              if (Modules->rowCount() == 0) {
+                for (const auto &R : UserModuleRows) {
+                  Add(Modules,
+                      {Utf8Text(R.Name),
+                       QString("0x%1").arg(R.BaseAddress, 0, 16).toUpper(),
+                       FormatBytes(R.SizeOfImage), Utf8Text(R.FullPath),
+                       "Toolhelp"});
+                }
+              }
+              if (Modules->rowCount() == 0) {
+                Add(Modules, {"Unavailable", {}, {}, {},
+                              QString("status=0x%1")
+                                  .arg(static_cast<quint32>(ModuleHeader.Status),
+                                       8, 16, QLatin1Char('0'))
+                                  .toUpper()});
+              }
+              if (!MemoryRows.empty()) {
+                for (const auto &R : MemoryRows) {
+                  Add(Memory,
+                      {QString("0x%1").arg(R.Address, 0, 16).toUpper(),
+                       FormatBytes(R.SizeBytes),
+                       QString("0x%1").arg(R.Value[2], 0, 16).toUpper(),
+                       QString("0x%1").arg(R.Value[3], 0, 16).toUpper(),
+                       QString("0x%1").arg(R.Value[4], 0, 16).toUpper()});
+                }
+              }
+              if (Memory->rowCount() == 0) {
+                for (const auto &R : UserMemoryRows) {
+                  Add(Memory,
+                      {QString("0x%1")
+                           .arg(reinterpret_cast<quintptr>(R.BaseAddress), 0,
+                                16)
+                           .toUpper(),
+                       FormatBytes(R.RegionSize),
+                       QString("0x%1").arg(R.State, 0, 16).toUpper(),
+                       QString("0x%1").arg(R.Protect, 0, 16).toUpper(),
+                       QString("0x%1").arg(R.Type, 0, 16).toUpper()});
+                }
+              }
+              if (Memory->rowCount() == 0) {
+                Add(Memory, {"Unavailable", {}, {}, {},
+                             QString("status=0x%1")
+                                 .arg(static_cast<quint32>(MemoryHeader.Status),
+                                      8, 16, QLatin1Char('0'))
+                                 .toUpper()});
               }
               if (KernelHandleOk && HandleHeader.Status == 0) {
                 for (const auto &R : HandleRows) {
@@ -2995,6 +3075,7 @@ private:
   void ShowInjectDllDialog(DWORD Pid) {
     auto *Dialog = new MessageBoxBase(window());
     Dialog->setAttribute(Qt::WA_DeleteOnClose);
+    Dialog->setModal(true);
     auto *Title = MakeLabel("InjectDLL", 18, KTextPrimary, QFont::DemiBold);
     auto *Description = MakeLabel(
         QString("Select a DLL and injection method for PID %1.").arg(Pid), 11,
@@ -3026,10 +3107,15 @@ private:
     Dialog->cancelButton()->setText("Cancel");
     QObject::connect(
         BrowseButton, &QPushButton::clicked, Dialog, [Dialog, PathEdit] {
-          const QString Path = QFileDialog::getOpenFileName(
-              Dialog, "Select DLL", PathEdit->text(), "DLL files (*.dll)");
-          if (!Path.isEmpty())
-            PathEdit->setText(QDir::toNativeSeparators(Path));
+          QFileDialog FileDialog(Dialog, "Select DLL", PathEdit->text(),
+                                  "DLL files (*.dll);;All files (*.*)");
+          FileDialog.setFileMode(QFileDialog::ExistingFile);
+          FileDialog.setAcceptMode(QFileDialog::AcceptOpen);
+          FileDialog.setWindowModality(Qt::WindowModal);
+          if (FileDialog.exec() == QDialog::Accepted &&
+              !FileDialog.selectedFiles().isEmpty())
+            PathEdit->setText(
+                QDir::toNativeSeparators(FileDialog.selectedFiles().constFirst()));
         });
     QObject::connect(
         Dialog->yesButton(), &QPushButton::clicked, Dialog,
@@ -3084,7 +3170,7 @@ private:
                     .arg(Pid)
                     .arg(MethodName)
                     .arg(QDir::toNativeSeparators(Path))
-                    .arg(DescribeWin32ErrorMessage(G_LastMultiDrvError)
+                    .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)
                              .replace('\n', "\n    ")));
             ShowErrorNotice(this, "InjectDLL",
                             "DLL injection failed. See Console for details.");

@@ -251,7 +251,7 @@ QWidget *CreateHandleLabPage() {
       QObject::connect(ViewList, &QListWidget::currentRowChanged, Pages,
                        &QStackedWidget::setCurrentIndex);
       QObject::connect(Pages, &QStackedWidget::currentChanged, this,
-                       [this] { UpdateDetailPanel(); UpdateActionState(); });
+                       [this] { RenderActiveView(); });
       QObject::connect(SearchDebounceTimer, &QTimer::timeout, this,
                        [this] { RebuildViews(); });
       QObject::connect(SearchEdit, &QLineEdit::textChanged, this,
@@ -311,7 +311,10 @@ QWidget *CreateHandleLabPage() {
       if (AutoRefreshEnabled)
         RefreshTimer->start();
 
-      StartRefresh(false);
+      // Let the navigation stack paint the page before starting the native
+      // handle snapshot. This keeps the first click responsive even when the
+      // system has a very large handle table.
+      QTimer::singleShot(0, this, [this] { StartRefresh(false); });
     }
 
   private:
@@ -671,10 +674,14 @@ QWidget *CreateHandleLabPage() {
       Buffer.resize(Size);
       NTSTATUS Status = KStatusInfoLengthMismatch;
       ULONG ReturnLength = 0;
-      while (Status == KStatusInfoLengthMismatch) {
+      while (Status == KStatusInfoLengthMismatch ||
+             Status == static_cast<NTSTATUS>(0x80000005L) ||
+             Status == static_cast<NTSTATUS>(0xC0000023L)) {
         Status = QuerySystemInformation(KSystemExtendedHandleInformationClass,
                                         Buffer.data(), Size, &ReturnLength);
-        if (Status == KStatusInfoLengthMismatch) {
+        if (Status == KStatusInfoLengthMismatch ||
+            Status == static_cast<NTSTATUS>(0x80000005L) ||
+            Status == static_cast<NTSTATUS>(0xC0000023L)) {
           Size = std::max(Size * 2, ReturnLength + 0x1000u);
           Buffer.resize(Size);
         }
@@ -736,7 +743,25 @@ QWidget *CreateHandleLabPage() {
           .toCaseFolded();
     }
 
-    void RefreshDerivedFields(HandleEntryRow &Row) const {
+    static QString HandleIdentityKey(const HandleEntryRow &Row) {
+      return QString("%1:%2:%3:%4")
+          .arg(Row.OwnerPid)
+          .arg(Row.HandleValue, 0, 16)
+          .arg(Row.ObjectAddress, 0, 16)
+          .arg(Row.GrantedAccess, 0, 16);
+    }
+
+    static void ApplyObjectIdentity(HandleEntryRow &Row,
+                                    const ObjectIdentity &Identity) {
+      Row.TypeName = Identity.TypeName;
+      Row.ObjectName = Identity.ObjectName;
+      Row.TargetPid = Identity.TargetPid;
+      Row.TargetTid = Identity.TargetTid;
+      Row.TargetName = Identity.TargetName;
+    }
+
+    void RefreshDerivedFields(HandleEntryRow &Row,
+                              const std::vector<WatchRule> &Rules) const {
       Row.AccessDisplay =
           FormatHandleAccessDisplay(Row.TypeName, Row.GrantedAccess);
       Row.Dangerous = IsDangerousMask(Row.TypeName, Row.GrantedAccess);
@@ -745,7 +770,7 @@ QWidget *CreateHandleLabPage() {
            Row.TypeName.compare("Thread", Qt::CaseInsensitive) == 0) &&
           Row.TargetPid != 0 && Row.TargetPid != Row.OwnerPid;
       QStringList MatchedRuleTexts;
-      for (const WatchRule &Rule : WatchRules) {
+      for (const WatchRule &Rule : Rules) {
         if (MatchesWatchRule(Row, Rule))
           MatchedRuleTexts.append(Rule.Kind + ":" + Rule.Value);
       }
@@ -757,7 +782,9 @@ QWidget *CreateHandleLabPage() {
     }
 
     bool ResolveHandleIdentity(HandleEntryRow &Row,
-                               const QHash<DWORD, QString> &Names) const {
+                               const QHash<DWORD, QString> &Names,
+                               const std::vector<WatchRule> &Rules,
+                               ObjectIdentity *Resolved = nullptr) const {
       HANDLE Process =
           OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION,
                       FALSE, Row.OwnerPid);
@@ -784,7 +811,14 @@ QWidget *CreateHandleLabPage() {
         Row.TargetName = QueryProcessDisplayName(Row.TargetPid, Names);
       }
       CloseHandle(Duplicate);
-      RefreshDerivedFields(Row);
+      if (Resolved != nullptr) {
+        Resolved->TypeName = Row.TypeName;
+        Resolved->ObjectName = Row.ObjectName;
+        Resolved->TargetPid = Row.TargetPid;
+        Resolved->TargetTid = Row.TargetTid;
+        Resolved->TargetName = Row.TargetName;
+      }
+      RefreshDerivedFields(Row, Rules);
       return true;
     }
 
@@ -886,18 +920,20 @@ QWidget *CreateHandleLabPage() {
       if (Refreshing.exchange(true))
         return;
       const quint64 RefreshId = ++RefreshGeneration;
+      const std::optional<QString> SelectedKey = CurrentHandleSelectionKey();
       SetRefreshUiState(RefreshButton, RefreshIndicator, StatusLabel, true,
                         "Refresh", "Refreshing...", QString(),
                         "Enumerating system handles...");
       QPointer<HandleLabPage> SafeThis(this);
-      std::thread([SafeThis, ShowResult, RefreshId] {
+      std::thread([SafeThis, ShowResult, RefreshId, SelectedKey] {
         RefreshResult Result;
         Result.Success = SafeThis ? SafeThis->QuerySystemHandles(Result.Rows,
                                                                  Result.ErrorCode)
                                   : false;
         QMetaObject::invokeMethod(
             qApp,
-            [SafeThis, ShowResult, RefreshId, Result = std::move(Result)]() mutable {
+            [SafeThis, ShowResult, RefreshId, SelectedKey,
+             Result = std::move(Result)]() mutable {
               if (!SafeThis)
                 return;
               if (RefreshId != SafeThis->RefreshGeneration.load())
@@ -912,19 +948,27 @@ QWidget *CreateHandleLabPage() {
                         .arg(Result.ErrorCode);
                 SafeThis->StatusLabel->setText(Message);
                 if (ShowResult)
-                  ShowErrorNotice(SafeThis, "HandleLab", Message);
+                  ShowErrorNotice(SafeThis, "Handle", Message);
                 return;
               }
               SafeThis->AllRows = std::move(Result.Rows);
+              for (HandleEntryRow &Row : SafeThis->AllRows) {
+                const auto Cached = SafeThis->IdentityCache.constFind(
+                    HandleIdentityKey(Row));
+                if (Cached == SafeThis->IdentityCache.constEnd())
+                  continue;
+                ApplyObjectIdentity(Row, Cached.value());
+                SafeThis->RefreshDerivedFields(Row, SafeThis->WatchRules);
+              }
               SafeThis->ConsumePendingPreset();
               SafeThis->PopulateTypeFilter();
-              SafeThis->RebuildViews();
+              SafeThis->RebuildViews(SelectedKey);
               SafeThis->StatusLabel->setText(
                   QString("%1 handle(s) loaded. Resolving details in background...")
                       .arg(SafeThis->AllRows.size()));
               SafeThis->StartBackgroundEnrichment(RefreshId);
               if (ShowResult)
-                ShowSuccessNotice(SafeThis, "HandleLab",
+                ShowSuccessNotice(SafeThis, "Handle",
                                   QString("Enumerated %1 handle(s).")
                                       .arg(SafeThis->AllRows.size()));
             },
@@ -933,40 +977,83 @@ QWidget *CreateHandleLabPage() {
     }
 
     void StartBackgroundEnrichment(quint64 RefreshId) {
-      if (Enriching.exchange(true))
+      if (Enriching.exchange(true)) {
+        PendingEnrichmentGeneration.store(RefreshId);
         return;
+      }
+      PendingEnrichmentGeneration.store(0);
       QPointer<HandleLabPage> SafeThis(this);
       const std::vector<HandleEntryRow> SnapshotRows = AllRows;
       const std::vector<WatchRule> SnapshotRules = WatchRules;
-      std::thread([SafeThis, RefreshId, SnapshotRows, SnapshotRules] {
+      const QHash<QString, ObjectIdentity> SnapshotCache = IdentityCache;
+      std::thread([SafeThis, RefreshId, SnapshotRows, SnapshotRules,
+                   SnapshotCache] {
         if (!SafeThis)
           return;
         const QHash<DWORD, QString> Names = BuildProcessNameMap();
         std::vector<HandleEntryRow> Enriched = SnapshotRows;
+        QHash<QString, ObjectIdentity> ResolvedCache;
         HandleLabPage *Page = SafeThis.data();
         if (!Page)
           return;
         for (HandleEntryRow &Row : Enriched) {
-          if (RefreshId != Page->RefreshGeneration.load())
+          if (RefreshId != Page->RefreshGeneration.load()) {
+            QMetaObject::invokeMethod(
+                qApp,
+                [SafeThis, RefreshId] {
+                  if (!SafeThis)
+                    return;
+                  SafeThis->Enriching = false;
+                  const quint64 Pending =
+                      SafeThis->PendingEnrichmentGeneration.exchange(0);
+                  if (Pending != 0 &&
+                      Pending == SafeThis->RefreshGeneration.load())
+                    SafeThis->StartBackgroundEnrichment(Pending);
+                },
+                Qt::QueuedConnection);
             return;
-          Page->ResolveHandleIdentity(Row, Names);
+          }
+          const QString Key = HandleIdentityKey(Row);
+          const auto Cached = SnapshotCache.constFind(Key);
+          if (Cached != SnapshotCache.constEnd()) {
+            ApplyObjectIdentity(Row, Cached.value());
+            Page->RefreshDerivedFields(Row, SnapshotRules);
+            ResolvedCache.insert(Key, Cached.value());
+            continue;
+          }
+          ObjectIdentity Resolved;
+          if (Page->ResolveHandleIdentity(Row, Names, SnapshotRules, &Resolved))
+            ResolvedCache.insert(Key, std::move(Resolved));
         }
         QMetaObject::invokeMethod(
             qApp,
             [SafeThis, RefreshId, Enriched = std::move(Enriched),
-             SnapshotRules]() mutable {
+             ResolvedCache = std::move(ResolvedCache)]() mutable {
               if (!SafeThis)
                 return;
               SafeThis->Enriching = false;
-              if (RefreshId != SafeThis->RefreshGeneration.load())
+              if (RefreshId != SafeThis->RefreshGeneration.load()) {
+                const quint64 Pending =
+                    SafeThis->PendingEnrichmentGeneration.exchange(0);
+                if (Pending != 0 &&
+                    Pending == SafeThis->RefreshGeneration.load())
+                  SafeThis->StartBackgroundEnrichment(Pending);
                 return;
-              SafeThis->WatchRules = SnapshotRules;
+              }
+              const std::optional<QString> SelectedKey =
+                  SafeThis->CurrentHandleSelectionKey();
+              SafeThis->IdentityCache = std::move(ResolvedCache);
               SafeThis->AllRows = std::move(Enriched);
               SafeThis->PopulateTypeFilter();
-              SafeThis->RebuildViews();
+              SafeThis->RebuildViews(SelectedKey);
               SafeThis->StatusLabel->setText(
                   QString("%1 handle(s) loaded. Details resolved.")
                       .arg(SafeThis->AllRows.size()));
+              const quint64 Pending =
+                  SafeThis->PendingEnrichmentGeneration.exchange(0);
+              if (Pending != 0 &&
+                  Pending == SafeThis->RefreshGeneration.load())
+                SafeThis->StartBackgroundEnrichment(Pending);
             },
             Qt::QueuedConnection);
       }).detach();
@@ -1046,7 +1133,40 @@ QWidget *CreateHandleLabPage() {
       return true;
     }
 
-    void RebuildViews() {
+    void RenderActiveView() {
+      const int Index = Pages->currentIndex();
+      if (Index < 0 || Index >= static_cast<int>(ViewDirty.size()))
+        return;
+
+      if (ViewDirty[static_cast<size_t>(Index)]) {
+        switch (Index) {
+        case 0:
+          PopulateHandleTable(HandleTable, FilteredIndices, false);
+          break;
+        case 1:
+          PopulateProcessTable();
+          break;
+        case 2:
+          PopulateTypeTable();
+          break;
+        case 3:
+          PopulateObjectTable();
+          break;
+        case 4:
+          PopulateHandleTable(WatchTable, WatchIndices, true);
+          break;
+        default:
+          break;
+        }
+        ViewDirty[static_cast<size_t>(Index)] = false;
+      }
+
+      UpdateDetailPanel();
+      UpdateActionState();
+    }
+
+    void RebuildViews(
+        const std::optional<QString> &SelectionKey = std::nullopt) {
       FilteredIndices.clear();
       WatchIndices.clear();
       ProcessRows.clear();
@@ -1128,21 +1248,24 @@ QWidget *CreateHandleLabPage() {
                   return Left.HandleCount > Right.HandleCount;
                 });
 
-      PopulateHandleTable(HandleTable, FilteredIndices, false);
-      PopulateProcessTable();
-      PopulateTypeTable();
-      PopulateObjectTable();
-      PopulateHandleTable(WatchTable, WatchIndices, true);
-      UpdateDetailPanel();
-      UpdateActionState();
+      // Filtering and aggregation are expensive for a system-wide handle
+      // snapshot. Recompute them only when the source/filter changes, then
+      // lazily render each view once. Merely switching tabs must not repeat
+      // this work or rebuild a table that is already current.
+      ViewDirty.fill(true);
+      RenderActiveView();
+      if (SelectionKey.has_value())
+        RestoreHandleSelection(*SelectionKey);
     }
 
     void PopulateHandleTable(TableWidget *Table, const std::vector<int> &Indices,
                              bool WatchView) {
+      constexpr size_t KMaxRenderedRows = 10000;
       SetTableRefreshEnabled(Table, false);
       Table->clearContents();
-      Table->setRowCount(static_cast<int>(Indices.size()));
-      for (int RowIndex = 0; RowIndex < static_cast<int>(Indices.size());
+      const size_t RenderCount = std::min(Indices.size(), KMaxRenderedRows);
+      Table->setRowCount(static_cast<int>(RenderCount));
+      for (int RowIndex = 0; RowIndex < static_cast<int>(RenderCount);
            ++RowIndex) {
         const HandleEntryRow &Row =
             AllRows[static_cast<size_t>(Indices[static_cast<size_t>(RowIndex)])];
@@ -1173,6 +1296,10 @@ QWidget *CreateHandleLabPage() {
         Table->setRowHeight(RowIndex, KCompactTableRowHeight);
       }
       SetTableRefreshEnabled(Table, true);
+      if (Indices.size() > RenderCount)
+        StatusLabel->setText(QString("Showing first %1 of %2 matching handles.")
+                                 .arg(RenderCount)
+                                 .arg(Indices.size()));
     }
 
     void PopulateProcessTable() {
@@ -1222,10 +1349,13 @@ QWidget *CreateHandleLabPage() {
     }
 
     void PopulateObjectTable() {
+      constexpr size_t KMaxRenderedRows = 10000;
       SetTableRefreshEnabled(ObjectTable, false);
       ObjectTable->clearContents();
-      ObjectTable->setRowCount(static_cast<int>(ObjectRows.size()));
-      for (int Row = 0; Row < static_cast<int>(ObjectRows.size()); ++Row) {
+      const size_t RenderCount =
+          std::min(ObjectRows.size(), KMaxRenderedRows);
+      ObjectTable->setRowCount(static_cast<int>(RenderCount));
+      for (int Row = 0; Row < static_cast<int>(RenderCount); ++Row) {
         const auto &Item = ObjectRows[static_cast<size_t>(Row)];
         auto *ObjectItem = new QTableWidgetItem(HexPtr(Item.ObjectAddress));
         ObjectItem->setData(Qt::UserRole,
@@ -1242,6 +1372,10 @@ QWidget *CreateHandleLabPage() {
         ObjectTable->setRowHeight(Row, KCompactTableRowHeight);
       }
       SetTableRefreshEnabled(ObjectTable, true);
+      if (ObjectRows.size() > RenderCount)
+        StatusLabel->setText(QString("Showing first %1 of %2 matching objects.")
+                                 .arg(RenderCount)
+                                 .arg(ObjectRows.size()));
     }
 
     QList<int> CurrentHandleSelection() const {
@@ -1261,6 +1395,40 @@ QWidget *CreateHandleLabPage() {
         Result.append(Item->data(Qt::UserRole).toInt());
       }
       return Result;
+    }
+
+    std::optional<QString> CurrentHandleSelectionKey() const {
+      const QList<int> Selection = CurrentHandleSelection();
+      if (Selection.size() != 1 || Selection.first() < 0 ||
+          Selection.first() >= static_cast<int>(AllRows.size()))
+        return std::nullopt;
+      return HandleIdentityKey(
+          AllRows[static_cast<size_t>(Selection.first())]);
+    }
+
+    void RestoreHandleSelection(const QString &SelectionKey) {
+      QTableWidget *Table = nullptr;
+      if (Pages->currentIndex() == 0)
+        Table = HandleTable;
+      else if (Pages->currentIndex() == 4)
+        Table = WatchTable;
+      if (Table == nullptr)
+        return;
+
+      for (int RowIndex = 0; RowIndex < Table->rowCount(); ++RowIndex) {
+        const QTableWidgetItem *Item = Table->item(RowIndex, 0);
+        if (Item == nullptr)
+          continue;
+        const int SourceIndex = Item->data(Qt::UserRole).toInt();
+        if (SourceIndex < 0 ||
+            SourceIndex >= static_cast<int>(AllRows.size()) ||
+            HandleIdentityKey(AllRows[static_cast<size_t>(SourceIndex)]) !=
+                SelectionKey)
+          continue;
+        Table->selectRow(RowIndex);
+        Table->scrollToItem(Item, QAbstractItemView::PositionAtCenter);
+        return;
+      }
     }
 
     std::optional<HandleEntryRow> CurrentSingleHandle() const {
@@ -1389,12 +1557,12 @@ QWidget *CreateHandleLabPage() {
         return;
       if (!ForceCloseHandleKernel(Row->OwnerPid,
                                   static_cast<ULONG>(Row->HandleValue))) {
-        ShowErrorNotice(this, "HandleLab",
+        ShowErrorNotice(this, "Handle",
                         QString("Force close failed (error %1).")
-                            .arg(G_LastMultiDrvError));
+                            .arg(G_LastAegisCoreError));
         return;
       }
-      ShowSuccessNotice(this, "HandleLab",
+      ShowSuccessNotice(this, "Handle",
                         QString("Handle %1 closed.")
                             .arg(HexPtr(Row->HandleValue)));
       StartRefresh(false);
@@ -1418,12 +1586,12 @@ QWidget *CreateHandleLabPage() {
                                  static_cast<ULONG>(Row->HandleValue),
                                  static_cast<ACCESS_MASK>(SelectedMask),
                                  &NewHandle)) {
-        ShowErrorNotice(this, "HandleLab",
+        ShowErrorNotice(this, "Handle",
                         QString("Downgrade failed (error %1).")
-                            .arg(G_LastMultiDrvError));
+                            .arg(G_LastAegisCoreError));
         return;
       }
-      ShowSuccessNotice(this, "HandleLab",
+      ShowSuccessNotice(this, "Handle",
                         QString("Handle downgraded. New handle: %1")
                             .arg(HexPtr(NewHandle)));
       StartRefresh(false);
@@ -1443,7 +1611,7 @@ QWidget *CreateHandleLabPage() {
       const qulonglong TargetPidValue = TargetText.trimmed().toULongLong(&PidOk, 0);
       if (!PidOk || TargetPidValue == 0 ||
           TargetPidValue > std::numeric_limits<ULONG>::max()) {
-        ShowWarningNotice(this, "HandleLab", "Enter a valid target PID.");
+          ShowWarningNotice(this, "Handle", "Enter a valid target PID.");
         return;
       }
       quint32 SelectedMask = Row->GrantedAccess;
@@ -1460,12 +1628,12 @@ QWidget *CreateHandleLabPage() {
               Row->OwnerPid, static_cast<ULONG>(Row->HandleValue),
               static_cast<ULONG>(TargetPidValue),
               static_cast<ACCESS_MASK>(SelectedMask), &NewHandle)) {
-        ShowErrorNotice(this, "HandleLab",
+        ShowErrorNotice(this, "Handle",
                         QString("Duplicate failed (error %1).")
-                            .arg(G_LastMultiDrvError));
+                            .arg(G_LastAegisCoreError));
         return;
       }
-      ShowSuccessNotice(this, "HandleLab",
+      ShowSuccessNotice(this, "Handle",
                         QString("Handle duplicated to PID %1 as %2.")
                             .arg(TargetPidValue)
                             .arg(HexPtr(NewHandle)));
@@ -1489,15 +1657,15 @@ QWidget *CreateHandleLabPage() {
                                    static_cast<ULONG>(Row.HandleValue)))
           ++SuccessCount;
         else
-          LastError = G_LastMultiDrvError;
+          LastError = G_LastAegisCoreError;
       }
       if (SuccessCount == 0) {
-        ShowErrorNotice(this, "HandleLab",
+        ShowErrorNotice(this, "Handle",
                         QString("Batch force close failed (error %1).")
                             .arg(LastError));
         return;
       }
-      ShowSuccessNotice(this, "HandleLab",
+      ShowSuccessNotice(this, "Handle",
                         QString("%1 handle(s) closed.").arg(SuccessCount));
       StartRefresh(false);
     }
@@ -1510,7 +1678,7 @@ QWidget *CreateHandleLabPage() {
       for (const int Index : Selection) {
         if (AllRows[static_cast<size_t>(Index)].TypeName.compare(
                 First.TypeName, Qt::CaseInsensitive) != 0) {
-          ShowWarningNotice(this, "HandleLab",
+          ShowWarningNotice(this, "Handle",
                             "Batch downgrade requires the same handle type.");
           return;
         }
@@ -1534,15 +1702,15 @@ QWidget *CreateHandleLabPage() {
                                   &NewHandleValue))
           ++SuccessCount;
         else
-          LastError = G_LastMultiDrvError;
+          LastError = G_LastAegisCoreError;
       }
       if (SuccessCount == 0) {
-        ShowErrorNotice(this, "HandleLab",
+        ShowErrorNotice(this, "Handle",
                         QString("Batch downgrade failed (error %1).")
                             .arg(LastError));
         return;
       }
-      ShowSuccessNotice(this, "HandleLab",
+      ShowSuccessNotice(this, "Handle",
                         QString("%1 handle(s) downgraded.").arg(SuccessCount));
       StartRefresh(false);
     }
@@ -1614,7 +1782,7 @@ QWidget *CreateHandleLabPage() {
         return;
       const QString RuleValue = Value->text().trimmed();
       if (RuleValue.isEmpty()) {
-        ShowWarningNotice(this, "HandleLab", "Rule value is required.");
+        ShowWarningNotice(this, "Handle", "Rule value is required.");
         return;
       }
       WatchRules.push_back({Kind->currentText().trimmed().toCaseFolded(), RuleValue});
@@ -1668,9 +1836,12 @@ QWidget *CreateHandleLabPage() {
     std::vector<TypeAggregateRow> TypeRows;
     std::vector<ObjectAggregateRow> ObjectRows;
     std::vector<WatchRule> WatchRules;
+    QHash<QString, ObjectIdentity> IdentityCache;
+    std::array<bool, 5> ViewDirty{{true, true, true, true, true}};
     std::atomic_bool Refreshing = false;
     std::atomic_bool Enriching = false;
     std::atomic_uint64_t RefreshGeneration = 0;
+    std::atomic_uint64_t PendingEnrichmentGeneration = 0;
   };
 
   return new HandleLabPage;

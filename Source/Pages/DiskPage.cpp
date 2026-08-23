@@ -28,8 +28,12 @@ public:
     ApplyButton = MakeButton("Apply", true);
     DrainButton = MakeButton("Drain events");
     AllowButton = MakeButton("Allow next time", true);
+    AllowCurrentButton = MakeButton("Allow current", true);
+    DenyCurrentButton = MakeButton("Deny current");
     ClearButton = MakeButton("Clear queue");
     AllowButton->setEnabled(false);
+    AllowCurrentButton->setEnabled(false);
+    DenyCurrentButton->setEnabled(false);
     ProtectionToolbar->addWidget(DiskEdit);
     ProtectionToolbar->addWidget(PartitionCombo);
     ProtectionToolbar->addWidget(AutoPartitionLabel);
@@ -40,6 +44,8 @@ public:
     ProtectionToolbar->addWidget(ApplyButton);
     ProtectionToolbar->addWidget(DrainButton);
     ProtectionToolbar->addWidget(AllowButton);
+    ProtectionToolbar->addWidget(AllowCurrentButton);
+    ProtectionToolbar->addWidget(DenyCurrentButton);
     ProtectionToolbar->addWidget(ClearButton);
     Layout->addLayout(ProtectionToolbar);
 
@@ -133,6 +139,10 @@ public:
                      [this] { ClearEvents(); });
     QObject::connect(AllowButton, &QPushButton::clicked, this,
                      [this] { AllowSelected(); });
+    QObject::connect(AllowCurrentButton, &QPushButton::clicked, this,
+                     [this] { DecideSelected(true); });
+    QObject::connect(DenyCurrentButton, &QPushButton::clicked, this,
+                     [this] { DecideSelected(false); });
     QObject::connect(UseProtectedButton, &QPushButton::clicked, this,
                      [this] { SwitchToProtectedRangeMode(); });
     QObject::connect(UseEventButton, &QPushButton::clicked, this,
@@ -159,6 +169,11 @@ public:
               EventTable->currentRow() >= 0 &&
               EventTable->currentRow() < static_cast<int>(Events.size());
           AllowButton->setEnabled(HasSelection);
+          const bool HasPending =
+              HasSelection &&
+              Events[EventTable->currentRow()].Event.RequestId != 0;
+          AllowCurrentButton->setEnabled(HasPending);
+          DenyCurrentButton->setEnabled(HasPending);
           UseEventButton->setEnabled(HasSelection);
         });
 
@@ -300,12 +315,35 @@ private:
   }
 
   void RefreshState(bool Report, bool ReloadForm = true) {
-    DISKDRV_STATE_OUTPUT State{};
-    if (!DiskDrvQueryState(&State)) {
+    if (StateRefreshing.exchange(true))
+      return;
+    if (Report)
+      StateLabel->setText("Refreshing protection state...");
+    QPointer<DiskProtectionPage> Page(this);
+    std::thread([Page, Report, ReloadForm] {
+      DISKDRV_STATE_OUTPUT State{};
+      const bool Ok = DiskDrvQueryState(&State);
+      const DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
+      if (!Page)
+        return;
+      QMetaObject::invokeMethod(
+          Page,
+          [Page, Report, ReloadForm, Ok, Error, State = std::move(State)]() mutable {
+            if (!Page)
+              return;
+            Page->StateRefreshing = false;
+            Page->ApplyStateSnapshot(Report, ReloadForm, Ok, Error, State);
+          },
+          Qt::QueuedConnection);
+    }).detach();
+  }
+
+  void ApplyStateSnapshot(bool Report, bool ReloadForm, bool Ok, DWORD Error,
+                          const DISKDRV_STATE_OUTPUT &State) {
+    if (!Ok) {
       if (Report)
-        ShowErrorNotice(
-            this, "DiskDrv",
-            QString("State query failed (error %1).").arg(GetLastError()));
+        ShowErrorNotice(this, "DiskDrv",
+                        QString("State query failed (error %1).").arg(Error));
       StateLabel->setText("State: unavailable");
       RangeLabel->setText("Range: unavailable");
       return;
@@ -439,6 +477,34 @@ private:
     }
     ShowSuccessNotice(this, "DiskDrv",
                       "One-shot token issued for the selected event.");
+  }
+
+  void DecideSelected(bool Allow) {
+    const int Row = EventTable->currentRow();
+    if (Row < 0 || Row >= static_cast<int>(Events.size()))
+      return;
+
+    const ULONGLONG RequestId = Events[Row].Event.RequestId;
+    if (RequestId == 0) {
+      ShowErrorNotice(this, "DiskDrv",
+                      "The selected event has no pending write request.");
+      return;
+    }
+
+    if (!DiskDrvDecideRequest(RequestId, Allow)) {
+      ShowErrorNotice(this, "DiskDrv",
+                      QString("Decision failed (error %1).")
+                          .arg(GetLastError()));
+      return;
+    }
+
+    Events.erase(Events.begin() + Row);
+    PopulateEvents();
+    AllowCurrentButton->setEnabled(false);
+    DenyCurrentButton->setEnabled(false);
+    ShowSuccessNotice(this, "DiskDrv",
+                      Allow ? "Current write allowed."
+                            : "Current write denied.");
   }
 
   void ClearEvents() {
@@ -661,6 +727,8 @@ private:
   PushButton *ApplyButton = nullptr;
   PushButton *DrainButton = nullptr;
   PushButton *AllowButton = nullptr;
+  PushButton *AllowCurrentButton = nullptr;
+  PushButton *DenyCurrentButton = nullptr;
   PushButton *ClearButton = nullptr;
   BodyLabel *StateLabel = nullptr;
   TableWidget *EventTable = nullptr;
@@ -678,6 +746,7 @@ private:
   DISKDRV_STATE_OUTPUT CachedState{};
   DISKDRV_SECTOR_RANGE ProtectedRange{};
   DISKDRV_SECTOR_RANGE LastReadRange{};
+  std::atomic_bool StateRefreshing = false;
 };
 
 QWidget *CreateDiskPage() { return new DiskProtectionPage; }

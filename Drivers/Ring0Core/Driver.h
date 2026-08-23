@@ -1,0 +1,2225 @@
+#pragma once
+
+#if defined(__INTELLISENSE__) || defined(__RESHARPER__) || defined(__clang__)
+#define _KERNEL_MODE 1
+#endif
+
+#include <ntifs.h>
+#include <fltKernel.h>
+#include <ntstrsafe.h>
+#include <bcrypt.h>
+#ifndef NDIS630
+#define NDIS630 1
+#endif
+#include <ndis.h>
+#include <fwpsk.h>
+#include <fwpmk.h>
+#include <intrin.h>
+
+#if defined(_M_AMD64)
+#pragma intrinsic(__readcr0)
+#pragma intrinsic(__readcr2)
+#pragma intrinsic(__readcr3)
+#pragma intrinsic(__readcr4)
+#endif
+
+#ifndef MEM_IMAGE
+#define MEM_IMAGE 0x01000000
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+	typedef struct _SYSTEM_PROCESS_INFORMATION {
+		ULONG           NextEntryOffset;
+		ULONG           NumberOfThreads;
+		LARGE_INTEGER   WorkingSetPrivateSize;
+		ULONG           HardFaultCount;
+		ULONG           NumberOfThreadsHighWatermark;
+		ULONGLONG       CycleTime;
+		LARGE_INTEGER   CreateTime;
+		LARGE_INTEGER   UserTime;
+		LARGE_INTEGER   KernelTime;
+		UNICODE_STRING  ImageName;
+		KPRIORITY       BasePriority;
+		HANDLE          UniqueProcessId;
+		HANDLE          InheritedFromUniqueProcessId;
+		ULONG           HandleCount;
+		ULONG           SessionId;
+		ULONG_PTR       UniqueProcessKey;
+		SIZE_T          PeakVirtualSize;
+		SIZE_T          VirtualSize;
+		ULONG           PageFaultCount;
+		SIZE_T          PeakWorkingSetSize;
+		SIZE_T          WorkingSetSize;
+		SIZE_T          QuotaPeakPagedPoolUsage;
+		SIZE_T          QuotaPagedPoolUsage;
+		SIZE_T          QuotaPeakNonPagedPoolUsage;
+		SIZE_T          QuotaNonPagedPoolUsage;
+		SIZE_T          PagefileUsage;
+		SIZE_T          PeakPagefileUsage;
+		SIZE_T          PrivatePageCount;
+		LARGE_INTEGER   ReadOperationCount;
+		LARGE_INTEGER   WriteOperationCount;
+		LARGE_INTEGER   OtherOperationCount;
+		LARGE_INTEGER   ReadTransferCount;
+		LARGE_INTEGER   WriteTransferCount;
+		LARGE_INTEGER   OtherTransferCount;
+	} SYSTEM_PROCESS_INFORMATION, * PSYSTEM_PROCESS_INFORMATION;
+
+	typedef struct _MDV_SYSTEM_THREAD_INFORMATION {
+		LARGE_INTEGER KernelTime;
+		LARGE_INTEGER UserTime;
+		LARGE_INTEGER CreateTime;
+		ULONG         WaitTime;
+		PVOID         StartAddress;
+		CLIENT_ID     ClientId;
+		KPRIORITY     Priority;
+		LONG          BasePriority;
+		ULONG         ContextSwitchCount;
+		ULONG         ThreadState;
+		ULONG         WaitReason;
+	} MDV_SYSTEM_THREAD_INFORMATION, * PMDV_SYSTEM_THREAD_INFORMATION;
+
+	typedef struct _SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX {
+		PVOID   Object;
+		ULONG_PTR UniqueProcessId;
+		ULONG_PTR HandleValue;
+		ULONG   GrantedAccess;
+		USHORT  CreatorBackTraceIndex;
+		USHORT  ObjectTypeIndex;
+		ULONG   HandleAttributes;
+		ULONG   Reserved;
+	} SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX, * PSYSTEM_HANDLE_TABLE_ENTRY_INFO_EX;
+
+	typedef struct _RTL_PROCESS_MODULE_INFORMATION
+	{
+		HANDLE Section;
+		PVOID MappedBase;
+		PVOID ImageBase;
+		ULONG ImageSize;
+		ULONG Flags;
+		USHORT LoadOrderIndex;
+		USHORT InitOrderIndex;
+		USHORT LoadCount;
+		USHORT OffsetToFileName;
+		UCHAR FullPathName[256];
+	} RTL_PROCESS_MODULE_INFORMATION, * PRTL_PROCESS_MODULE_INFORMATION;
+
+	typedef struct _RTL_PROCESS_MODULES
+	{
+		ULONG NumberOfModules;
+		RTL_PROCESS_MODULE_INFORMATION Modules[1];
+	} RTL_PROCESS_MODULES, * PRTL_PROCESS_MODULES;
+
+	typedef struct _SYSTEM_HANDLE_INFORMATION_EX {
+		ULONG_PTR                         NumberOfHandles;
+		ULONG_PTR                         Reserved;
+		SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX  Handles[1];
+	} SYSTEM_HANDLE_INFORMATION_EX, * PSYSTEM_HANDLE_INFORMATION_EX;
+
+	typedef struct _REG_OPEN_KEY_INFORMATION_V2 {
+		PUNICODE_STRING      CompleteName;
+		PVOID                RootObject;
+		PVOID                ObjectType;
+		ULONG                Options;
+		ACCESS_MASK          GrantedAccess;
+		ULONG                Disposition;
+		PUNICODE_STRING      CompleteName2;
+		PVOID                CallContext;
+		PVOID                ObjectContext;
+	} REG_OPEN_KEY_INFORMATION_V2, * PREG_OPEN_KEY_INFORMATION_V2;
+
+	typedef enum _SYSTEM_INFORMATION_CLASS {
+		SystemBasicInformation = 0,
+		SystemProcessorInformation = 1,
+		SystemPerformanceInformation = 2,
+		SystemTimeOfDayInformation = 3,
+		SystemPathInformation = 4,
+		SystemProcessInformation = 5
+	} SYSTEM_INFORMATION_CLASS;
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwQuerySystemInformation(
+		_In_ SYSTEM_INFORMATION_CLASS SystemInformationClass,
+		_Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
+		_In_ ULONG SystemInformationLength,
+		_Out_opt_ PULONG ReturnLength
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwQueryInformationProcess(
+		_In_ HANDLE ProcessHandle,
+		_In_ PROCESSINFOCLASS ProcessInformationClass,
+		_Out_writes_bytes_opt_(ProcessInformationLength) PVOID ProcessInformation,
+		_In_ ULONG ProcessInformationLength,
+		_Out_opt_ PULONG ReturnLength
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwSetInformationProcess(
+		_In_ HANDLE ProcessHandle,
+		_In_ PROCESSINFOCLASS ProcessInformationClass,
+		_In_reads_bytes_(ProcessInformationLength) PVOID ProcessInformation,
+		_In_ ULONG ProcessInformationLength
+	);
+
+	NTKERNELAPI
+	NTSTATUS
+	NTAPI
+	PsLookupProcessByProcessId(
+		_In_ HANDLE ProcessId,
+		_Outptr_ PEPROCESS * Process
+	);
+
+	NTKERNELAPI
+	NTSTATUS
+	NTAPI
+	PsLookupThreadByThreadId(
+		_In_ HANDLE ThreadId,
+		_Outptr_ PETHREAD * Thread
+	);
+
+	NTKERNELAPI
+	NTSTATUS
+	NTAPI
+	PsTerminateSystemThread(
+		_In_ NTSTATUS ExitStatus
+	);
+
+	NTKERNELAPI
+	PACCESS_TOKEN
+	NTAPI
+	PsReferencePrimaryToken(
+		_In_ PEPROCESS Process
+	);
+
+	NTKERNELAPI
+	VOID
+	NTAPI
+	PsDereferencePrimaryToken(
+		_In_ PACCESS_TOKEN PrimaryToken
+	);
+
+	NTKERNELAPI
+	NTSTATUS
+	NTAPI
+	ObReferenceObjectByPointer(
+		_In_ PVOID Object,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_opt_ POBJECT_TYPE ObjectType,
+		_In_ KPROCESSOR_MODE AccessMode
+	);
+
+	NTKERNELAPI
+	NTSTATUS
+	NTAPI
+	ObOpenObjectByPointer(
+		_In_ PVOID Object,
+		_In_ ULONG HandleAttributes,
+		_In_opt_ PACCESS_STATE PassedAccessState,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_opt_ POBJECT_TYPE ObjectType,
+		_In_ KPROCESSOR_MODE AccessMode,
+		_Out_ PHANDLE Handle
+	);
+
+	NTKERNELAPI
+	NTSTATUS
+	NTAPI
+	ObReferenceObjectByName(
+		_In_ PUNICODE_STRING ObjectPath,
+		_In_ ULONG Attributes,
+		_In_opt_ PACCESS_STATE PassedAccessState,
+		_In_opt_ ACCESS_MASK DesiredAccess,
+		_In_opt_ POBJECT_TYPE ObjectType,
+		_In_ KPROCESSOR_MODE AccessMode,
+		_Inout_opt_ PVOID ParseContext,
+		_Outptr_ PVOID* ObjectPtr
+	);
+
+	NTKERNELAPI
+	HANDLE
+	NTAPI
+	PsGetProcessId(
+		_In_ PEPROCESS Process
+	);
+
+	NTKERNELAPI
+	HANDLE
+	NTAPI
+	PsGetThreadId(
+		_In_ PETHREAD Thread
+	);
+
+	PEPROCESS
+	NTAPI
+	IoThreadToProcess(
+		_In_ PETHREAD Thread
+	);
+
+	NTKERNELAPI
+	ULONG
+	NTAPI
+	PsSuspendThread(
+		_In_ PETHREAD Thread,
+		_Out_opt_ PULONG PreviousSuspendCount
+	);
+
+	NTKERNELAPI
+	ULONG
+	NTAPI
+	PsResumeThread(
+		_In_ PETHREAD Thread,
+		_Out_opt_ PULONG PreviousSuspendCount
+	);
+
+	NTKERNELAPI
+	NTSTATUS
+	NTAPI
+	PsGetContextThread(
+		_In_ PETHREAD Thread,
+		_Inout_ PCONTEXT ThreadContext,
+		_In_ KPROCESSOR_MODE Mode
+	);
+
+	NTKERNELAPI
+	NTSTATUS
+	NTAPI
+	PsSetContextThread(
+		_In_ PETHREAD Thread,
+		_In_ PCONTEXT ThreadContext,
+		_In_ KPROCESSOR_MODE Mode
+	);
+
+#ifndef _PKNORMAL_ROUTINE_DEFINED
+	typedef VOID (*PKNORMAL_ROUTINE)(PVOID, PVOID, PVOID);
+#define _PKNORMAL_ROUTINE_DEFINED
+#endif
+
+#ifndef _KAPC_ENVIRONMENT_DEFINED
+	typedef enum _KAPC_ENVIRONMENT {
+		OriginalApcEnvironment,
+		AttachedApcEnvironment,
+		CurrentApcEnvironment
+	} KAPC_ENVIRONMENT;
+#define _KAPC_ENVIRONMENT_DEFINED
+#endif
+
+	NTKERNELAPI
+	VOID
+	NTAPI
+	KeInitializeApc(
+		_Inout_ struct _KAPC* Apc,
+		_In_    struct _KTHREAD* Thread,
+		_In_    KAPC_ENVIRONMENT Environment,
+		_In_    PVOID KernelRoutine,
+		_In_opt_ PVOID RundownRoutine,
+		_In_opt_ PKNORMAL_ROUTINE NormalRoutine,
+		_In_    KPROCESSOR_MODE ApcMode,
+		_In_opt_ PVOID NormalContext
+	);
+
+	NTKERNELAPI
+	BOOLEAN
+	NTAPI
+	KeInsertQueueApc(
+		_Inout_ struct _KAPC* Apc,
+		_In_opt_ PVOID SystemArgument1,
+		_In_opt_ PVOID SystemArgument2,
+		_In_    KPRIORITY Increment
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwDuplicateToken(
+		_In_ HANDLE ExistingTokenHandle,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+		_In_ BOOLEAN EffectiveOnly,
+		_In_ TOKEN_TYPE TokenType,
+		_Out_ PHANDLE NewTokenHandle
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwOpenProcessTokenEx(
+		_In_ HANDLE ProcessHandle,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_ ULONG HandleAttributes,
+		_Out_ PHANDLE TokenHandle
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwOpenFile(
+		_Out_ PHANDLE FileHandle,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_ POBJECT_ATTRIBUTES ObjectAttributes,
+		_Out_ PIO_STATUS_BLOCK IoStatusBlock,
+		_In_ ULONG ShareAccess,
+		_In_ ULONG OpenOptions
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwOpenKey(
+		_Out_ PHANDLE KeyHandle,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_ POBJECT_ATTRIBUTES ObjectAttributes
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwCreateKey(
+		_Out_ PHANDLE KeyHandle,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_ POBJECT_ATTRIBUTES ObjectAttributes,
+		_In_ ULONG TitleIndex,
+		_In_opt_ PUNICODE_STRING Class,
+		_In_ ULONG CreateOptions,
+		_Out_opt_ PULONG Disposition
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwEnumerateKey(
+		_In_ HANDLE KeyHandle,
+		_In_ ULONG Index,
+		_In_ KEY_INFORMATION_CLASS KeyInformationClass,
+		_Out_writes_bytes_(Length) PVOID KeyInformation,
+		_In_ ULONG Length,
+		_Out_ PULONG ResultLength
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwQueryValueKey(
+		_In_ HANDLE KeyHandle,
+		_In_ PUNICODE_STRING ValueName,
+		_In_ KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass,
+		_Out_writes_bytes_(Length) PVOID KeyValueInformation,
+		_In_ ULONG Length,
+		_Out_ PULONG ResultLength
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwSetValueKey(
+		_In_ HANDLE KeyHandle,
+		_In_ PUNICODE_STRING ValueName,
+		_In_opt_ ULONG TitleIndex,
+		_In_ ULONG Type,
+		_In_reads_bytes_opt_(DataSize) PVOID Data,
+		_In_ ULONG DataSize
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwDeleteKey(
+		_In_ HANDLE KeyHandle
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwLoadDriver(
+		_In_ PUNICODE_STRING DriverServiceName
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwUnloadDriver(
+		_In_ PUNICODE_STRING DriverServiceName
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwCreateSection(
+		_Out_ PHANDLE SectionHandle,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+		_In_opt_ PLARGE_INTEGER MaximumSize,
+		_In_ ULONG SectionPageProtection,
+		_In_ ULONG AllocationAttributes,
+		_In_opt_ HANDLE FileHandle
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwMapViewOfSection(
+		_In_ HANDLE SectionHandle,
+		_In_ HANDLE ProcessHandle,
+		_Inout_ PVOID* BaseAddress,
+		_In_ ULONG_PTR ZeroBits,
+		_In_ SIZE_T CommitSize,
+		_Inout_opt_ PLARGE_INTEGER SectionOffset,
+		_Inout_ PSIZE_T ViewSize,
+		_In_ SECTION_INHERIT InheritDisposition,
+		_In_ ULONG AllocationType,
+		_In_ ULONG Win32Protect
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwUnmapViewOfSection(
+		_In_ HANDLE ProcessHandle,
+		_In_ PVOID BaseAddress
+	);
+
+	extern POBJECT_TYPE* IoDriverObjectType;
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwClose(
+		_In_ HANDLE Handle
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwOpenThread(
+		_Out_ PHANDLE ThreadHandle,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_ POBJECT_ATTRIBUTES ObjectAttributes,
+		_In_ PCLIENT_ID ClientId
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwOpenDirectoryObject(
+		_Out_ PHANDLE DirectoryHandle,
+		_In_ ACCESS_MASK DesiredAccess,
+		_In_ POBJECT_ATTRIBUTES ObjectAttributes
+	);
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwQueryDirectoryObject(
+		_In_ HANDLE DirectoryHandle,
+		_Out_writes_bytes_opt_(Length) PVOID Buffer,
+		_In_ ULONG Length,
+		_In_ BOOLEAN ReturnSingleEntry,
+		_In_ BOOLEAN RestartScan,
+		_Inout_ PULONG Context,
+		_Out_opt_ PULONG ReturnLength
+	);
+
+	typedef struct _OBJECT_DIRECTORY_INFORMATION {
+		UNICODE_STRING Name;
+		UNICODE_STRING TypeName;
+	} OBJECT_DIRECTORY_INFORMATION, *POBJECT_DIRECTORY_INFORMATION;
+
+typedef struct _MDV_CURDIR {
+	UNICODE_STRING DosPath;
+	HANDLE          Handle;
+} MDV_CURDIR, * PMDV_CURDIR;
+
+typedef struct _MDV_RTL_USER_PROCESS_PARAMETERS {
+	ULONG   MaximumLength;
+	ULONG   Length;
+	ULONG   Flags;
+	ULONG   DebugFlags;
+	HANDLE  ConsoleHandle;
+	ULONG   ConsoleFlags;
+	ULONG   RasterStatus;
+	HANDLE  StandardInput;
+	HANDLE  StandardOutput;
+	HANDLE  StandardError;
+	MDV_CURDIR CurrentDirectory;
+	UNICODE_STRING DllPath;
+	UNICODE_STRING ImagePathName;
+	UNICODE_STRING CommandLine;
+	PVOID   Environment;
+} MDV_RTL_USER_PROCESS_PARAMETERS, * PMDV_RTL_USER_PROCESS_PARAMETERS;
+
+	NTSYSCALLAPI
+	NTSTATUS
+	NTAPI
+	ZwAdjustPrivilegesToken(
+		_In_       HANDLE TokenHandle,
+		_In_       BOOLEAN DisableAllPrivileges,
+		_In_opt_   PVOID NewState,
+		_In_       ULONG BufferLength,
+		_Out_opt_  PVOID PreviousState,
+		_Out_opt_  PULONG ReturnLength
+	);
+
+#define FILE_DEVICE_PROCESSGUARD 0x8000
+
+#define IOCTL_KILL_PROCESS            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ADD_PROCESS_PROTECT     CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_PROCESS_PROTECT  CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ADD_REGISTRY_PROTECT    CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_REGISTRY_PROTECT CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ADD_FILE_PROTECT        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_FILE_PROTECT     CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SET_PPL                 CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_PPL              CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_CLEAR_ALL_PROTECTION    CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_ALL_OBCALLBACKS        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x810, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_ALL_REGISTRYCALLBACKS  CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x811, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_ALL_FILTERS            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x812, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_CALLBACKS             CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x813, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_CALLBACK_BY_ADDRESS CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x814, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_PPL                CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x815, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SET_CRITICAL            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x816, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_CRITICAL         CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x817, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HIDE_PROCESS            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x818, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_UNHIDE_PROCESS          CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x819, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_FORCE_DELETE_FILE       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x81A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ADJUST_PRIVILEGES       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x81B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUEUE_APC               CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x81C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_PROCESSES          CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x81D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DISABLE_APC             CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x81E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENABLE_APC              CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x81F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_STEAL_TOKEN             CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x820, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_LAUNCH_AS               CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x821, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VERIFY                  CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x822, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_READ_MEMORY             CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x823, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_WRITE_MEMORY            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x824, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_SYSTEM_TABLES     CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x825, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_SYSTEM_TABLE_ENTRIES CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x826, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_DRIVERS            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x827, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_LOAD_DRIVER             CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x828, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_UNLOAD_DRIVER           CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x829, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_PIDDB_CACHE        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x82A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SET_PREVIOUS_MODE      CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x82B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_CAPABILITIES_V2  CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x82C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_PROCESS_V2       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x82D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_THREADS_V2        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x82E, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_HANDLES_V2        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x82F, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_MODULES_V2        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x830, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_MEMORY_V2         CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x831, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_MEMORY_V2        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x832, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_BIG_POOL_V2       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x833, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_OBJECTS_V2        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x834, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_KERNEL_MODULES_V2 CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x835, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_DRIVER_V2        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x836, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_MINIFILTERS_V2    CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x837, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_WFP_V2            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x838, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_NDIS_V2           CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x839, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_SECURITY_V2      CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x83A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TERMINATE_THREAD       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x83B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_KERNEL_READ_MEMORY     CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x83C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_KERNEL_WRITE_MEMORY    CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x83D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DISABLE_DSE            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x83E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_RESTORE_DSE            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x83F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DLL_INJECT_APC         CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x840, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DLL_INJECT_THREAD      CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x841, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENABLE_DEBUG           CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x842, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DISABLE_DEBUG          CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x843, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_DEBUG_STATE      CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x844, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_WINDOWS           CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x845, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_WINDOW_OPERATION       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x846, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GET_COMMAND_LINE       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x847, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SERVICE_OPERATION      CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x848, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REG_OPERATION          CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x849, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SESSION_OPERATION      CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x84A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MITIGATION_QUERY       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x84B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MITIGATION_SET         CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x84C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_SYNC_OBJECTS      CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x84D, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_FIREWALL_OPERATION     CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x84E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ADD_WINDOW_PROTECT     CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x84F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_WINDOW_PROTECT  CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x850, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ADD_INJECTION_PROTECTION     CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x851, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_REMOVE_INJECTION_PROTECTION  CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x852, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HANDLE_CLOSE                  CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x853, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HANDLE_DOWNGRADE              CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x854, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HANDLE_DUP_DOWNGRADE          CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x855, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DISABLE_PATCHGUARD            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x856, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_RESTORE_PATCHGUARD            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x857, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_PATCHGUARD              CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x858, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_DSE                    CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x859, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_SET_IDT_LIMIT                CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x85A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_EPROCESS_V2            CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x85B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_ADVANCED_V3             CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x85C, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
+#define IOCTL_ADVANCED_OPERATION_V3         CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x85D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_HIJACK_CONTEXT          CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x85E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_HIJACK_TRAPFRAME        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x85F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_REMOTE_CALL             CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x860, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_SHELLCODE_INJECT        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x861, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_THREAD_INJECT_AND_HIJACK       CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x862, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_QUERY_CAPABILITIES        CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x863, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_ENUM                      CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x864, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_INSTALL                   CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x865, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_ENABLE                    CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x866, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_DISABLE                   CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x867, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_REMOVE                    CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x868, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_RESTORE_ALL               CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x869, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_VERIFY                    CTL_CODE(FILE_DEVICE_PROCESSGUARD, 0x86A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define HOOK_PROTOCOL_VERSION 1u
+#define HOOK_TARGET_DRIVER_DISPATCH 1u
+#define HOOK_TARGET_FAST_IO 2u
+#define HOOK_TARGET_SSDT 3u
+#define HOOK_TARGET_IDT 4u
+#define HOOK_TARGET_INLINE 5u
+#define HOOK_TARGET_VT_EPT 6u
+
+#define HOOK_OP_INSTALL 1u
+#define HOOK_OP_ENABLE 2u
+#define HOOK_OP_DISABLE 3u
+#define HOOK_OP_REMOVE 4u
+#define HOOK_OP_VERIFY 5u
+#define HOOK_OP_RESTORE_ALL 6u
+
+#define HOOK_STATE_EMPTY 0u
+#define HOOK_STATE_PREPARED 1u
+#define HOOK_STATE_ACTIVE 2u
+#define HOOK_STATE_DISABLED 3u
+#define HOOK_STATE_RESTORED 4u
+#define HOOK_STATE_FAILED 5u
+
+#define HOOK_FLAG_SHADOW_SSDT 0x00000001u
+#define HOOK_FLAG_PROXY_REQUIRED 0x00000002u
+#define HOOK_FAST_IO_CHECK_IF_POSSIBLE 0u
+
+typedef struct _HOOK_CAPABILITIES_OUTPUT {
+	ULONG Size;
+	ULONG Version;
+	ULONG SupportedTargets;
+	ULONG SupportedOperations;
+	ULONG MaxHooks;
+	ULONG ActiveHooks;
+	ULONG Flags;
+	NTSTATUS LastStatus;
+} HOOK_CAPABILITIES_OUTPUT, *PHOOK_CAPABILITIES_OUTPUT;
+
+typedef struct _HOOK_REQUEST {
+	ULONG Size;
+	ULONG Version;
+	ULONG Operation;
+	ULONG TargetKind;
+	ULONG HookId;
+	ULONG MajorFunction;
+	ULONG TableIndex;
+	ULONG Vector;
+	ULONG64 TargetAddress;
+	ULONG64 ProxyAddress;
+	WCHAR ModuleName[128];
+	WCHAR DriverName[128];
+	ULONG Flags;
+	ULONG Reserved;
+} HOOK_REQUEST, *PHOOK_REQUEST;
+
+typedef struct _HOOK_RECORD {
+	ULONG Size;
+	ULONG Version;
+	ULONG HookId;
+	ULONG State;
+	ULONG TargetKind;
+	ULONG MajorFunction;
+	ULONG TableIndex;
+	ULONG Vector;
+	ULONG64 TargetAddress;
+	ULONG64 OriginalAddress;
+	ULONG64 ProxyAddress;
+	ULONG64 HitCount;
+	ULONG ActiveCalls;
+	NTSTATUS Status;
+	ULONG Flags;
+	WCHAR ModuleName[128];
+	WCHAR DriverName[128];
+	WCHAR Detail[256];
+} HOOK_RECORD, *PHOOK_RECORD;
+
+typedef struct _HOOK_ENUM_OUTPUT {
+	ULONG Size;
+	ULONG Version;
+	ULONG Count;
+	ULONG Capacity;
+	HOOK_RECORD Records[1];
+} HOOK_ENUM_OUTPUT, *PHOOK_ENUM_OUTPUT;
+
+#define ADVANCED_KIND_PTE            1u
+#define ADVANCED_KIND_VAD            2u
+#define ADVANCED_KIND_THREAD_STACK   3u
+#define ADVANCED_KIND_SYSTEM_TABLE   4u
+#define ADVANCED_KIND_DRIVER_DISPATCH 5u
+#define ADVANCED_KIND_DRIVER_UNLOAD  6u
+#define ADVANCED_KIND_HARDWARE       7u
+#define ADVANCED_KIND_FIRMWARE       8u
+
+#define ADVANCED_OP_CAPTURE  1u
+#define ADVANCED_OP_APPLY    2u
+#define ADVANCED_OP_ROLLBACK 3u
+
+#ifndef SERVICE_KERNEL_DRIVER
+#define SERVICE_KERNEL_DRIVER 0x00000001ul
+#endif
+#ifndef SERVICE_DEMAND_START
+#define SERVICE_DEMAND_START  0x00000003ul
+#endif
+#ifndef SERVICE_ERROR_NORMAL
+#define SERVICE_ERROR_NORMAL  0x00000001ul
+#endif
+#ifndef SERVICE_STOPPED
+#define SERVICE_STOPPED       0x00000001ul
+#endif
+#ifndef SERVICE_RUNNING
+#define SERVICE_RUNNING       0x00000004ul
+#endif
+
+#define CALLBACK_TYPE_OB_PROCESS   0
+#define CALLBACK_TYPE_OB_THREAD    1
+#define CALLBACK_TYPE_REGISTRY     2
+#define CALLBACK_TYPE_FLT_PRE_CREATE 3
+#define CALLBACK_TYPE_FLT_PRE_SET_INFORMATION 4
+#define CALLBACK_TYPE_FLT_PRE_WRITE 5
+#define CALLBACK_TYPE_FLT_PRE_READ 12
+#define CALLBACK_TYPE_FLT_PRE_QUERY_INFORMATION 13
+#define CALLBACK_TYPE_FLT_PRE_DIRECTORY_CONTROL 14
+#define CALLBACK_TYPE_FLT_PRE_CLEANUP 15
+#define CALLBACK_TYPE_FLT_PRE_CLOSE 16
+#define CALLBACK_TYPE_FLT_POST_CREATE 17
+#define CALLBACK_TYPE_FLT_POST_READ 18
+#define CALLBACK_TYPE_FLT_POST_QUERY_INFORMATION 19
+#define CALLBACK_TYPE_FLT_POST_SET_INFORMATION 20
+#define CALLBACK_TYPE_FLT_POST_DIRECTORY_CONTROL 21
+#define CALLBACK_TYPE_FLT_POST_WRITE 22
+#define CALLBACK_TYPE_FLT_POST_CLEANUP 23
+#define CALLBACK_TYPE_FLT_POST_CLOSE 24
+#define CALLBACK_TYPE_PS_PROCESS_NOTIFY 6
+#define CALLBACK_TYPE_PS_THREAD_NOTIFY 7
+#define CALLBACK_TYPE_PS_IMAGE_NOTIFY 8
+#define CALLBACK_TYPE_BUGCHECK 9
+#define CALLBACK_TYPE_SHUTDOWN 10
+#define CALLBACK_TYPE_BUGCHECK_REASON 11
+#define CALLBACK_FLAG_CAN_REMOVE   0x00000001ul
+
+	typedef struct _KILL_PROCESS_INPUT {
+		ULONG ProcessId;
+	} KILL_PROCESS_INPUT, * PKILL_PROCESS_INPUT;
+
+	typedef struct _PROCESS_PROTECT_INPUT {
+		ULONG ProcessId;
+	} PROCESS_PROTECT_INPUT, * PPROCESS_PROTECT_INPUT;
+
+	typedef struct _REGISTRY_PROTECT_INPUT {
+		WCHAR KeyPath[256];
+	} REGISTRY_PROTECT_INPUT, * PREGISTRY_PROTECT_INPUT;
+
+	typedef struct _FILE_PROTECT_INPUT {
+		WCHAR FilePath[260];
+	} FILE_PROTECT_INPUT, * PFILE_PROTECT_INPUT;
+
+	typedef struct _PPL_CONTROL_INPUT {
+		ULONG ProcessId;
+		UCHAR ProtectionType;
+		UCHAR ProtectionSigner;
+		BOOLEAN Audit;
+		BOOLEAN RemoveProtection;
+	} PPL_CONTROL_INPUT, * PPPL_CONTROL_INPUT;
+
+	typedef struct _CALLBACK_ENTRY {
+		ULONG     Type;
+		ULONG     Flags;
+		ULONG_PTR Address;
+		WCHAR     ModuleName[64];
+		WCHAR     SourceName[64];
+	} CALLBACK_ENTRY, * PCALLBACK_ENTRY;
+
+	typedef struct _CALLBACK_ENUM_OUTPUT {
+		ULONG          Count;
+		CALLBACK_ENTRY Entries[1];
+	} CALLBACK_ENUM_OUTPUT, * PCALLBACK_ENUM_OUTPUT;
+
+	typedef struct _CALLBACK_REMOVE_INPUT {
+		ULONG     Type;
+		ULONG     Flags;
+		ULONG_PTR Address;
+	} CALLBACK_REMOVE_INPUT, * PCALLBACK_REMOVE_INPUT;
+
+	typedef struct _PPL_QUERY_INPUT {
+		ULONG ProcessId;
+	} PPL_QUERY_INPUT, * PPPL_QUERY_INPUT;
+
+	typedef struct _PPL_QUERY_OUTPUT {
+		ULONG  ProcessId;
+		UCHAR  ProtectionType;
+		UCHAR  ProtectionSigner;
+		BOOLEAN Audit;
+		BOOLEAN IsProtected;
+		UCHAR  RawLevel;
+	} PPL_QUERY_OUTPUT, * PPPL_QUERY_OUTPUT;
+
+	typedef struct _CRITICAL_PROCESS_INPUT {
+		ULONG ProcessId;
+	} CRITICAL_PROCESS_INPUT, * PCRITICAL_PROCESS_INPUT;
+
+	typedef struct _FORCE_DELETE_INPUT {
+		WCHAR FilePath[260];
+	} FORCE_DELETE_INPUT, * PFORCE_DELETE_INPUT;
+
+	typedef struct _PRIVILEGE_ADJUST_INPUT {
+		ULONG   ProcessId;
+		LUID    PrivilegeLuid;
+		BOOLEAN Enable;
+	} PRIVILEGE_ADJUST_INPUT, * PPRIVILEGE_ADJUST_INPUT;
+
+	typedef struct _APC_INPUT {
+		ULONG  ProcessId;
+		ULONG  ApcAction;
+	} APC_INPUT, * PAPC_INPUT;
+
+#define APC_ACTION_NOOP         0
+#define APC_ACTION_TERMINATE    1
+#define APC_ACTION_EXIT_THREAD  2
+#define APC_ACTION_HANG         3
+
+	typedef struct _STEAL_TOKEN_INPUT {
+		ULONG SourceProcessId;
+		ULONG TargetProcessId;
+	} STEAL_TOKEN_INPUT, * PSTEAL_TOKEN_INPUT;
+
+	typedef struct _TERMINATE_THREAD_INPUT {
+		ULONG ProcessId;
+		ULONG ThreadId;
+	} TERMINATE_THREAD_INPUT, * PTERMINATE_THREAD_INPUT;
+
+#define ACCOUNT_TYPE_SYSTEM           0
+#define ACCOUNT_TYPE_TRUSTEDINSTALLER 1
+
+	typedef struct _LAUNCH_AS_INPUT {
+		ULONG  AccountType;
+		WCHAR  ImagePath[260];
+		ULONG  ProcessId;
+		ULONG  ThreadId;
+		ULONG  ErrorCode;
+	} LAUNCH_AS_INPUT, * PLAUNCH_AS_INPUT;
+
+	typedef struct _DLL_INJECT_INPUT {
+		ULONG  ProcessId;
+		WCHAR  DllPath[260];
+	} DLL_INJECT_INPUT, * PDLL_INJECT_INPUT;
+
+	typedef struct _PROCESS_ENUM_ENTRY {
+		ULONG   ProcessId;
+		ULONG   ParentPid;
+		ULONG   ThreadCount;
+		ULONG   SessionId;
+		BOOLEAN IsPplProtected;
+		BOOLEAN IsCritical;
+		BOOLEAN IsHidden;
+		UCHAR   PplRawLevel;
+		UCHAR   _Padding[3];
+		ULONG_PTR ObjectAddress;
+		WCHAR   ImageName[16];
+	} PROCESS_ENUM_ENTRY, * PPROCESS_ENUM_ENTRY;
+
+	static_assert(sizeof(PROCESS_ENUM_ENTRY) == 64, "PROCESS_ENUM_ENTRY ABI mismatch");
+
+	typedef struct _PROCESS_ENUM_OUTPUT {
+		ULONG             Count;
+		PROCESS_ENUM_ENTRY Entries[1];
+	} PROCESS_ENUM_OUTPUT, * PPROCESS_ENUM_OUTPUT;
+
+	typedef struct _MEMORY_READ_INPUT {
+		ULONG     ProcessId;
+		ULONG_PTR Address;
+		ULONG     Size;
+	} MEMORY_READ_INPUT, * PMEMORY_READ_INPUT;
+
+	typedef struct _MEMORY_WRITE_INPUT {
+		ULONG     ProcessId;
+		ULONG_PTR Address;
+		ULONG     Size;
+	} MEMORY_WRITE_INPUT, * PMEMORY_WRITE_INPUT;
+
+	typedef enum _KRNL_MEMRW_METHOD {
+		KrnlMemRwAuto   = 0,
+		KrnlMemRwMdl    = 1,
+		KrnlMemRwCr0    = 2,
+		KrnlMemRwDirect = 3,
+	} KRNL_MEMRW_METHOD, * PKRNL_MEMRW_METHOD;
+
+	typedef struct _KERNEL_READ_INPUT {
+		ULONG_PTR         Address;
+		ULONG             Size;
+		KRNL_MEMRW_METHOD Method;
+	} KERNEL_READ_INPUT, * PKERNEL_READ_INPUT;
+
+	typedef struct _KERNEL_WRITE_INPUT {
+		ULONG_PTR         Address;
+		ULONG             Size;
+		KRNL_MEMRW_METHOD Method;
+	} KERNEL_WRITE_INPUT, * PKERNEL_WRITE_INPUT;
+
+	typedef struct _KERNEL_READ_OUTPUT {
+		ULONG             BytesRead;
+		ULONG             Status;
+		UCHAR             Data[1];
+	} KERNEL_READ_OUTPUT, * PKERNEL_READ_OUTPUT;
+
+	typedef struct _DSE_CONTROL_INPUT {
+		ULONG Reserved;
+	} DSE_CONTROL_INPUT, * PDSE_CONTROL_INPUT;
+
+	typedef struct _DSE_CONTROL_OUTPUT {
+		ULONG_PTR CiOptionsAddress;
+		ULONG     OriginalValue;
+		ULONG     CurrentValue;
+		ULONG     Status;
+	} DSE_CONTROL_OUTPUT, * PDSE_CONTROL_OUTPUT;
+
+	typedef struct _PG_CONTROL_OUTPUT {
+		ULONG     PgContextOffset;
+		ULONG     _Pad0;
+		ULONG_PTR OriginalValue;
+		ULONG_PTR CurrentValue;
+		BOOLEAN   IsPatched;
+		UCHAR     _Pad1[7];
+		ULONG     Status;
+	} PG_CONTROL_OUTPUT, * PPG_CONTROL_OUTPUT;
+
+#define DEBUG_VAR_COUNT 6
+
+#define WINDOW_OP_CLOSE              0
+#define WINDOW_OP_HIDE               1
+#define WINDOW_OP_SHOW               2
+#define WINDOW_OP_SET_TITLE          3
+#define WINDOW_OP_MINIMIZE           4
+#define WINDOW_OP_RESTORE            5
+#define WINDOW_OP_SET_POSITION       6
+#define WINDOW_OP_SET_SIZE           7
+#define WINDOW_OP_ENABLE             8
+#define WINDOW_OP_DISABLE            9
+#define WINDOW_OP_SET_TOPMOST        10
+#define WINDOW_OP_REMOVE_TOPMOST     11
+#define WINDOW_OP_FLASH              12
+#define WINDOW_OP_REDRAW             13
+#define WINDOW_OP_MAX                14
+
+#define WINDOW_FLAG_DIRECT           0x00000001
+#define WINDOW_FLAG_FORCE            0x00000002
+#define WINDOW_FLAG_ASYNC            0x00000004
+
+#define WINDOW_FLAG_VISIBLE          (1ul << 0)
+#define WINDOW_FLAG_ENABLED          (1ul << 1)
+#define WINDOW_FLAG_HUNG             (1ul << 2)
+#define WINDOW_FLAG_MINIMIZED        (1ul << 3)
+#define WINDOW_FLAG_MAXIMIZED        (1ul << 4)
+#define WINDOW_FLAG_TOPMOST          (1ul << 5)
+#define WINDOW_FLAG_LAYERED          (1ul << 6)
+#define WINDOW_FLAG_TOOLWINDOW       (1ul << 7)
+#define WINDOW_FLAG_POPUP            (1ul << 8)
+#define WINDOW_FLAG_CHILD            (1ul << 9)
+#define WINDOW_FLAG_UNICODE          (1ul << 10)
+#define WINDOW_FLAG_MDI              (1ul << 11)
+#define WINDOW_FLAG_APPWINDOW        (1ul << 12)
+#define WINDOW_FLAG_ACTIVE           (1ul << 13)
+#define WINDOW_FLAG_NOACTIVATE       (1ul << 14)
+#define WINDOW_FLAG_DISABLED_CLOSE   (1ul << 15)
+#define WINDOW_FLAG_CLOAKED          (1ul << 16)
+#define WINDOW_FLAG_SKIPANIMATION    (1ul << 17)
+#define WINDOW_FLAG_SKIPTHEME        (1ul << 18)
+#define WINDOW_FLAG_DESTROYED        (1ul << 19)
+
+	typedef struct _WINDOW_ENUM_ENTRY {
+		UINT64   Hwnd;
+		UINT64   ParentHwnd;
+		UINT64   OwnerHwnd;
+		UINT64   WndProc;
+		ULONG    ProcessId;
+		ULONG    ThreadId;
+		UINT64   DesktopId;
+		UINT64   WinstaId;
+		ULONG    Style;
+		ULONG    ExStyle;
+		ULONG    State;
+		ULONG    ShowCmd;
+		LONG     Left;
+		LONG     Top;
+		LONG     Right;
+		LONG     Bottom;
+		LONG     ClientLeft;
+		LONG     ClientTop;
+		LONG     ClientRight;
+		LONG     ClientBottom;
+		UCHAR    Alpha;
+		UCHAR    Padding1[3];
+		USHORT   ClassAtom;
+		USHORT   CbWndExtra;
+		ULONG    Flags;
+		UINT64   FirstChild;
+		UINT64   NextSibling;
+		UINT64   MenuHandle;
+		UINT64   ThreadInfoId;
+		ULONG    MessageCount;
+		ULONG    Padding2;
+		USHORT   TitleLength;
+		USHORT   ClassLength;
+	} WINDOW_ENUM_ENTRY, * PWINDOW_ENUM_ENTRY;
+
+	static_assert(sizeof(WINDOW_ENUM_ENTRY) == 168, "WINDOW_ENUM_ENTRY ABI mismatch");
+
+	typedef struct _WINDOW_ENUM_OUTPUT {
+		ULONG            Count;
+		WINDOW_ENUM_ENTRY Entries[1];
+	} WINDOW_ENUM_OUTPUT, * PWINDOW_ENUM_OUTPUT;
+
+	typedef struct _WINDOW_OPERATION_INPUT {
+		ULONG    ProcessId;
+		UINT64   Hwnd;
+		ULONG    Operation;
+		ULONG    Flags;
+		WCHAR    NewTitle[256];
+		LONG     NewX;
+		LONG     NewY;
+		LONG     NewWidth;
+		LONG     NewHeight;
+	} WINDOW_OPERATION_INPUT, * PWINDOW_OPERATION_INPUT;
+
+static_assert(sizeof(WINDOW_OPERATION_INPUT) == 552, "WINDOW_OPERATION_INPUT ABI mismatch");
+
+	typedef struct _COMMAND_LINE_INPUT {
+		ULONG ProcessId;
+	} COMMAND_LINE_INPUT, * PCOMMAND_LINE_INPUT;
+
+	typedef struct _REG_OPERATION_INPUT {
+		ULONG Operation;
+		WCHAR KeyPath[260];
+		WCHAR ValueName[128];
+		ULONG ValueType;
+		ULONG ValueDataSize;
+	} REG_OPERATION_INPUT, * PREG_OPERATION_INPUT;
+
+	typedef struct _SERVICE_OPERATION_INPUT {
+		ULONG Operation;
+		WCHAR ServiceName[128];
+		ULONG ServiceType;
+	} SERVICE_OPERATION_INPUT, * PSERVICE_OPERATION_INPUT;
+
+	typedef struct _SESSION_OPERATION_INPUT {
+		ULONG SessionId;
+		ULONG Operation;
+	} SESSION_OPERATION_INPUT, * PSESSION_OPERATION_INPUT;
+
+	typedef struct _MITIGATION_SET_INPUT {
+		ULONG ProcessId;
+		ULONG PolicyId;
+		ULONG64 Flags;
+	} MITIGATION_SET_INPUT, * PMITIGATION_SET_INPUT;
+
+	typedef struct _FIREWALL_OPERATION_INPUT {
+		ULONG Operation;
+		WCHAR RuleName[128];
+		ULONG Action;
+		ULONG RemotePort;
+		ULONG Protocol;
+	} FIREWALL_OPERATION_INPUT, * PFIREWALL_OPERATION_INPUT;
+
+	typedef struct _WINDOW_PROTECT_INPUT {
+		ULONG    ProcessId;
+		UINT64   Hwnd;
+		ULONG    Flags;
+	} WINDOW_PROTECT_INPUT, * PWINDOW_PROTECT_INPUT;
+
+	typedef struct _INJECTION_PROTECT_INPUT {
+		ULONG ProcessId;
+	} INJECTION_PROTECT_INPUT, * PINJECTION_PROTECT_INPUT;
+
+	typedef struct _HANDLE_CLOSE_INPUT {
+		ULONG ProcessId;
+		ULONG HandleValue;
+	} HANDLE_CLOSE_INPUT, * PHANDLE_CLOSE_INPUT;
+
+	typedef struct _HANDLE_DOWNGRADE_INPUT {
+		ULONG       ProcessId;
+		ULONG       HandleValue;
+		ACCESS_MASK NewAccess;
+		ULONG       NewHandleValue;
+	} HANDLE_DOWNGRADE_INPUT, * PHANDLE_DOWNGRADE_INPUT;
+
+	typedef struct _HANDLE_DUP_DOWNGRADE_INPUT {
+		ULONG       SourceProcessId;
+		ULONG       SourceHandle;
+		ULONG       TargetProcessId;
+		ACCESS_MASK NewAccess;
+	} HANDLE_DUP_DOWNGRADE_INPUT, * PHANDLE_DUP_DOWNGRADE_INPUT;
+
+	typedef struct _HANDLE_DUP_DOWNGRADE_OUTPUT {
+		ULONG_PTR NewHandle;
+		NTSTATUS  Status;
+	} HANDLE_DUP_DOWNGRADE_OUTPUT, * PHANDLE_DUP_DOWNGRADE_OUTPUT;
+
+	typedef struct _DEBUG_VAR_ENTRY {
+		ULONG_PTR Address;
+		WCHAR     Name[32];
+		UCHAR     OriginalValue;
+		UCHAR     CurrentValue;
+		UCHAR     DesiredEnabledValue;
+		BOOLEAN   Found;
+		UCHAR     _Pad[4];
+	} DEBUG_VAR_ENTRY, * PDEBUG_VAR_ENTRY;
+
+	static_assert(sizeof(DEBUG_VAR_ENTRY) == 80, "DEBUG_VAR_ENTRY ABI mismatch");
+
+	typedef struct _DEBUG_STATE_OUTPUT {
+		ULONG           TotalFound;
+		ULONG           PatchedSuccessCount;
+		BOOLEAN         IsPatched;
+		UCHAR           _Pad1[3];
+		ULONG           Status;
+		DEBUG_VAR_ENTRY Vars[DEBUG_VAR_COUNT];
+	} DEBUG_STATE_OUTPUT, * PDEBUG_STATE_OUTPUT;
+
+	typedef struct _SYSTEM_TABLES_OUTPUT {
+		ULONG_PTR IdtBase;
+		USHORT    IdtLimit;
+		USHORT    _Pad1;
+
+		ULONG_PTR GdtBase;
+		USHORT    GdtLimit;
+		USHORT    _Pad2;
+
+		ULONG_PTR KuserSharedData;
+		ULONG64   InterruptTime;
+		ULONG64   SystemTime;
+		ULONG     TickCount;
+		ULONG     _Pad3;
+
+		ULONG_PTR SsdtBase;
+		ULONG     SsdtCount;
+		ULONG_PTR SsdtArgTable;
+
+		ULONG_PTR ShadowSsdtBase;
+		ULONG     ShadowSsdtCount;
+		ULONG_PTR ShadowSsdtArgTable;
+
+		ULONG_PTR PiDDBCacheTable;
+
+		ULONG_PTR NtoskrnlBase;
+		ULONG     NtoskrnlSize;
+		ULONG     _Pad4;
+		ULONG64   Cr0;
+		ULONG64   Cr2;
+		ULONG64   Cr3;
+		ULONG64   Cr4;
+		ULONG64   MsrLstar;
+		ULONG64   MsrStar;
+		ULONG64   MsrFmask;
+		ULONG64   MsrEfer;
+	} SYSTEM_TABLES_OUTPUT, * PSYSTEM_TABLES_OUTPUT;
+
+#define SYSTEM_TABLE_KIND_IDT          0
+#define SYSTEM_TABLE_KIND_IO_TIMER     1
+#define SYSTEM_TABLE_KIND_SSDT         2
+#define SYSTEM_TABLE_KIND_SHADOW_SSDT  3
+#define SYSTEM_TABLE_KIND_GDT          4
+#define SYSTEM_TABLE_MAX_ENTRIES      4096
+#define PIDDB_CACHE_MAX_ENTRIES       1024
+	typedef struct _AEGIS_SYSTEM_TABLE_ENTRY {
+		ULONG Index;
+		ULONG ArgumentBytes;
+		ULONG_PTR Address;
+	} SYSTEM_TABLE_ENTRY, * PSYSTEM_TABLE_ENTRY;
+
+	typedef struct _AEGIS_SYSTEM_TABLE_ENTRIES_OUTPUT {
+		ULONG TableKind;
+		ULONG Count;
+		ULONG TotalCount;
+		ULONG_PTR TableBase;
+		SYSTEM_TABLE_ENTRY Entries[SYSTEM_TABLE_MAX_ENTRIES];
+	} SYSTEM_TABLE_ENTRIES_OUTPUT, * PSYSTEM_TABLE_ENTRIES_OUTPUT;
+
+	typedef struct _IDT_LIMIT_INPUT {
+		USHORT NewEntryCount;
+	} IDT_LIMIT_INPUT, * PIDT_LIMIT_INPUT;
+
+	typedef struct _IDT_LIMIT_OUTPUT {
+		ULONG_PTR OldBase;
+		USHORT    OldLimit;
+		USHORT    OldEntryCount;
+		ULONG_PTR NewBase;
+		USHORT    NewLimit;
+		USHORT    NewEntryCount;
+		USHORT    EntrySize;
+		BOOLEAN   Changed;
+	} IDT_LIMIT_OUTPUT, * PIDT_LIMIT_OUTPUT;
+
+	typedef struct _PIDDB_CACHE_ENTRY_INFO {
+		ULONG     Index;
+		ULONG     TimeDateStamp;
+		LONG      LoadStatus;
+		ULONG_PTR Address;
+		WCHAR     DriverName[128];
+	} PIDDB_CACHE_ENTRY_INFO, * PPIDDB_CACHE_ENTRY_INFO;
+
+	typedef struct _PIDDB_CACHE_ENUM_OUTPUT {
+		ULONG     Count;
+		ULONG     TotalCount;
+		ULONG_PTR TableAddress;
+		PIDDB_CACHE_ENTRY_INFO Entries[PIDDB_CACHE_MAX_ENTRIES];
+	} PIDDB_CACHE_ENUM_OUTPUT, * PPIDDB_CACHE_ENUM_OUTPUT;
+
+	typedef struct _DRIVER_ENUM_ENTRY {
+		WCHAR ServiceName[128];
+		WCHAR DisplayName[128];
+		WCHAR ImagePath[260];
+		WCHAR RegistryPath[260];
+		ULONG State;
+		ULONG Type;
+		ULONG StartType;
+		ULONG ErrorControl;
+		ULONG_PTR DriverObject;
+		ULONG_PTR ImageBase;
+		ULONG ImageSize;
+		ULONG Reserved;
+	} DRIVER_ENUM_ENTRY, * PDRIVER_ENUM_ENTRY;
+
+	typedef struct _DRIVER_ENUM_HEADER {
+		LONG  NtStatus;
+		ULONG Count;
+		WCHAR Message[256];
+	} DRIVER_ENUM_HEADER, * PDRIVER_ENUM_HEADER;
+
+	typedef struct _DRIVER_ENUM_OUTPUT {
+		DRIVER_ENUM_HEADER Header;
+		DRIVER_ENUM_ENTRY  Entries[1];
+	} DRIVER_ENUM_OUTPUT, * PDRIVER_ENUM_OUTPUT;
+
+	typedef struct _DRIVER_CONTROL_INPUT {
+		WCHAR   ServiceName[128];
+		WCHAR   ImagePath[260];
+		BOOLEAN DeleteOnUnload;
+		UCHAR   Reserved[3];
+	} DRIVER_CONTROL_INPUT, * PDRIVER_CONTROL_INPUT;
+
+	typedef struct _DRIVER_CONTROL_OUTPUT {
+		LONG  NtStatus;
+		ULONG State;
+		ULONG Type;
+		ULONG StartType;
+		ULONG ErrorControl;
+		ULONG_PTR DriverObject;
+		ULONG_PTR ImageBase;
+		ULONG ImageSize;
+		WCHAR RegistryPath[260];
+		WCHAR ImagePath[260];
+		WCHAR Message[512];
+	} DRIVER_CONTROL_OUTPUT, * PDRIVER_CONTROL_OUTPUT;
+
+#define MDV2_PROTOCOL_VERSION 2u
+#define MDV2_MAX_PAGE_RECORDS 256u
+
+	typedef enum _MDV2_DATA_SOURCE : ULONG {
+		Mdv2SourceUnknown = 0,
+		Mdv2SourcePublicApi = 1,
+		Mdv2SourceSystemInformation = 2,
+		Mdv2SourceObjectManager = 3,
+		Mdv2SourceRegistry = 4,
+		Mdv2SourceProcessEnvironment = 5,
+		Mdv2SourceMemoryMap = 6,
+		Mdv2SourceVersionProfile = 7,
+		Mdv2SourceSignatureScan = 8,
+		Mdv2SourceCrossView = 9,
+		Mdv2SourceKernelStructure = 10
+	} MDV2_DATA_SOURCE;
+
+	typedef enum _MDV2_CONFIDENCE : ULONG {
+		Mdv2ConfidenceUnavailable = 0,
+		Mdv2ConfidenceLow = 1,
+		Mdv2ConfidenceMedium = 2,
+		Mdv2ConfidenceHigh = 3
+	} MDV2_CONFIDENCE;
+
+	typedef struct _MDV2_QUERY_INPUT {
+		ULONG Size;
+		ULONG Version;
+		ULONG Flags;
+		ULONG ProcessId;
+		ULONG TargetId;
+		ULONG MaxEntries;
+		ULONG64 Cursor;
+		WCHAR Name[128];
+		WCHAR Path[260];
+	} MDV2_QUERY_INPUT, * PMDV2_QUERY_INPUT;
+
+	typedef struct _MDV2_LIST_HEADER {
+		ULONG Size;
+		ULONG Version;
+		NTSTATUS Status;
+		ULONG Source;
+		ULONG Confidence;
+		ULONG Flags;
+		ULONG TotalCount;
+		ULONG ReturnedCount;
+		ULONG RequiredSize;
+		ULONG Reserved;
+		ULONG64 NextCursor;
+	} MDV2_LIST_HEADER, * PMDV2_LIST_HEADER;
+
+	typedef struct _MDV2_RECORD {
+		ULONG Size;
+		ULONG Kind;
+		ULONG Flags;
+		ULONG Source;
+		ULONG Confidence;
+		NTSTATUS Status;
+		ULONG ProcessId;
+		ULONG ThreadId;
+		ULONG64 Address;
+		ULONG64 SizeBytes;
+		ULONG64 Value[8];
+		WCHAR Name[128];
+		WCHAR TypeName[64];
+		WCHAR Path[260];
+		WCHAR Detail[256];
+	} MDV2_RECORD, * PMDV2_RECORD;
+
+	typedef struct _MDV2_CAPABILITIES_OUTPUT {
+		MDV2_LIST_HEADER Header;
+		ULONG OsMajor;
+		ULONG OsMinor;
+		ULONG OsBuild;
+		ULONG Architecture;
+		ULONG64 StableCapabilities;
+		ULONG64 ExperimentalCapabilities;
+	} MDV2_CAPABILITIES_OUTPUT, * PMDV2_CAPABILITIES_OUTPUT;
+
+	typedef struct _MDV2_LIST_OUTPUT {
+		MDV2_LIST_HEADER Header;
+		MDV2_RECORD Records[1];
+	} MDV2_LIST_OUTPUT, * PMDV2_LIST_OUTPUT;
+
+	typedef struct _ADVANCED_OPERATION_INPUT {
+		ULONG Size;
+		ULONG Version;
+		ULONG Kind;
+		ULONG Operation;
+		ULONG ProcessId;
+		ULONG TargetId;
+		ULONG64 Address;
+		ULONG64 Value;
+		ULONG64 TransactionId;
+		WCHAR Name[128];
+	} ADVANCED_OPERATION_INPUT, *PADVANCED_OPERATION_INPUT;
+
+	typedef struct _ADVANCED_OPERATION_OUTPUT {
+		ULONG Size;
+		ULONG Version;
+		NTSTATUS Status;
+		ULONG Flags;
+		ULONG64 TransactionId;
+		ULONG64 BeforeValue;
+		ULONG64 AfterValue;
+		WCHAR Detail[128];
+	} ADVANCED_OPERATION_OUTPUT, *PADVANCED_OPERATION_OUTPUT;
+
+	static_assert(sizeof(ADVANCED_OPERATION_INPUT) == 304, "Advanced V3 input ABI mismatch");
+	static_assert(sizeof(ADVANCED_OPERATION_OUTPUT) == 296, "Advanced V3 output ABI mismatch");
+
+	typedef struct _MDV_KTRAP_FRAME {
+		UINT64 P1Home;
+		UINT64 P2Home;
+		UINT64 P3Home;
+		UINT64 P4Home;
+		UINT64 P5;
+		UINT64 Rax;
+		UINT64 Rcx;
+		UINT64 Rdx;
+		UINT64 R8;
+		UINT64 R9;
+		UINT64 R10;
+		UINT64 R11;
+		UINT64 Rbp;
+		UINT64 Rsi;
+		UINT64 Rdi;
+		UINT64 Rsp;
+		UINT64 Rip;
+		UINT64 SegCs;
+		UINT64 EFlags;
+	} MDV_KTRAP_FRAME, *PMDV_KTRAP_FRAME;
+
+	typedef struct _THREAD_HIJACK_INPUT {
+		ULONG     ThreadId;
+		ULONG_PTR TargetRip;
+	} THREAD_HIJACK_INPUT, *PTHREAD_HIJACK_INPUT;
+
+	typedef struct _THREAD_REMOTE_CALL_INPUT {
+		ULONG     ThreadId;
+		ULONG_PTR Function;
+		ULONG_PTR Args[4];
+	} THREAD_REMOTE_CALL_INPUT, *PTHREAD_REMOTE_CALL_INPUT;
+
+	typedef struct _THREAD_REMOTE_CALL_OUTPUT {
+		NTSTATUS Result;
+	} THREAD_REMOTE_CALL_OUTPUT, *PTHREAD_REMOTE_CALL_OUTPUT;
+
+	typedef struct _SHELLCODE_INJECT_INPUT {
+		ULONG Id;
+		ULONG Size;
+	} SHELLCODE_INJECT_INPUT, *PSHELLCODE_INJECT_INPUT;
+
+	typedef struct _SHELLCODE_INJECT_OUTPUT {
+		ULONG_PTR AllocatedAddress;
+		NTSTATUS  Status;
+	} SHELLCODE_INJECT_OUTPUT, *PSHELLCODE_INJECT_OUTPUT;
+
+	static_assert(sizeof(MDV2_QUERY_INPUT) == 808, "AegisCore V2 request ABI mismatch");
+	static_assert(sizeof(MDV2_LIST_HEADER) == 48, "AegisCore V2 header ABI mismatch");
+	static_assert(sizeof(MDV2_RECORD) == 1528, "AegisCore V2 record ABI mismatch");
+	static_assert(sizeof(MDV2_CAPABILITIES_OUTPUT) == 80, "AegisCore V2 capabilities ABI mismatch");
+
+	typedef enum _PS_PROTECTED_TYPE : UCHAR {
+		PsProtectedTypeNone,
+		PsProtectedTypeProtectedLight,
+		PsProtectedTypeProtected,
+		PsProtectedTypeMax
+	} PS_PROTECTED_TYPE;
+
+	typedef enum _PS_PROTECTED_SIGNER : UCHAR {
+		PsProtectedSignerNone,
+		PsProtectedSignerAuthenticode,
+		PsProtectedSignerCodeGen,
+		PsProtectedSignerAntimalware,
+		PsProtectedSignerLsa,
+		PsProtectedSignerWindows,
+		PsProtectedSignerWinTcb,
+		PsProtectedSignerWinSystem,
+		PsProtectedSignerApp,
+		PsProtectedSignerMax
+	} PS_PROTECTED_SIGNER;
+
+	typedef struct _PS_PROTECTION {
+		union {
+			struct {
+				PS_PROTECTED_TYPE Type : 3;
+				BOOLEAN Audit : 1;
+				PS_PROTECTED_SIGNER Signer : 4;
+			} s;
+			UCHAR Level;
+		};
+	} PS_PROTECTION, * PPS_PROTECTION;
+
+	typedef NTSTATUS (NTAPI* PCmCallbackGetKeyObjectIDEx)(
+		_In_opt_ PLARGE_INTEGER Cookie,
+		_In_     PVOID          Object,
+		_Out_opt_ PULONG        ObjectID,
+		_Out_    PCUNICODE_STRING* ObjectName,
+		_In_     ULONG          Flags
+		);
+
+	typedef VOID (NTAPI* PCmCallbackReleaseKeyObjectIDEx)(
+		_In_ PCUNICODE_STRING ObjectName
+		);
+
+	typedef NTSTATUS (NTAPI* PCmCallbackGetKeyObjectID)(
+		_In_ PVOID               Object,
+		_Out_opt_ PULONG         ObjectID,
+		_Out_ PUNICODE_STRING*   ObjectName
+		);
+
+#define MDV_PROCESS_ACCESS_TOKEN_CLASS  ((PROCESSINFOCLASS)9) 
+
+typedef struct _MDV_PROCESS_ACCESS_TOKEN {
+	HANDLE Token;
+	HANDLE Thread;
+} MDV_PROCESS_ACCESS_TOKEN, * PMDV_PROCESS_ACCESS_TOKEN;
+
+#define PROCESS_TERMINATE               (0x0001)
+#define PROCESS_CREATE_THREAD           (0x0002)
+#define PROCESS_CREATE_PROCESS          (0x0080)
+#define PROCESS_VM_OPERATION            (0x0008)
+#define PROCESS_VM_READ                 (0x0010)
+#define PROCESS_VM_WRITE                (0x0020)
+#define PROCESS_DUP_HANDLE              (0x0040)
+#define PROCESS_SET_PORT                (0x0100)
+#define PROCESS_SET_INFORMATION         (0x0200)
+#define PROCESS_QUERY_INFORMATION       (0x0400)
+#define PROCESS_SUSPEND_RESUME          (0x0800)
+#define PROCESS_QUERY_LIMITED_INFORMATION (0x1000)
+#define PROCESS_SET_LIMITED_INFORMATION (0x2000)
+#define PROCESS_DEBUG_PORT              (0x0001)
+#define PROCESS_HANDLE_TAG              (0x0080)
+#define PROCESS_THREAD_TERMINATE        (0x0001)
+
+#define THREAD_TERMINATE                (0x0001)
+#define THREAD_SUSPEND_RESUME           (0x0002)
+#define THREAD_GET_CONTEXT              (0x0008)
+#define THREAD_SET_CONTEXT              (0x0010)
+#define THREAD_SET_INFORMATION          (0x0020)
+#define THREAD_QUERY_INFORMATION        (0x0040)
+#define THREAD_SET_LIMITED_INFORMATION  (0x0800)
+#define THREAD_DIRECT_IMPERSONATION     (0x0200)
+
+	_Function_class_(DRIVER_INITIALIZE)
+		_IRQL_requires_(PASSIVE_LEVEL)
+		DRIVER_INITIALIZE
+		DriverEntry;
+
+	_Function_class_(DRIVER_UNLOAD)
+		_IRQL_requires_(PASSIVE_LEVEL)
+		DRIVER_UNLOAD
+		DriverUnload;
+
+	_Function_class_(DRIVER_DISPATCH)
+		_IRQL_requires_max_(DISPATCH_LEVEL)
+		DRIVER_DISPATCH
+		DispatchCreateClose;
+
+	_Function_class_(DRIVER_DISPATCH)
+		_IRQL_requires_max_(DISPATCH_LEVEL)
+		DRIVER_DISPATCH
+		DispatchDeviceControl;
+
+	_Function_class_(DRIVER_DISPATCH)
+		_IRQL_requires_max_(DISPATCH_LEVEL)
+		DRIVER_DISPATCH
+		DispatchShutdown;
+
+	OB_PREOP_CALLBACK_STATUS
+		ProcessPreOperationCallback(
+			_In_ PVOID RegistrationContext,
+			_Inout_ POB_PRE_OPERATION_INFORMATION OperationInformation
+		);
+
+	OB_PREOP_CALLBACK_STATUS
+		ThreadPreOperationCallback(
+			_In_ PVOID RegistrationContext,
+			_Inout_ POB_PRE_OPERATION_INFORMATION OperationInformation
+		);
+
+	FLT_PREOP_CALLBACK_STATUS
+		PreCreateCallback(
+			_Inout_ PFLT_CALLBACK_DATA Data,
+			_In_ PCFLT_RELATED_OBJECTS FltObjects,
+			_Outptr_opt_result_maybenull_ PVOID* CompletionContext
+		);
+
+	FLT_PREOP_CALLBACK_STATUS
+		PreSetInformationCallback(
+			_Inout_ PFLT_CALLBACK_DATA Data,
+			_In_ PCFLT_RELATED_OBJECTS FltObjects,
+			_Outptr_opt_result_maybenull_ PVOID* CompletionContext
+		);
+
+	FLT_PREOP_CALLBACK_STATUS
+		PreWriteCallback(
+			_Inout_ PFLT_CALLBACK_DATA Data,
+			_In_ PCFLT_RELATED_OBJECTS FltObjects,
+			_Outptr_opt_result_maybenull_ PVOID* CompletionContext
+		);
+
+	NTSTATUS
+		RegistryCallbackRoutine(
+			_In_ PVOID CallbackContext,
+			_In_ PVOID Argument1,
+			_In_ PVOID Argument2
+		);
+
+	NTSTATUS
+		ForceTerminateProcess(
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		FindPplOffset(
+			_Out_ PULONG PsProtectionOffset
+		);
+
+	NTSTATUS
+		SetProcessPpl(
+			_In_ ULONG ProcessId,
+			_In_ UCHAR ProtectionType,
+			_In_ UCHAR ProtectionSigner,
+			_In_ BOOLEAN Audit
+		);
+
+	NTSTATUS
+		RemoveProcessPpl(
+			_In_ ULONG ProcessId
+		);
+
+	BOOLEAN
+		IsProcessProtected(
+			_In_ HANDLE ProcessId
+		);
+
+	BOOLEAN
+		IsRegistryPathProtected(
+			_In_ PCUNICODE_STRING KeyPath
+		);
+
+	BOOLEAN
+		IsFilePathProtected(
+			_In_ PUNICODE_STRING FilePath
+		);
+
+	VOID
+		LogMessage(
+			_In_ PCCH Format,
+			_In_ ...
+		);
+
+	NTSTATUS
+		FindObCallbackListOffset(
+			_Out_ PULONG Offset
+		);
+
+	NTSTATUS
+		RemoveAllObCallbacks(
+			VOID
+		);
+
+	NTSTATUS
+		FindCmCallbackListHead(
+			_Out_ PLIST_ENTRY* ListHead
+		);
+
+	NTSTATUS
+		RemoveAllRegistryCallbacks(
+			VOID
+		);
+
+	NTSTATUS
+		RemoveAllFilters(
+			VOID
+		);
+
+	NTSTATUS
+		EnumerateAllCallbacks(
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		RemoveCallbackByAddress(
+			_In_ ULONG Type,
+			_In_ ULONG_PTR Address
+		);
+
+	NTSTATUS
+		QueryProcessPpl(
+			_In_ ULONG ProcessId,
+			_Out_ PPPL_QUERY_OUTPUT Output
+		);
+
+	NTSTATUS
+		SetProcessCritical(
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		RemoveProcessCritical(
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		HideProcess(
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		UnhideProcess(
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		ForceDeleteFile(
+			_In_ PCWSTR FilePath
+		);
+
+	NTSTATUS
+		AdjustProcessPrivileges(
+			_In_ ULONG   ProcessId,
+			_In_ PLUID   PrivilegeLuid,
+			_In_ BOOLEAN Enable
+		);
+
+	NTSTATUS
+		QueueProcessApc(
+			_In_ ULONG ProcessId,
+			_In_ ULONG ApcAction
+		);
+
+	NTSTATUS
+		EnumerateProcesses(
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		DisableProcessApc(
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		EnableProcessApc(
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		ForceTerminateThread(
+			_In_ ULONG ThreadId,
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		SetToken(
+			_In_ ULONG SourceProcessId,
+			_In_ ULONG TargetProcessId
+		);
+
+	NTSTATUS
+		LaunchAs(
+			_In_ ULONG  AccountType,
+			_In_ PCWSTR ImagePath,
+			_Out_ PULONG ProcessId,
+			_Out_ PULONG ThreadId
+		);
+
+	NTSTATUS
+		DllInjectApc(
+			_In_ ULONG  ProcessId,
+			_In_ PCWSTR DllPath
+		);
+
+	NTSTATUS
+		DllInjectThread(
+			_In_ ULONG  ProcessId,
+			_In_ PCWSTR DllPath
+		);
+
+	PVOID
+		GetUserProcessEnvironment(
+			_Out_ PSIZE_T EnvironmentSize
+		);
+
+	NTSTATUS
+		ReadMemory(
+			_In_ ULONG ProcessId,
+			_In_ ULONG_PTR Address,
+			_In_ ULONG Size,
+			_Out_writes_bytes_(Size) PVOID OutputBuffer
+		);
+
+	NTSTATUS
+		WriteMemory(
+			_In_ ULONG ProcessId,
+			_In_ ULONG_PTR Address,
+			_In_ ULONG Size,
+			_In_reads_bytes_(Size) PVOID Data
+		);
+
+	NTSTATUS
+		QuerySystemTables(
+			_Out_ PSYSTEM_TABLES_OUTPUT Output,
+			_In_  ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		EnumerateSystemTableEntries(
+			_In_ ULONG TableKind,
+			_Out_ PSYSTEM_TABLE_ENTRIES_OUTPUT Output,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	void ExecutePatchGuard();
+
+	NTSTATUS
+		EnumeratePiDDBCache(
+			_Out_ PPIDDB_CACHE_ENUM_OUTPUT Output,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		EnumerateDrivers(
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		LoadDriverKernel(
+			_In_ PDRIVER_CONTROL_INPUT Input,
+			_Out_opt_ PDRIVER_CONTROL_OUTPUT Output,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		UnloadDriverKernel(
+			_In_ PDRIVER_CONTROL_INPUT Input,
+			_Out_opt_ PDRIVER_CONTROL_OUTPUT Output,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+	NTSTATUS
+		SetProcessPreviousMode(
+			_In_ ULONG ProcessId
+		);
+
+	NTSTATUS
+		EnumerateWindowsKernel(
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		WindowOperation(
+			_In_ PWINDOW_OPERATION_INPUT Input
+		);
+
+	NTSTATUS
+		GetCmdLine(
+			_In_ PCOMMAND_LINE_INPUT Input,
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		RegOperation(
+			_In_ PREG_OPERATION_INPUT Input,
+			_In_reads_bytes_(ExtraSize) PVOID ExtraData,
+			_In_ ULONG ExtraSize,
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		ServiceOperation(
+			_In_ PSERVICE_OPERATION_INPUT Input,
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		SessionOperation(
+			_In_ PSESSION_OPERATION_INPUT Input,
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		QueryMitigation(
+			_In_ ULONG ProcessId,
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		SetMitigation(
+			_In_ PMITIGATION_SET_INPUT Input
+		);
+
+	NTSTATUS
+		EnumerateSyncObjects(
+			_Out_writes_bytes_to_opt_(OutputLength, *BytesReturned) PVOID OutputBuffer,
+			_In_ ULONG OutputLength,
+			_Out_ PULONG BytesReturned
+		);
+
+	NTSTATUS
+		AddWindowProtect(
+			_In_ PWINDOW_PROTECT_INPUT Input
+		);
+
+	NTSTATUS
+		RemoveWindowProtect(
+			_In_ PWINDOW_PROTECT_INPUT Input
+		);
+
+	NTSTATUS
+		AddInjectionProtect(
+			_In_ PINJECTION_PROTECT_INPUT Input
+		);
+
+	NTSTATUS
+		RemoveInjectionProtect(
+			_In_ PINJECTION_PROTECT_INPUT Input
+		);
+
+	NTSTATUS
+		ForceCloseHandle(
+			_In_ ULONG ProcessId,
+			_In_ ULONG HandleValue
+		);
+
+	NTSTATUS
+		DowngradeHandle(
+			_Inout_ PHANDLE_DOWNGRADE_INPUT Input
+		);
+
+	NTSTATUS
+		DuplicateAndDowngradeHandle(
+			_In_  ULONG                      SourceProcessId,
+			_In_  ULONG                      SourceHandle,
+			_In_  ULONG                      TargetProcessId,
+			_In_  ACCESS_MASK                NewAccess,
+			_Out_ PHANDLE_DUP_DOWNGRADE_OUTPUT Output
+		);
+
+	NTSTATUS
+		HijackThreadContext(
+			_In_ ULONG     ThreadId,
+			_In_ ULONG_PTR TargetRip
+		);
+
+	NTSTATUS
+		HijackThreadTrapFrame(
+			_In_ ULONG     ThreadId,
+			_In_ ULONG_PTR TargetRip
+		);
+
+	NTSTATUS
+		RemoteCallInThread(
+			_In_  ULONG     ThreadId,
+			_In_  ULONG_PTR Function,
+			_In_  ULONG_PTR Arg1,
+			_In_  ULONG_PTR Arg2,
+			_In_  ULONG_PTR Arg3,
+			_In_  ULONG_PTR Arg4,
+			_Out_ PNTSTATUS OutResult
+		);
+
+	NTSTATUS
+		InjectShellcode(
+			_In_                          ULONG      ProcessId,
+			_In_reads_bytes_(DataSize)    PUCHAR     ShellcodeData,
+			_In_                          ULONG      DataSize,
+			_Out_                         PULONG_PTR OutAddress
+		);
+
+	NTSTATUS
+		InjectAndHijack(
+			_In_                          ULONG      ThreadId,
+			_In_reads_bytes_(DataSize)    PUCHAR     ShellcodeData,
+			_In_                          ULONG      DataSize,
+			_Out_                         PULONG_PTR OutAddress
+		);
+
+	NTSTATUS
+		EtwHookInstall(VOID);
+
+	VOID
+		EtwHookRemove(VOID);
+
+	NTSTATUS
+		EtwSyscallAddHook(
+			_In_ PVOID OrigSyscall,
+			_In_ PVOID DetourFunc
+		);
+
+#ifdef __cplusplus
+}
+#endif
+
+#define SENTINEL_TAG          'ASEN'
+#define MAX_EVENTS            4096
+#define AEGISSENTINEL_DEVICE_NAME     L"\\Device\\AegisSentinel"
+#define AEGISSENTINEL_DOS_DEVICE_NAME L"\\DosDevices\\AegisSentinel"
+#define CM_CALLBACK_ALTITUDE  L"999001"
+#define OB_CALLBACK_ALTITUDE  L"385201"
+
+#define IOCTL_MONITOR_GET_EVENT  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_GET_FILE_EVENT CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_SET_WATCH_DIRECTORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_CLEAR_WATCH_DIRECTORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_QUERY_WATCH_DIRECTORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_GET_EVENT_V2 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_GET_NETWORK_EVENT_V2 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_SET_FILTER_V2 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_QUERY_STATS_V2 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_RULE_OPERATION_V3 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_ENUM_RULES_V3 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define MON_AUTHORIZED_FILE_CONTEXT ((PVOID)(ULONG_PTR)0x4D4F4E41u)
+
+#define DRV_INFO(Fmt, ...)   DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,    "[AegisSentinel] " Fmt "\n", ##__VA_ARGS__)
+#define DRV_WARN(Fmt, ...)   DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "[AegisSentinel] WARN: " Fmt "\n", ##__VA_ARGS__)
+#define DRV_ERROR(Fmt, ...)  DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,   "[AegisSentinel] ERROR: " Fmt "\n", ##__VA_ARGS__)
+
+#pragma pack(push, 1)
+enum MonitorEventType : ULONG {
+    EventNone = 0,
+    EventProcessCreate,
+    EventProcessExit,
+    EventThreadCreate,
+    EventThreadExit,
+    EventImageLoad,
+    EventRegistryOperation,
+    EventHandleOperation,
+    EventFileOperation,
+    EventDriverLoad,
+    EventDriverUnload,
+    EventVolumeMount,
+    EventVolumeDismount,
+    EventNetworkConnect,
+    EventNetworkAccept,
+    EventDnsQuery,
+    EventHttpRequest,
+    EventFileCapture,
+    EventProcessInject,
+    EventServiceStateChange,
+    EventNamedPipeConnect,
+};
+
+struct MonitorEvent {
+    MonitorEventType Type;
+    ULONG            ProcessId;
+    ULONG            ThreadId;
+    ULONG            ParentPid;
+    ULONG            Data1;
+    ULONG            Data2;
+    LARGE_INTEGER    TimeStamp;
+    WCHAR            Path[260];
+    WCHAR            Extra[260];
+};
+
+struct MonitorWatchDirectoryInput {
+    WCHAR DirectoryPath[260];
+};
+
+struct MonitorWatchDirectoryOutput {
+    BOOLEAN Active;
+    UCHAR   Reserved[3];
+    WCHAR   DirectoryPath[260];
+};
+
+#define MONITOR_PROTOCOL_VERSION 3u
+#define MONITOR_EVENT_FLAG_TRUNCATED 0x00000001u
+#define MONITOR_FILTER_REGISTRY_PREVIEW 0x00000001u
+
+enum MonitorRuleType : ULONG { MonitorRuleFile = 1, MonitorRuleRegistry = 2, MonitorRuleNetwork = 3 };
+enum MonitorRuleAction : ULONG { MonitorRuleAudit = 1, MonitorRuleBlock = 2 };
+enum MonitorRuleOperation : ULONG { MonitorRuleAdd = 1, MonitorRuleRemove = 2, MonitorRuleClear = 3 };
+#define MONITOR_MAX_RULES 64u
+
+struct MonitorRuleV3 {
+    ULONG Id;
+    ULONG Type;
+    ULONG Action;
+    ULONG ProcessId;       
+    ULONG Protocol;        
+    ULONG RemotePort;      
+    ULONG64 HitCount;
+    WCHAR Target[260];     
+};
+
+struct MonitorRuleOperationV3 {
+    ULONG Size;
+    ULONG Version;
+    ULONG Operation;
+    ULONG Reserved;
+    MonitorRuleV3 Rule;
+};
+
+struct MonitorRuleListV3 {
+    ULONG Size;
+    ULONG Version;
+    ULONG Count;
+    ULONG Reserved;
+    MonitorRuleV3 Rules[MONITOR_MAX_RULES];
+};
+
+struct MonitorFilterV2 {
+    ULONG Size;
+    ULONG Version;
+    ULONG Flags;
+    ULONG ProcessId;
+    ULONG64 EventMask;
+    ULONG RegistryPreviewBytes;
+    WCHAR PathPrefix[260];
+};
+
+struct MonitorEventV2 {
+    ULONG Size;
+    ULONG Version;
+    ULONG Type;
+    ULONG Flags;
+    ULONG64 Sequence;
+    LARGE_INTEGER TimeStamp;
+    NTSTATUS Status;
+    ULONG ProcessId;
+    ULONG ThreadId;
+    ULONG ParentPid;
+    ULONG TargetProcessId;
+    ULONG TargetThreadId;
+    ULONG Operation;
+    ULONG DataType;
+    ULONG64 Address;
+    ULONG64 SizeBytes;
+    ULONG64 Offset;
+    ULONG64 Value1;
+    ULONG64 Value2;
+    WCHAR Path[260];
+    WCHAR Extra[260];
+    WCHAR TargetPath[260];
+};
+
+struct MonitorStatsV2 {
+    ULONG Size;
+    ULONG Version;
+    ULONG SystemQueued;
+    ULONG FileQueued;
+    ULONG NetworkQueued;
+    ULONG Reserved;
+    ULONG64 SystemDropped;
+    ULONG64 FileDropped;
+    ULONG64 NetworkDropped;
+    ULONG64 LastSequence;
+    ULONG QueueCapacity;
+    ULONG SystemHighWatermark;
+    ULONG FileHighWatermark;
+    ULONG NetworkHighWatermark;
+};
+#pragma pack(pop)
+
+static_assert(sizeof(MonitorFilterV2) == 548, "Monitor V2 filter ABI mismatch");
+static_assert(sizeof(MonitorEventV2) == 1664, "Monitor V2 event ABI mismatch");
+static_assert(sizeof(MonitorStatsV2) == 72, "Monitor V3 stats ABI mismatch");
+
+typedef struct _MONITOR_EVENT_QUEUE {
+    MonitorEvent* Buffer;
+    ULONG ReadIndex;
+    ULONG WriteIndex;
+    ULONG Count;
+    ULONG HighWatermark;
+    ULONG64 Dropped;
+    KSPIN_LOCK Lock;
+    KEVENT Available;
+} MONITOR_EVENT_QUEUE, * PMONITOR_EVENT_QUEUE;
+
+NTSTATUS IrpCreate(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp);
+NTSTATUS IrpClose(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp);
+NTSTATUS IrpDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp);
+VOID RulesInitialize();
+NTSTATUS RulesOperate(_In_ const MonitorRuleOperationV3* Input);
+VOID RulesEnumerate(_Out_ MonitorRuleListV3* Output);
+MonitorRuleAction RulesEvaluate(_In_ MonitorRuleType Type, _In_ ULONG ProcessId, _In_opt_ PCWSTR Target, _In_ ULONG Protocol, _In_ ULONG RemotePort, _Out_opt_ PULONG RuleId);

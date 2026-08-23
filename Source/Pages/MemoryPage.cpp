@@ -123,7 +123,7 @@ QWidget *CreateMemoryPage() {
         if (!ReadMemory(ProcessId, TargetAddress, Buffer.data(), Size,
                         &BytesRead)) {
           const QString Message =
-              QString("Read failed (error %1)").arg(G_LastMultiDrvError);
+              QString("Read failed (error %1)").arg(G_LastAegisCoreError);
           Status->setText(Message);
           ShowErrorNotice(Page, "Memory", Message);
           return;
@@ -230,7 +230,7 @@ QWidget *CreateMemoryPage() {
         if (!WriteMemory(ProcessId, TargetAddress, Bytes.data(),
                          static_cast<ULONG>(Bytes.size()))) {
           const QString Message =
-              QString("Write failed (error %1)").arg(G_LastMultiDrvError);
+              QString("Write failed (error %1)").arg(G_LastAegisCoreError);
           Status->setText(Message);
           ShowErrorNotice(Page, "Memory", Message);
         } else {

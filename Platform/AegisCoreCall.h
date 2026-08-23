@@ -191,6 +191,102 @@
   CTL_CODE(0x8000, 0x861, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_THREAD_INJECT_AND_HIJACK                                         \
   CTL_CODE(0x8000, 0x862, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_QUERY_CAPABILITIES                                          \
+  CTL_CODE(0x8000, 0x863, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_ENUM                                                        \
+  CTL_CODE(0x8000, 0x864, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_INSTALL                                                     \
+  CTL_CODE(0x8000, 0x865, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_ENABLE                                                      \
+  CTL_CODE(0x8000, 0x866, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_DISABLE                                                     \
+  CTL_CODE(0x8000, 0x867, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_REMOVE                                                      \
+  CTL_CODE(0x8000, 0x868, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_RESTORE_ALL                                                 \
+  CTL_CODE(0x8000, 0x869, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_HOOK_VERIFY                                                      \
+  CTL_CODE(0x8000, 0x86A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define HOOK_PROTOCOL_VERSION 1u
+#define HOOK_TARGET_DRIVER_DISPATCH 1u
+#define HOOK_TARGET_FAST_IO 2u
+#define HOOK_TARGET_SSDT 3u
+#define HOOK_TARGET_IDT 4u
+#define HOOK_TARGET_INLINE 5u
+#define HOOK_TARGET_VT_EPT 6u
+#define HOOK_OP_INSTALL 1u
+#define HOOK_OP_ENABLE 2u
+#define HOOK_OP_DISABLE 3u
+#define HOOK_OP_REMOVE 4u
+#define HOOK_OP_VERIFY 5u
+#define HOOK_OP_RESTORE_ALL 6u
+#define HOOK_STATE_EMPTY 0u
+#define HOOK_STATE_PREPARED 1u
+#define HOOK_STATE_ACTIVE 2u
+#define HOOK_STATE_DISABLED 3u
+#define HOOK_STATE_RESTORED 4u
+#define HOOK_STATE_FAILED 5u
+#define HOOK_FLAG_SHADOW_SSDT 0x00000001u
+#define HOOK_FLAG_PROXY_REQUIRED 0x00000002u
+#define HOOK_FAST_IO_CHECK_IF_POSSIBLE 0u
+
+typedef struct _HOOK_CAPABILITIES_OUTPUT {
+  ULONG Size;
+  ULONG Version;
+  ULONG SupportedTargets;
+  ULONG SupportedOperations;
+  ULONG MaxHooks;
+  ULONG ActiveHooks;
+  ULONG Flags;
+  LONG LastStatus;
+} HOOK_CAPABILITIES_OUTPUT, *PHOOK_CAPABILITIES_OUTPUT;
+
+typedef struct _HOOK_REQUEST {
+  ULONG Size;
+  ULONG Version;
+  ULONG Operation;
+  ULONG TargetKind;
+  ULONG HookId;
+  ULONG MajorFunction;
+  ULONG TableIndex;
+  ULONG Vector;
+  ULONG64 TargetAddress;
+  ULONG64 ProxyAddress;
+  WCHAR ModuleName[128];
+  WCHAR DriverName[128];
+  ULONG Flags;
+  ULONG Reserved;
+} HOOK_REQUEST, *PHOOK_REQUEST;
+
+typedef struct _HOOK_RECORD {
+  ULONG Size;
+  ULONG Version;
+  ULONG HookId;
+  ULONG State;
+  ULONG TargetKind;
+  ULONG MajorFunction;
+  ULONG TableIndex;
+  ULONG Vector;
+  ULONG64 TargetAddress;
+  ULONG64 OriginalAddress;
+  ULONG64 ProxyAddress;
+  ULONG64 HitCount;
+  ULONG ActiveCalls;
+  LONG Status;
+  ULONG Flags;
+  WCHAR ModuleName[128];
+  WCHAR DriverName[128];
+  WCHAR Detail[256];
+} HOOK_RECORD, *PHOOK_RECORD;
+
+typedef struct _HOOK_ENUM_OUTPUT {
+  ULONG Size;
+  ULONG Version;
+  ULONG Count;
+  ULONG Capacity;
+  HOOK_RECORD Records[1];
+} HOOK_ENUM_OUTPUT, *PHOOK_ENUM_OUTPUT;
 
 #define ADVANCED_KIND_PTE 1u
 #define ADVANCED_KIND_VAD 2u
@@ -487,13 +583,13 @@ typedef struct _SYSTEM_TABLES_OUTPUT {
 #define SYSTEM_TABLE_MAX_ENTRIES 4096
 #define PIDDB_CACHE_MAX_ENTRIES 1024
 
-typedef struct _SYSTEM_TABLE_ENTRY {
+typedef struct _AEGIS_SYSTEM_TABLE_ENTRY {
   ULONG Index;
   ULONG ArgumentBytes;
   ULONG_PTR Address;
 } SYSTEM_TABLE_ENTRY, *PSYSTEM_TABLE_ENTRY;
 
-typedef struct _SYSTEM_TABLE_ENTRIES_OUTPUT {
+typedef struct _AEGIS_SYSTEM_TABLE_ENTRIES_OUTPUT {
   ULONG TableKind;
   ULONG Count;
   ULONG TotalCount;
@@ -696,12 +792,12 @@ typedef struct _SHELLCODE_INJECT_OUTPUT {
 } SHELLCODE_INJECT_OUTPUT, *PSHELLCODE_INJECT_OUTPUT;
 
 static_assert(sizeof(MDV2_QUERY_INPUT) == 808,
-              "MultiDrv V2 request ABI mismatch");
+              "AegisCore V2 request ABI mismatch");
 static_assert(sizeof(MDV2_LIST_HEADER) == 48,
-              "MultiDrv V2 header ABI mismatch");
-static_assert(sizeof(MDV2_RECORD) == 1528, "MultiDrv V2 record ABI mismatch");
+              "AegisCore V2 header ABI mismatch");
+static_assert(sizeof(MDV2_RECORD) == 1528, "AegisCore V2 record ABI mismatch");
 static_assert(sizeof(MDV2_CAPABILITIES_OUTPUT) == 80,
-              "MultiDrv V2 capabilities ABI mismatch");
+              "AegisCore V2 capabilities ABI mismatch");
 
 #define WINDOW_OP_CLOSE 0
 #define WINDOW_OP_HIDE 1
@@ -864,8 +960,8 @@ typedef struct _HANDLE_DUP_DOWNGRADE_OUTPUT {
 } HANDLE_DUP_DOWNGRADE_OUTPUT, *PHANDLE_DUP_DOWNGRADE_OUTPUT;
 
 HANDLE G_DeviceHandle = INVALID_HANDLE_VALUE;
-inline DWORD G_LastMultiDrvError = ERROR_SUCCESS;
-inline std::wstring G_LastMultiDrvDetails;
+inline DWORD G_LastAegisCoreError = ERROR_SUCCESS;
+inline std::wstring G_LastAegisCoreDetails;
 
 BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
   if (OutPid)
@@ -873,14 +969,14 @@ BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
 
   SC_HANDLE Scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
   if (!Scm) {
-    G_LastMultiDrvError = GetLastError();
+    G_LastAegisCoreError = GetLastError();
     return FALSE;
   }
 
   SC_HANDLE Service = OpenServiceW(Scm, L"TrustedInstaller",
                                    SERVICE_QUERY_STATUS | SERVICE_START);
   if (!Service) {
-    G_LastMultiDrvError = GetLastError();
+    G_LastAegisCoreError = GetLastError();
     CloseServiceHandle(Scm);
     return FALSE;
   }
@@ -890,7 +986,7 @@ BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
   if (!QueryServiceStatusEx(Service, SC_STATUS_PROCESS_INFO,
                             reinterpret_cast<LPBYTE>(&Status), sizeof(Status),
                             &BytesNeeded)) {
-    G_LastMultiDrvError = GetLastError();
+    G_LastAegisCoreError = GetLastError();
     CloseServiceHandle(Service);
     CloseServiceHandle(Scm);
     return FALSE;
@@ -899,7 +995,7 @@ BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
   if (Status.dwCurrentState != SERVICE_RUNNING) {
     if (!StartServiceW(Service, 0, NULL) &&
         GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
-      G_LastMultiDrvError = GetLastError();
+      G_LastAegisCoreError = GetLastError();
       CloseServiceHandle(Service);
       CloseServiceHandle(Scm);
       return FALSE;
@@ -922,7 +1018,7 @@ BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
         break;
     }
 
-    G_LastMultiDrvError = ERROR_SERVICE_NOT_ACTIVE;
+    G_LastAegisCoreError = ERROR_SERVICE_NOT_ACTIVE;
     CloseServiceHandle(Service);
     CloseServiceHandle(Scm);
     return FALSE;
@@ -939,7 +1035,7 @@ std::mutex G_DeviceMutex;
 
 BOOLEAN TryOpenDevice() {
   G_DeviceHandle =
-      CreateFileW(L"\\\\.\\MultiDrv", GENERIC_READ | GENERIC_WRITE, 0, NULL,
+      CreateFileW(L"\\\\.\\AegisCore", GENERIC_READ | GENERIC_WRITE, 0, NULL,
                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
   return G_DeviceHandle != INVALID_HANDLE_VALUE;
@@ -972,8 +1068,8 @@ BOOLEAN OpenDeviceInternal(BOOLEAN Silent) {
 
   SetLastError(LastError);
   if (!Silent) {
-    wprintf(L"[!] Failed to open \\\\.\\MultiDrv (error %u).\n", LastError);
-    wprintf(L"    Is the driver loaded? Run: sc start MultiDrv\n");
+    wprintf(L"[!] Failed to open \\\\.\\AegisCore (error %u).\n", LastError);
+    wprintf(L"    Is the driver loaded? Run: sc start Ring0Core\n");
   }
   return FALSE;
 }
@@ -990,10 +1086,10 @@ VOID CloseDevice() {
 }
 
 BOOLEAN SendIoctl(DWORD IoControlCode, PVOID InputBuffer, DWORD InputSize) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   std::lock_guard<std::mutex> Lock(G_DeviceMutex);
   if (!OpenDevice()) {
-    G_LastMultiDrvError = GetLastError();
+    G_LastAegisCoreError = GetLastError();
     return FALSE;
   }
 
@@ -1002,8 +1098,8 @@ BOOLEAN SendIoctl(DWORD IoControlCode, PVOID InputBuffer, DWORD InputSize) {
                                 InputSize, NULL, 0, &BytesReturned, NULL);
 
   if (!Result) {
-    G_LastMultiDrvError = GetLastError();
-    wprintf(L"[!] DeviceIoControl failed: error %u\n", G_LastMultiDrvError);
+    G_LastAegisCoreError = GetLastError();
+    wprintf(L"[!] DeviceIoControl failed: error %u\n", G_LastAegisCoreError);
     CloseDevice();
     return FALSE;
   }
@@ -1015,10 +1111,10 @@ BOOLEAN SendIoctl(DWORD IoControlCode, PVOID InputBuffer, DWORD InputSize) {
 BOOLEAN SendIoctlWithOutput(DWORD IoControlCode, PVOID InputBuffer,
                             DWORD InputSize, PVOID OutputBuffer,
                             DWORD OutputSize, PDWORD BytesReturned) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   std::lock_guard<std::mutex> Lock(G_DeviceMutex);
   if (!OpenDevice()) {
-    G_LastMultiDrvError = GetLastError();
+    G_LastAegisCoreError = GetLastError();
     return FALSE;
   }
 
@@ -1027,8 +1123,8 @@ BOOLEAN SendIoctlWithOutput(DWORD IoControlCode, PVOID InputBuffer,
                       OutputBuffer, OutputSize, BytesReturned, NULL);
 
   if (!Result) {
-    G_LastMultiDrvError = GetLastError();
-    wprintf(L"[!] DeviceIoControl failed: error %u\n", G_LastMultiDrvError);
+    G_LastAegisCoreError = GetLastError();
+    wprintf(L"[!] DeviceIoControl failed: error %u\n", G_LastAegisCoreError);
     CloseDevice();
     return FALSE;
   }
@@ -1295,7 +1391,7 @@ VOID UnhideProcess(ULONG ProcessId) {
 
 BOOLEAN ForceDeleteFile(const WCHAR *FilePath) {
   if (FilePath == NULL || FilePath[0] == L'\0') {
-    G_LastMultiDrvError = ERROR_INVALID_NAME;
+    G_LastAegisCoreError = ERROR_INVALID_NAME;
     return FALSE;
   }
 
@@ -1312,14 +1408,14 @@ BOOLEAN ForceDeleteFile(const WCHAR *FilePath) {
     else if (NtPath.size() >= 2 && NtPath[1] == L':')
       NtPath = L"\\??\\" + NtPath;
     else {
-      G_LastMultiDrvError = ERROR_INVALID_NAME;
+      G_LastAegisCoreError = ERROR_INVALID_NAME;
       return FALSE;
     }
   }
 
   FORCE_DELETE_INPUT Input = {0};
   if (NtPath.size() >= _countof(Input.FilePath)) {
-    G_LastMultiDrvError = ERROR_FILENAME_EXCED_RANGE;
+    G_LastAegisCoreError = ERROR_FILENAME_EXCED_RANGE;
     return FALSE;
   }
 
@@ -1385,7 +1481,7 @@ VOID EnableApc(ULONG ProcessId) {
 }
 
 BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId) {
-  wprintf(L"[*] Terminating TID=%u in PID=%u via MultiDrv ...\n", ThreadId,
+  wprintf(L"[*] Terminating TID=%u in PID=%u via AegisCore ...\n", ThreadId,
           ProcessId);
 
   TERMINATE_THREAD_INPUT Input = {0};
@@ -1399,7 +1495,7 @@ BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId) {
     HANDLE Thread =
         OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, ThreadId);
     if (Thread == NULL) {
-      G_LastMultiDrvError = ERROR_SUCCESS;
+      G_LastAegisCoreError = ERROR_SUCCESS;
       wprintf(L"[+] TID=%u terminated.\n", ThreadId);
       return TRUE;
     }
@@ -1408,7 +1504,7 @@ BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId) {
     const BOOL ExitCodeOk = GetExitCodeThread(Thread, &ExitCode);
     CloseHandle(Thread);
     if (ExitCodeOk && ExitCode != STILL_ACTIVE) {
-      G_LastMultiDrvError = ERROR_SUCCESS;
+      G_LastAegisCoreError = ERROR_SUCCESS;
       wprintf(L"[+] TID=%u terminated (exit code %u).\n", ThreadId, ExitCode);
       return TRUE;
     }
@@ -1416,16 +1512,16 @@ BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId) {
     Sleep(25);
   }
 
-  G_LastMultiDrvError = WAIT_TIMEOUT;
+  G_LastAegisCoreError = WAIT_TIMEOUT;
   wprintf(L"[!] TID=%u did not terminate within the verification window.\n",
           ThreadId);
   return FALSE;
 }
 
 BOOLEAN DllInjectApc(ULONG ProcessId, const WCHAR *DllPath) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (DllPath == NULL || DllPath[0] == L'\0') {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -1442,9 +1538,9 @@ BOOLEAN DllInjectApc(ULONG ProcessId, const WCHAR *DllPath) {
 }
 
 BOOLEAN DllInjectThread(ULONG ProcessId, const WCHAR *DllPath) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (DllPath == NULL || DllPath[0] == L'\0') {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -1715,7 +1811,7 @@ static ULONG ResolveAccountPid(ULONG AccountType) {
 
 BOOLEAN SetToken(ULONG SourcePid, ULONG TargetPid) {
   if (SourcePid == 0 || TargetPid == 0) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -1730,7 +1826,7 @@ BOOLEAN SetTokenAs(ULONG AccountType, ULONG TargetPid,
                    PULONG OutSourcePid = NULL) {
   ULONG AccountPid = ResolveAccountPid(AccountType);
   if (AccountPid == 0) {
-    G_LastMultiDrvError = ERROR_NOT_FOUND;
+    G_LastAegisCoreError = ERROR_NOT_FOUND;
     return FALSE;
   }
 
@@ -1810,17 +1906,17 @@ static BOOLEAN ConvertLaunchPathToWin32Path(const WCHAR *ImagePath,
 
 BOOLEAN LaunchAs(ULONG AccountType, const WCHAR *ImagePath,
                  PULONG OutProcessId = NULL) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (OutProcessId)
     *OutProcessId = 0;
   if (ImagePath == NULL || ImagePath[0] == L'\0') {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
   if (AccountType != ACCOUNT_TYPE_SYSTEM &&
       AccountType != ACCOUNT_TYPE_TRUSTEDINSTALLER) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -1828,14 +1924,14 @@ BOOLEAN LaunchAs(ULONG AccountType, const WCHAR *ImagePath,
     ULONG TrustedInstallerPid = 0;
     if (!EnsureTrustedInstallerRunning(&TrustedInstallerPid) ||
         TrustedInstallerPid == 0) {
-      G_LastMultiDrvError = ERROR_NOT_FOUND;
+      G_LastAegisCoreError = ERROR_NOT_FOUND;
       return FALSE;
     }
   }
 
   std::wstring Win32Path;
   if (!ConvertLaunchPathToWin32Path(ImagePath, Win32Path)) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -1863,15 +1959,15 @@ BOOLEAN LaunchAs(ULONG AccountType, const WCHAR *ImagePath,
                      WorkingDirectory.empty() ? NULL : WorkingDirectory.c_str(),
                      &StartupInfo, &ProcessInfo);
   if (!Created) {
-    G_LastMultiDrvError = GetLastError();
+    G_LastAegisCoreError = GetLastError();
     return FALSE;
   }
 
   const DWORD ResumeResult = ResumeThread(ProcessInfo.hThread);
   if (ResumeResult == static_cast<DWORD>(-1)) {
-    G_LastMultiDrvError = GetLastError();
+    G_LastAegisCoreError = GetLastError();
     TerminateProcess(ProcessInfo.hProcess,
-                     static_cast<UINT>(G_LastMultiDrvError));
+                     static_cast<UINT>(G_LastAegisCoreError));
     CloseHandle(ProcessInfo.hThread);
     CloseHandle(ProcessInfo.hProcess);
     return FALSE;
@@ -1882,13 +1978,13 @@ BOOLEAN LaunchAs(ULONG AccountType, const WCHAR *ImagePath,
   Sleep(250);
 
   if (!SetTokenAs(AccountType, ProcessInfo.dwProcessId)) {
-    const DWORD TokenError = G_LastMultiDrvError != ERROR_SUCCESS
-                                 ? G_LastMultiDrvError
+    const DWORD TokenError = G_LastAegisCoreError != ERROR_SUCCESS
+                                 ? G_LastAegisCoreError
                                  : ERROR_ACCESS_DENIED;
     TerminateProcess(ProcessInfo.hProcess, static_cast<UINT>(TokenError));
     CloseHandle(ProcessInfo.hThread);
     CloseHandle(ProcessInfo.hProcess);
-    G_LastMultiDrvError = TokenError;
+    G_LastAegisCoreError = TokenError;
     return FALSE;
   }
 
@@ -1904,14 +2000,14 @@ BOOLEAN ReadMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer, ULONG Size,
   if (BytesRead)
     *BytesRead = 0;
   if (Buffer == NULL || Size == 0) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
   DWORD BufSz = sizeof(MEMORY_READ_INPUT) + Size;
   PMEMORY_READ_INPUT Input = (PMEMORY_READ_INPUT)malloc(BufSz);
   if (Input == NULL) {
-    G_LastMultiDrvError = ERROR_NOT_ENOUGH_MEMORY;
+    G_LastAegisCoreError = ERROR_NOT_ENOUGH_MEMORY;
     return FALSE;
   }
 
@@ -1939,14 +2035,14 @@ BOOLEAN ReadMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer, ULONG Size,
 BOOLEAN WriteMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer,
                     ULONG Size) {
   if (Buffer == NULL || Size == 0) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
   DWORD BufSz = sizeof(MEMORY_WRITE_INPUT) + Size;
   PMEMORY_WRITE_INPUT Input = (PMEMORY_WRITE_INPUT)malloc(BufSz);
   if (Input == NULL) {
-    G_LastMultiDrvError = ERROR_NOT_ENOUGH_MEMORY;
+    G_LastAegisCoreError = ERROR_NOT_ENOUGH_MEMORY;
     return FALSE;
   }
 
@@ -1962,7 +2058,7 @@ BOOLEAN WriteMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer,
 
 BOOLEAN QuerySystemTables(PSYSTEM_TABLES_OUTPUT Output) {
   if (Output == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -1978,7 +2074,7 @@ BOOLEAN QuerySystemTables(PSYSTEM_TABLES_OUTPUT Output) {
 BOOLEAN QuerySystemTableEntries(ULONG TableKind,
                                 PSYSTEM_TABLE_ENTRIES_OUTPUT Output) {
   if (Output == NULL || TableKind > SYSTEM_TABLE_KIND_GDT) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
   ZeroMemory(Output, sizeof(SYSTEM_TABLE_ENTRIES_OUTPUT));
@@ -1991,7 +2087,7 @@ BOOLEAN QuerySystemTableEntries(ULONG TableKind,
 
 BOOLEAN QueryPiDDBCacheEntries(PPIDDB_CACHE_ENUM_OUTPUT Output) {
   if (Output == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2001,7 +2097,7 @@ BOOLEAN QueryPiDDBCacheEntries(PPIDDB_CACHE_ENUM_OUTPUT Output) {
                              sizeof(PIDDB_CACHE_ENUM_OUTPUT), &BytesReturned);
 }
 
-inline DWORD MultiDrvNtStatusToWin32(NTSTATUS Status) {
+inline DWORD AegisCoreNtStatusToWin32(NTSTATUS Status) {
   return Status == 0 ? ERROR_SUCCESS
                      : static_cast<DWORD>(RtlNtStatusToDosError(Status));
 }
@@ -2018,10 +2114,10 @@ BOOLEAN QueryDriverEntries(std::vector<DRIVER_ENUM_ENTRY> &Entries,
                            &BytesReturned))
     return FALSE;
 
-  G_LastMultiDrvDetails.assign(Probe.Message);
+  G_LastAegisCoreDetails.assign(Probe.Message);
   if (Header != NULL)
     *Header = Probe;
-  G_LastMultiDrvError = MultiDrvNtStatusToWin32(Probe.NtStatus);
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Probe.NtStatus);
   if (Probe.NtStatus != 0 || Probe.Count == 0)
     return Probe.NtStatus == 0;
 
@@ -2031,7 +2127,7 @@ BOOLEAN QueryDriverEntries(std::vector<DRIVER_ENUM_ENTRY> &Entries,
   PDRIVER_ENUM_OUTPUT Output =
       static_cast<PDRIVER_ENUM_OUTPUT>(malloc(BufferSize));
   if (Output == NULL) {
-    G_LastMultiDrvError = ERROR_NOT_ENOUGH_MEMORY;
+    G_LastAegisCoreError = ERROR_NOT_ENOUGH_MEMORY;
     return FALSE;
   }
 
@@ -2040,19 +2136,19 @@ BOOLEAN QueryDriverEntries(std::vector<DRIVER_ENUM_ENTRY> &Entries,
       SendIoctlWithOutput(IOCTL_ENUM_DRIVERS, NULL, 0, Output,
                           static_cast<DWORD>(BufferSize), &BytesReturned);
   if (Success) {
-    G_LastMultiDrvDetails.assign(Output->Header.Message);
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Header.NtStatus);
+    G_LastAegisCoreDetails.assign(Output->Header.Message);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output->Header.NtStatus);
     if (Output->Header.NtStatus == 0)
       Entries.assign(Output->Entries, Output->Entries + Output->Header.Count);
   }
 
   free(Output);
-  return Success && G_LastMultiDrvError == ERROR_SUCCESS;
+  return Success && G_LastAegisCoreError == ERROR_SUCCESS;
 }
 
-inline bool QueryMultiDrvCapabilitiesV2(MDV2_CAPABILITIES_OUTPUT *Output) {
+inline bool QueryAegisCoreCapabilitiesV2(MDV2_CAPABILITIES_OUTPUT *Output) {
   if (Output == nullptr) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return false;
   }
   ZeroMemory(Output, sizeof(*Output));
@@ -2060,12 +2156,12 @@ inline bool QueryMultiDrvCapabilitiesV2(MDV2_CAPABILITIES_OUTPUT *Output) {
   if (!SendIoctlWithOutput(IOCTL_QUERY_CAPABILITIES_V2, nullptr, 0, Output,
                            sizeof(*Output), &BytesReturned))
     return false;
-  G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Header.Status);
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output->Header.Status);
   return Output->Header.Version == MDV2_PROTOCOL_VERSION &&
          Output->Header.Status == 0;
 }
 
-inline bool QueryMultiDrvRecordsV2(DWORD Ioctl, const MDV2_QUERY_INPUT &Request,
+inline bool QueryAegisCoreRecordsV2(DWORD Ioctl, const MDV2_QUERY_INPUT &Request,
                                    std::vector<MDV2_RECORD> &Records,
                                    MDV2_LIST_HEADER *ResultHeader = nullptr) {
   Records.clear();
@@ -2088,7 +2184,7 @@ inline bool QueryMultiDrvRecordsV2(DWORD Ioctl, const MDV2_QUERY_INPUT &Request,
                              static_cast<DWORD>(Buffer.size()), &BytesReturned))
       return false;
     if (BytesReturned < sizeof(MDV2_LIST_HEADER)) {
-      G_LastMultiDrvError = ERROR_INVALID_DATA;
+      G_LastAegisCoreError = ERROR_INVALID_DATA;
       return false;
     }
     const auto *Output =
@@ -2100,7 +2196,7 @@ inline bool QueryMultiDrvRecordsV2(DWORD Ioctl, const MDV2_QUERY_INPUT &Request,
                 static_cast<size_t>(LastHeader.ReturnedCount) *
                     sizeof(MDV2_RECORD) >
             BytesReturned) {
-      G_LastMultiDrvError = ERROR_INVALID_DATA;
+      G_LastAegisCoreError = ERROR_INVALID_DATA;
       return false;
     }
     Records.insert(Records.end(), Output->Records,
@@ -2111,7 +2207,7 @@ inline bool QueryMultiDrvRecordsV2(DWORD Ioctl, const MDV2_QUERY_INPUT &Request,
   }
   if (ResultHeader != nullptr)
     *ResultHeader = LastHeader;
-  G_LastMultiDrvError = MultiDrvNtStatusToWin32(LastHeader.Status);
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(LastHeader.Status);
   return LastHeader.Version == MDV2_PROTOCOL_VERSION;
 }
 
@@ -2121,7 +2217,7 @@ inline bool QueryProcessRecordsV2(ULONG ProcessId, DWORD Ioctl,
   MDV2_QUERY_INPUT Request{};
   Request.ProcessId = ProcessId;
   Request.MaxEntries = MDV2_MAX_PAGE_RECORDS;
-  return QueryMultiDrvRecordsV2(Ioctl, Request, Records, Header);
+  return QueryAegisCoreRecordsV2(Ioctl, Request, Records, Header);
 }
 
 inline bool QueryNamedDriverRecordsV2(const std::wstring &DriverName,
@@ -2129,9 +2225,126 @@ inline bool QueryNamedDriverRecordsV2(const std::wstring &DriverName,
                                       MDV2_LIST_HEADER *Header = nullptr) {
   MDV2_QUERY_INPUT Request{};
   Request.MaxEntries = MDV2_MAX_PAGE_RECORDS;
-  wcsncpy_s(Request.Name, DriverName.c_str(), _TRUNCATE);
-  return QueryMultiDrvRecordsV2(IOCTL_QUERY_DRIVER_V2, Request, Records,
+  // The kernel query accepts a driver object name, but adds the
+  // "\\Driver\\" namespace itself.  Callers often have either a service
+  // name or an already-qualified object path, so normalize both forms here.
+  std::wstring Normalized = DriverName;
+  while (!Normalized.empty() &&
+         (Normalized.front() == L' ' || Normalized.front() == L'\t'))
+    Normalized.erase(Normalized.begin());
+  constexpr wchar_t DriverPrefix[] = L"\\Driver\\";
+  if (Normalized.size() >= _countof(DriverPrefix) - 1 &&
+      _wcsnicmp(Normalized.c_str(), DriverPrefix,
+                _countof(DriverPrefix) - 1) == 0)
+    Normalized.erase(0, _countof(DriverPrefix) - 1);
+  wcsncpy_s(Request.Name, Normalized.c_str(), _TRUNCATE);
+  return QueryAegisCoreRecordsV2(IOCTL_QUERY_DRIVER_V2, Request, Records,
                                 Header);
+}
+
+inline bool QueryHookCapabilities(HOOK_CAPABILITIES_OUTPUT *Output) {
+  if (Output == nullptr) {
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
+    return false;
+  }
+  ZeroMemory(Output, sizeof(*Output));
+  DWORD BytesReturned = 0;
+  const BOOL Ok = SendIoctlWithOutput(IOCTL_HOOK_QUERY_CAPABILITIES, nullptr, 0,
+                                      Output, sizeof(*Output), &BytesReturned);
+  if (!Ok)
+    return false;
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output->LastStatus);
+  return Output->Version == HOOK_PROTOCOL_VERSION &&
+         Output->Size >= sizeof(HOOK_CAPABILITIES_OUTPUT);
+}
+
+inline bool QueryHooks(std::vector<HOOK_RECORD> &Records) {
+  Records.clear();
+  ULONG Capacity = 64;
+  for (int Attempt = 0; Attempt < 4; ++Attempt) {
+    const size_t Bytes = FIELD_OFFSET(HOOK_ENUM_OUTPUT, Records) +
+                         static_cast<size_t>(Capacity) * sizeof(HOOK_RECORD);
+    std::vector<unsigned char> Buffer(Bytes);
+    DWORD BytesReturned = 0;
+    if (!SendIoctlWithOutput(IOCTL_HOOK_ENUM, nullptr, 0, Buffer.data(),
+                             static_cast<DWORD>(Buffer.size()),
+                             &BytesReturned))
+      return false;
+    if (BytesReturned < FIELD_OFFSET(HOOK_ENUM_OUTPUT, Records)) {
+      G_LastAegisCoreError = ERROR_INVALID_DATA;
+      return false;
+    }
+    const auto *Output = reinterpret_cast<const HOOK_ENUM_OUTPUT *>(Buffer.data());
+    if (Output->Version != HOOK_PROTOCOL_VERSION || Output->Count > Capacity) {
+      G_LastAegisCoreError = ERROR_INVALID_DATA;
+      return false;
+    }
+    Records.assign(Output->Records, Output->Records + Output->Count);
+    return true;
+  }
+  G_LastAegisCoreError = ERROR_INSUFFICIENT_BUFFER;
+  return false;
+}
+
+inline bool OperateHook(HOOK_REQUEST Request, HOOK_RECORD *Result = nullptr) {
+  Request.Size = sizeof(Request);
+  Request.Version = HOOK_PROTOCOL_VERSION;
+  if (Request.Operation == HOOK_OP_RESTORE_ALL) {
+    const BOOL Ok = SendIoctl(IOCTL_HOOK_RESTORE_ALL, nullptr, 0);
+    if (Result != nullptr)
+      ZeroMemory(Result, sizeof(*Result));
+    return Ok;
+  }
+  const DWORD Ioctl = Request.Operation == HOOK_OP_ENABLE
+                          ? IOCTL_HOOK_ENABLE
+                          : (Request.Operation == HOOK_OP_DISABLE
+                                 ? IOCTL_HOOK_DISABLE
+                                 : (Request.Operation == HOOK_OP_REMOVE
+                                        ? IOCTL_HOOK_REMOVE
+                                        : (Request.Operation == HOOK_OP_VERIFY
+                                               ? IOCTL_HOOK_VERIFY
+                                               : IOCTL_HOOK_INSTALL)));
+  DWORD BytesReturned = 0;
+  HOOK_RECORD Output{};
+  const BOOL Ok = SendIoctlWithOutput(Ioctl, &Request,
+                                      sizeof(Request), &Output, sizeof(Output),
+                                      &BytesReturned);
+  if (!Ok)
+    return false;
+  if (Result != nullptr)
+    *Result = Output;
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output.Status);
+  return Output.Status >= 0;
+}
+
+inline bool OperateHookById(DWORD Ioctl, ULONG Operation, ULONG HookId,
+                            HOOK_RECORD *Result = nullptr) {
+  HOOK_REQUEST Request{};
+  Request.Size = sizeof(Request);
+  Request.Version = HOOK_PROTOCOL_VERSION;
+  Request.Operation = Operation;
+  Request.HookId = HookId;
+  DWORD BytesReturned = 0;
+  HOOK_RECORD Output{};
+  const BOOL Ok = SendIoctlWithOutput(Ioctl, &Request, sizeof(Request), &Output,
+                                      sizeof(Output), &BytesReturned);
+  if (!Ok)
+    return false;
+  if (Result != nullptr)
+    *Result = Output;
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output.Status);
+  return Output.Status >= 0;
+}
+
+inline bool InstallDriverDispatchHook(const std::wstring &DriverName,
+                                      ULONG MajorFunction,
+                                      HOOK_RECORD *Result = nullptr) {
+  HOOK_REQUEST Request{};
+  Request.Operation = HOOK_OP_INSTALL;
+  Request.TargetKind = HOOK_TARGET_DRIVER_DISPATCH;
+  Request.MajorFunction = MajorFunction;
+  wcsncpy_s(Request.DriverName, DriverName.c_str(), _TRUNCATE);
+  return OperateHook(Request, Result);
 }
 
 inline bool QueryAdvancedRecordsV3(ULONG Kind, ULONG ProcessId,
@@ -2144,14 +2357,14 @@ inline bool QueryAdvancedRecordsV3(ULONG Kind, ULONG ProcessId,
   Request.Flags = TargetId;
   Request.Cursor = Cursor;
   Request.MaxEntries = MDV2_MAX_PAGE_RECORDS;
-  return QueryMultiDrvRecordsV2(IOCTL_QUERY_ADVANCED_V3, Request, Records,
+  return QueryAegisCoreRecordsV2(IOCTL_QUERY_ADVANCED_V3, Request, Records,
                                 Header);
 }
 
 inline bool AdvancedOperationV3(const ADVANCED_OPERATION_INPUT &Request,
                                 ADVANCED_OPERATION_OUTPUT *Output) {
   if (Output == nullptr) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return false;
   }
   ADVANCED_OPERATION_INPUT Input = Request;
@@ -2164,11 +2377,11 @@ inline bool AdvancedOperationV3(const ADVANCED_OPERATION_INPUT &Request,
     return false;
   if (BytesReturned != sizeof(*Output) || Output->Size != sizeof(*Output) ||
       Output->Version != 3) {
-    G_LastMultiDrvError = ERROR_INVALID_DATA;
+    G_LastAegisCoreError = ERROR_INVALID_DATA;
     return false;
   }
-  G_LastMultiDrvDetails.assign(Output->Detail);
-  G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
+  G_LastAegisCoreDetails.assign(Output->Detail);
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output->Status);
   return Output->Status == 0;
 }
 
@@ -2207,7 +2420,7 @@ BOOLEAN LoadDriverKernel(const WCHAR *ServiceName, const WCHAR *ImagePath,
                          PDRIVER_CONTROL_OUTPUT Output = NULL) {
   if (ServiceName == NULL || ServiceName[0] == L'\0' || ImagePath == NULL ||
       ImagePath[0] == L'\0') {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2221,8 +2434,8 @@ BOOLEAN LoadDriverKernel(const WCHAR *ServiceName, const WCHAR *ImagePath,
                            sizeof(Result), &BytesReturned))
     return FALSE;
 
-  G_LastMultiDrvDetails.assign(Result.Message);
-  G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.NtStatus);
+  G_LastAegisCoreDetails.assign(Result.Message);
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.NtStatus);
   if (Output != NULL)
     *Output = Result;
   return Result.NtStatus == 0;
@@ -2231,7 +2444,7 @@ BOOLEAN LoadDriverKernel(const WCHAR *ServiceName, const WCHAR *ImagePath,
 BOOLEAN UnloadDriverKernel(const WCHAR *ServiceName, BOOLEAN DeleteOnUnload,
                            PDRIVER_CONTROL_OUTPUT Output = NULL) {
   if (ServiceName == NULL || ServiceName[0] == L'\0') {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2245,8 +2458,8 @@ BOOLEAN UnloadDriverKernel(const WCHAR *ServiceName, BOOLEAN DeleteOnUnload,
                            &Result, sizeof(Result), &BytesReturned))
     return FALSE;
 
-  G_LastMultiDrvDetails.assign(Result.Message);
-  G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.NtStatus);
+  G_LastAegisCoreDetails.assign(Result.Message);
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.NtStatus);
   if (Output != NULL)
     *Output = Result;
   return Result.NtStatus == 0;
@@ -2254,7 +2467,7 @@ BOOLEAN UnloadDriverKernel(const WCHAR *ServiceName, BOOLEAN DeleteOnUnload,
 
 BOOLEAN SetProcessPreviousMode(ULONG ProcessId) {
   if (ProcessId == 0 || ProcessId == 4) {
-    G_LastMultiDrvError = ERROR_ACCESS_DENIED;
+    G_LastAegisCoreError = ERROR_ACCESS_DENIED;
     return FALSE;
   }
 
@@ -2269,14 +2482,14 @@ BOOLEAN KernelReadMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
   if (BytesRead)
     *BytesRead = 0;
   if (Buffer == NULL || Size == 0) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
   DWORD BufSz = sizeof(KERNEL_READ_OUTPUT) + Size;
   PKERNEL_READ_OUTPUT Output = (PKERNEL_READ_OUTPUT)malloc(BufSz);
   if (Output == NULL) {
-    G_LastMultiDrvError = ERROR_NOT_ENOUGH_MEMORY;
+    G_LastAegisCoreError = ERROR_NOT_ENOUGH_MEMORY;
     return FALSE;
   }
   ZeroMemory(Output, BufSz);
@@ -2299,7 +2512,7 @@ BOOLEAN KernelReadMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
     if (BytesRead)
       *BytesRead = ActualRead;
   } else if (Success && Output->Status != 0) {
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output->Status);
     Success = FALSE;
   }
 
@@ -2310,14 +2523,14 @@ BOOLEAN KernelReadMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
 BOOLEAN KernelWriteMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
                           KRNL_MEMRW_METHOD Method = KrnlMemRwAuto) {
   if (Buffer == NULL || Size == 0) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
   DWORD BufSz = sizeof(KERNEL_WRITE_INPUT) + Size;
   PKERNEL_WRITE_INPUT Input = (PKERNEL_WRITE_INPUT)malloc(BufSz);
   if (Input == NULL) {
-    G_LastMultiDrvError = ERROR_NOT_ENOUGH_MEMORY;
+    G_LastAegisCoreError = ERROR_NOT_ENOUGH_MEMORY;
     return FALSE;
   }
 
@@ -2342,7 +2555,7 @@ BOOLEAN DisableDse(PDSE_CONTROL_OUTPUT Output = NULL) {
     *Output = Result;
 
   if (Success && Result.Status != 0) {
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.Status);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
     return FALSE;
   }
 
@@ -2360,7 +2573,7 @@ BOOLEAN RestoreDse(PDSE_CONTROL_OUTPUT Output = NULL) {
     *Output = Result;
 
   if (Success && Result.Status != 0) {
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.Status);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
     return FALSE;
   }
 
@@ -2369,7 +2582,7 @@ BOOLEAN RestoreDse(PDSE_CONTROL_OUTPUT Output = NULL) {
 
 BOOLEAN QueryDse(PDSE_CONTROL_OUTPUT Output) {
   if (Output == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2379,7 +2592,7 @@ BOOLEAN QueryDse(PDSE_CONTROL_OUTPUT Output) {
                                         sizeof(*Output), &BytesReturned);
 
   if (Success && Output->Status != 0) {
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output->Status);
     return FALSE;
   }
 
@@ -2392,7 +2605,7 @@ BOOLEAN DisableDebug() { return SendIoctl(IOCTL_DISABLE_DEBUG, NULL, 0); }
 
 BOOLEAN QueryDebugState(PDEBUG_STATE_OUTPUT Output) {
   if (Output == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2403,7 +2616,7 @@ BOOLEAN QueryDebugState(PDEBUG_STATE_OUTPUT Output) {
                           sizeof(*Output), &BytesReturned);
 
   if (Success && Output->Status != 0) {
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output->Status);
     return FALSE;
   }
 
@@ -2422,7 +2635,7 @@ BOOLEAN DisablePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
     *Output = Result;
 
   if (Success && Result.Status != 0) {
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.Status);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
     return FALSE;
   }
 
@@ -2441,7 +2654,7 @@ BOOLEAN RestorePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
     *Output = Result;
 
   if (Success && Result.Status != 0) {
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Result.Status);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
     return FALSE;
   }
 
@@ -2450,7 +2663,7 @@ BOOLEAN RestorePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
 
 BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output) {
   if (Output == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2460,7 +2673,7 @@ BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output) {
                                         sizeof(*Output), &BytesReturned);
 
   if (Success && Output->Status != 0) {
-    G_LastMultiDrvError = MultiDrvNtStatusToWin32(Output->Status);
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output->Status);
     return FALSE;
   }
 
@@ -2470,10 +2683,10 @@ BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output) {
 BOOL EnumerateWindowsKernel(_Out_writes_bytes_all_(BufferSize) PVOID Buffer,
                             _In_ ULONG BufferSize,
                             _Out_ PULONG EntriesReturned) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (Buffer == NULL || BufferSize < sizeof(KERNEL_WINDOW_ENUM_OUTPUT) ||
       EntriesReturned == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2492,7 +2705,7 @@ BOOL EnumerateWindowsKernel(_Out_writes_bytes_all_(BufferSize) PVOID Buffer,
 BOOL WindowOperationKernel(ULONG ProcessId, ULONG64 Hwnd, ULONG Operation,
                            _In_opt_ PCWSTR NewTitle, LONG NewX, LONG NewY,
                            LONG NewWidth, LONG NewHeight, ULONG Flags) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   KERNEL_WINDOW_OPERATION_INPUT Input = {};
   Input.ProcessId = ProcessId;
   Input.Hwnd = Hwnd;
@@ -2561,9 +2774,9 @@ FORCEINLINE BOOL WindowRemoveTopmost(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0) {
 
 /* ---- Command Line ---- */
 BOOL GetProcessCommandLine(ULONG ProcessId, PWCHAR Buffer, ULONG MaxLen) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (Buffer == NULL || MaxLen < 2) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
   Buffer[0] = L'\0';
@@ -2589,7 +2802,7 @@ BOOL GetProcessCommandLine(ULONG ProcessId, PWCHAR Buffer, ULONG MaxLen) {
 
 /* ---- Service ---- */
 BOOL ServiceKernelOp(PCWSTR Name, ULONG Op, ULONG SvcType) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   SERVICE_OPERATION_INPUT Input = {};
   Input.Operation = Op;
   Input.ServiceType = SvcType;
@@ -2617,7 +2830,7 @@ FORCEINLINE BOOL ServiceDelete(PCWSTR Name) {
 BOOL RegistryKernelOp(PCWSTR KeyPath, ULONG Op, PCWSTR ValueName,
                       ULONG ValueType, PVOID ValueData, ULONG ValueSize,
                       PVOID OutBuf, ULONG OutSize, PULONG Returned) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   ULONG InSize = sizeof(REG_OPERATION_INPUT) + ValueSize;
   PBYTE InBuf = new BYTE[InSize];
   RtlZeroMemory(InBuf, InSize);
@@ -2662,7 +2875,7 @@ FORCEINLINE BOOL RegDeleteValueKernel(PCWSTR KeyPath, PCWSTR ValName) {
 /* ---- Session ---- */
 BOOL SessionKernelOp(ULONG SessionId, ULONG Op, PVOID OutBuf, ULONG OutSize,
                      PULONG Returned) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   SESSION_OPERATION_INPUT Input = {SessionId, Op};
   DWORD BytesReturned = 0;
   BOOL Success =
@@ -2683,7 +2896,7 @@ FORCEINLINE BOOL LogoffSession(ULONG SessionId) {
 /* ---- Mitigation ---- */
 BOOL QueryMitigationKernel(ULONG Pid, PVOID OutBuf, ULONG OutSize,
                            PULONG Returned) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   DWORD BytesReturned = 0;
   BOOL Success =
       SendIoctlWithOutput(IOCTL_MITIGATION_QUERY, &Pid, sizeof(ULONG), OutBuf,
@@ -2694,14 +2907,14 @@ BOOL QueryMitigationKernel(ULONG Pid, PVOID OutBuf, ULONG OutSize,
 }
 
 BOOL SetMitigationKernel(ULONG Pid, ULONG PolicyId, ULONG64 Flags) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   MITIGATION_SET_INPUT Input = {Pid, PolicyId, Flags};
   return SendIoctl(IOCTL_MITIGATION_SET, &Input, sizeof(Input));
 }
 
 /* ---- Sync Objects ---- */
 BOOL EnumSyncObjectsKernel(PVOID OutBuf, ULONG OutSize, PULONG Count) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   DWORD BytesReturned = 0;
   BOOL Success = SendIoctlWithOutput(IOCTL_ENUM_SYNC_OBJECTS, NULL, 0, OutBuf,
                                      OutSize, &BytesReturned);
@@ -2713,7 +2926,7 @@ BOOL EnumSyncObjectsKernel(PVOID OutBuf, ULONG OutSize, PULONG Count) {
 /* ---- Firewall ---- */
 BOOL FirewallKernelOp(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port,
                       ULONG Protocol) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   FIREWALL_OPERATION_INPUT Input = {};
   Input.Operation = Op;
   Input.Action = Action;
@@ -2725,40 +2938,40 @@ BOOL FirewallKernelOp(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port,
 
 /* ---- Window Protect ---- */
 BOOL ProtectWindowKernel(ULONG Pid, ULONG64 Hwnd, ULONG Flags) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   WINDOW_PROTECT_INPUT Input = {Pid, Hwnd, Flags ? Flags : WINPROT_ALL};
   return SendIoctl(IOCTL_ADD_WINDOW_PROTECT, &Input, sizeof(Input));
 }
 
 BOOL UnprotectWindowKernel(ULONG Pid, ULONG64 Hwnd) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   WINDOW_PROTECT_INPUT Input = {Pid, Hwnd, 0};
   return SendIoctl(IOCTL_REMOVE_WINDOW_PROTECT, &Input, sizeof(Input));
 }
 
 /* ---- Injection Protection (no PPL) ---- */
 BOOL AddInjectionProtectKernel(ULONG Pid) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   INJECTION_PROTECT_INPUT Input = {Pid};
   return SendIoctl(IOCTL_ADD_INJECTION_PROTECTION, &Input, sizeof(Input));
 }
 
 BOOL RemoveInjectionProtectKernel(ULONG Pid) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   INJECTION_PROTECT_INPUT Input = {Pid};
   return SendIoctl(IOCTL_REMOVE_INJECTION_PROTECTION, &Input, sizeof(Input));
 }
 
 /* ---- Handle Operations ---- */
 BOOL ForceCloseHandleKernel(ULONG ProcessId, ULONG HandleValue) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   HANDLE_CLOSE_INPUT Input = {ProcessId, HandleValue};
   return SendIoctl(IOCTL_HANDLE_CLOSE, &Input, sizeof(Input));
 }
 
 BOOL DowngradeHandleKernel(ULONG ProcessId, ULONG HandleValue,
                            ACCESS_MASK NewAccess, ULONG *OutNewHandle) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (OutNewHandle)
     *OutNewHandle = 0;
 
@@ -2775,7 +2988,7 @@ BOOL DowngradeHandleKernel(ULONG ProcessId, ULONG HandleValue,
 BOOL DuplicateAndDowngradeHandleKernel(ULONG SourcePid, ULONG SourceHandle,
                                        ULONG TargetPid, ACCESS_MASK NewAccess,
                                        ULONG_PTR *OutNewHandle) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (OutNewHandle)
     *OutNewHandle = 0;
 
@@ -2791,7 +3004,7 @@ BOOL DuplicateAndDowngradeHandleKernel(ULONG SourcePid, ULONG SourceHandle,
   if (OutNewHandle)
     *OutNewHandle = Output.NewHandle;
 
-  G_LastMultiDrvError = Output.Status;
+  G_LastAegisCoreError = Output.Status;
   return NT_SUCCESS(Output.Status);
 }
 
@@ -2804,9 +3017,9 @@ BOOLEAN SetIdtLimit() {
 /* ---- Thread Hijack Operations ---- */
 
 BOOLEAN HijackThreadContext(ULONG ThreadId, ULONG_PTR TargetRip) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (ThreadId == 0 || TargetRip == 0) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2815,9 +3028,9 @@ BOOLEAN HijackThreadContext(ULONG ThreadId, ULONG_PTR TargetRip) {
 }
 
 BOOLEAN HijackThreadTrapFrame(ULONG ThreadId, ULONG_PTR TargetRip) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (ThreadId == 0 || TargetRip == 0) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2829,9 +3042,9 @@ BOOLEAN RemoteCallViaKernel(ULONG ThreadId, ULONG_PTR Function,
                             ULONG_PTR Arg1, ULONG_PTR Arg2,
                             ULONG_PTR Arg3, ULONG_PTR Arg4,
                             PLONG OutResult) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (ThreadId == 0 || Function == 0 || OutResult == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
@@ -2852,16 +3065,16 @@ BOOLEAN RemoteCallViaKernel(ULONG ThreadId, ULONG_PTR Function,
 
 BOOLEAN InjectShellcode(ULONG ProcessId, const UCHAR *Shellcode, ULONG Size,
                         ULONG_PTR *OutAddress) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (ProcessId == 0 || Shellcode == NULL || Size == 0 || OutAddress == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
   DWORD TotalSize = sizeof(SHELLCODE_INJECT_INPUT) + Size;
   PUCHAR Buffer = (PUCHAR)malloc(TotalSize);
   if (Buffer == NULL) {
-    G_LastMultiDrvError = ERROR_OUTOFMEMORY;
+    G_LastAegisCoreError = ERROR_OUTOFMEMORY;
     return FALSE;
   }
 
@@ -2882,16 +3095,16 @@ BOOLEAN InjectShellcode(ULONG ProcessId, const UCHAR *Shellcode, ULONG Size,
 
 BOOLEAN InjectAndHijack(ULONG ThreadId, const UCHAR *Shellcode, ULONG Size,
                         ULONG_PTR *OutAddress) {
-  G_LastMultiDrvError = ERROR_SUCCESS;
+  G_LastAegisCoreError = ERROR_SUCCESS;
   if (ThreadId == 0 || Shellcode == NULL || Size == 0 || OutAddress == NULL) {
-    G_LastMultiDrvError = ERROR_INVALID_PARAMETER;
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
 
   DWORD TotalSize = sizeof(SHELLCODE_INJECT_INPUT) + Size;
   PUCHAR Buffer = (PUCHAR)malloc(TotalSize);
   if (Buffer == NULL) {
-    G_LastMultiDrvError = ERROR_OUTOFMEMORY;
+    G_LastAegisCoreError = ERROR_OUTOFMEMORY;
     return FALSE;
   }
 

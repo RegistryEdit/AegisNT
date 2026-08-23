@@ -6,7 +6,7 @@
 #include <windows.h>
 #include <winioctl.h>
 
-#include "..\\Drivers\\DiskDrv\\DiskDrvShared.h"
+#include "..\\Drivers\\Ring0Core\\DiskDrvShared.h"
 
 static constexpr const wchar_t *DISKDRV_USER_DEVICE_NAME = L"\\\\.\\DiskDrv";
 
@@ -422,6 +422,28 @@ static inline bool DiskDrvAllowOnce(const DISKDRV_ALLOW_ONCE_INPUT &Input) {
       DeviceIoControl(Device, IOCTL_DISKDRV_ALLOW_ONCE,
                       const_cast<DISKDRV_ALLOW_ONCE_INPUT *>(&Input),
                       sizeof(Input), nullptr, 0, &Bytes, nullptr);
+  const DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(Device);
+  SetLastError(Error);
+  return Ok == TRUE;
+}
+
+static inline bool DiskDrvDecideRequest(ULONGLONG RequestId, bool Allow) {
+  if (RequestId == 0) {
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return false;
+  }
+
+  HANDLE Device = OpenDiskDrvDevice();
+  if (Device == INVALID_HANDLE_VALUE)
+    return false;
+
+  DISKDRV_DECIDE_REQUEST_INPUT Input{};
+  Input.RequestId = RequestId;
+  Input.Allow = Allow ? TRUE : FALSE;
+  DWORD Bytes = 0;
+  const BOOL Ok = DeviceIoControl(Device, IOCTL_DISKDRV_DECIDE_REQUEST, &Input,
+                                  sizeof(Input), nullptr, 0, &Bytes, nullptr);
   const DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
   CloseHandle(Device);
   SetLastError(Error);

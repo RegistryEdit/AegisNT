@@ -139,7 +139,7 @@ static constexpr const WCHAR *EventTypeToString(MonitorEventType T) {
     return L"Unknown";
   }
 }
-#define USER_DEVICE_NAME L"\\\\.\\MonitorDrv"
+#define USER_DEVICE_NAME L"\\\\.\\AegisSentinel"
 #define IOCTL_MONITOR_GET_EVENT                                                \
   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_MONITOR_GET_FILE_EVENT                                           \
@@ -158,24 +158,128 @@ static constexpr const WCHAR *EventTypeToString(MonitorEventType T) {
   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_MONITOR_QUERY_STATS_V2                                           \
   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_RULE_OPERATION_V3                                        \
+  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_MONITOR_ENUM_RULES_V3                                            \
+  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+enum MonitorRuleType : ULONG {
+  MonitorRuleFile = 1,
+  MonitorRuleRegistry = 2,
+  MonitorRuleNetwork = 3,
+};
+
+enum MonitorRuleAction : ULONG {
+  MonitorRuleAudit = 1,
+  MonitorRuleBlock = 2,
+};
+
+enum MonitorRuleOperation : ULONG {
+  MonitorRuleAdd = 1,
+  MonitorRuleRemove = 2,
+  MonitorRuleClear = 3,
+};
+
+constexpr ULONG MONITOR_MAX_RULES = 64;
+
+#pragma pack(push, 1)
+struct MonitorRuleV3 {
+  ULONG Id;
+  ULONG Type;
+  ULONG Action;
+  ULONG ProcessId;
+  ULONG Protocol;
+  ULONG RemotePort;
+  ULONG64 HitCount;
+  WCHAR Target[260];
+};
+
+struct MonitorRuleOperationV3 {
+  ULONG Size;
+  ULONG Version;
+  ULONG Operation;
+  ULONG Reserved;
+  MonitorRuleV3 Rule;
+};
+
+struct MonitorRuleListV3 {
+  ULONG Size;
+  ULONG Version;
+  ULONG Count;
+  ULONG Reserved;
+  MonitorRuleV3 Rules[MONITOR_MAX_RULES];
+};
+#pragma pack(pop)
+
+static_assert(sizeof(MonitorRuleV3) == 552, "Monitor rule ABI mismatch");
+static_assert(sizeof(MonitorRuleOperationV3) == 568,
+              "Monitor rule operation ABI mismatch");
+static_assert(sizeof(MonitorRuleListV3) == 35344,
+              "Monitor rule list ABI mismatch");
 
 enum class MonitorChannel : DWORD {
   System = IOCTL_MONITOR_GET_EVENT,
   File = IOCTL_MONITOR_GET_FILE_EVENT,
 };
 
-static inline HANDLE OpenMonitorDrvDevice() {
+static inline HANDLE OpenAegisSentinelDevice() {
   return CreateFileW(USER_DEVICE_NAME, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 }
 
-static inline bool MonitorDrvSetWatchDirectory(const wchar_t *NtDirectoryPath) {
+static inline bool AegisSentinelOperateRule(MonitorRuleOperation Operation,
+                                         const MonitorRuleV3 *Rule = nullptr) {
+  MonitorRuleOperationV3 Input{};
+  Input.Size = sizeof(Input);
+  Input.Version = MONITOR_PROTOCOL_VERSION;
+  Input.Operation = Operation;
+  if (Rule)
+    Input.Rule = *Rule;
+
+  HANDLE Device = OpenAegisSentinelDevice();
+  if (Device == INVALID_HANDLE_VALUE)
+    return false;
+  DWORD Bytes = 0;
+  const BOOL Ok = DeviceIoControl(Device, IOCTL_MONITOR_RULE_OPERATION_V3,
+                                  &Input, sizeof(Input), nullptr, 0, &Bytes,
+                                  nullptr);
+  const DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(Device);
+  SetLastError(Error);
+  return Ok == TRUE;
+}
+
+static inline bool AegisSentinelEnumerateRules(MonitorRuleListV3 *Rules) {
+  if (!Rules) {
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return false;
+  }
+  HANDLE Device = OpenAegisSentinelDevice();
+  if (Device == INVALID_HANDLE_VALUE)
+    return false;
+  ZeroMemory(Rules, sizeof(*Rules));
+  DWORD Bytes = 0;
+  const BOOL Ok = DeviceIoControl(Device, IOCTL_MONITOR_ENUM_RULES_V3, nullptr,
+                                  0, Rules, sizeof(*Rules), &Bytes, nullptr);
+  const DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(Device);
+  if (!Ok || Bytes < offsetof(MonitorRuleListV3, Rules) ||
+      Rules->Version != MONITOR_PROTOCOL_VERSION ||
+      Rules->Count > MONITOR_MAX_RULES) {
+    SetLastError(Ok ? ERROR_INVALID_DATA : Error);
+    return false;
+  }
+  SetLastError(ERROR_SUCCESS);
+  return true;
+}
+
+static inline bool AegisSentinelSetWatchDirectory(const wchar_t *NtDirectoryPath) {
   if (!NtDirectoryPath || !NtDirectoryPath[0]) {
     SetLastError(ERROR_INVALID_PARAMETER);
     return false;
   }
 
-  HANDLE Device = OpenMonitorDrvDevice();
+  HANDLE Device = OpenAegisSentinelDevice();
   if (Device == INVALID_HANDLE_VALUE) {
     return false;
   }
@@ -192,8 +296,8 @@ static inline bool MonitorDrvSetWatchDirectory(const wchar_t *NtDirectoryPath) {
   return Ok == TRUE;
 }
 
-static inline bool MonitorDrvClearWatchDirectory() {
-  HANDLE Device = OpenMonitorDrvDevice();
+static inline bool AegisSentinelClearWatchDirectory() {
+  HANDLE Device = OpenAegisSentinelDevice();
   if (Device == INVALID_HANDLE_VALUE) {
     return false;
   }
@@ -207,9 +311,9 @@ static inline bool MonitorDrvClearWatchDirectory() {
   return Ok == TRUE;
 }
 
-static inline bool MonitorDrvQueryWatchDirectory(std::wstring *DirectoryPath,
+static inline bool AegisSentinelQueryWatchDirectory(std::wstring *DirectoryPath,
                                                  bool *Active = nullptr) {
-  HANDLE Device = OpenMonitorDrvDevice();
+  HANDLE Device = OpenAegisSentinelDevice();
   if (Device == INVALID_HANDLE_VALUE) {
     return false;
   }
@@ -236,8 +340,8 @@ static inline bool MonitorDrvQueryWatchDirectory(std::wstring *DirectoryPath,
   return true;
 }
 
-static inline bool MonitorDrvSetFilterV2(const MonitorFilterV2 &Filter) {
-  HANDLE Device = OpenMonitorDrvDevice();
+static inline bool AegisSentinelSetFilterV2(const MonitorFilterV2 &Filter) {
+  HANDLE Device = OpenAegisSentinelDevice();
   if (Device == INVALID_HANDLE_VALUE)
     return false;
   MonitorFilterV2 Input = Filter;
@@ -256,12 +360,12 @@ static inline bool MonitorDrvSetFilterV2(const MonitorFilterV2 &Filter) {
   return Ok == TRUE;
 }
 
-static inline bool MonitorDrvQueryStatsV2(MonitorStatsV2 *Stats) {
+static inline bool AegisSentinelQueryStatsV2(MonitorStatsV2 *Stats) {
   if (!Stats) {
     SetLastError(ERROR_INVALID_PARAMETER);
     return false;
   }
-  HANDLE Device = OpenMonitorDrvDevice();
+  HANDLE Device = OpenAegisSentinelDevice();
   if (Device == INVALID_HANDLE_VALUE)
     return false;
   ZeroMemory(Stats, sizeof(*Stats));
@@ -285,9 +389,9 @@ public:
   explicit KernelMonitorV2(bool Network = false)
       : M_Ioctl(Network ? IOCTL_MONITOR_GET_NETWORK_EVENT_V2
                         : IOCTL_MONITOR_GET_EVENT_V2) {
-    M_Device = OpenMonitorDrvDevice();
+    M_Device = OpenAegisSentinelDevice();
     if (M_Device == INVALID_HANDLE_VALUE)
-      throw std::runtime_error("Failed to open MonitorDrv device: " +
+      throw std::runtime_error("Failed to open AegisSentinel device: " +
                                std::to_string(GetLastError()));
   }
   ~KernelMonitorV2() {
@@ -340,10 +444,10 @@ public:
   explicit KernelMonitor(MonitorChannel Channel = MonitorChannel::System)
       : M_Device(INVALID_HANDLE_VALUE), M_Running(false),
         M_IoControlCode(static_cast<DWORD>(Channel)) {
-    M_Device = OpenMonitorDrvDevice();
+    M_Device = OpenAegisSentinelDevice();
     if (M_Device == INVALID_HANDLE_VALUE) {
-      throw std::runtime_error("Failed to open MonitorDrv device. "
-                               "Run 'sc start MonitorDrv' as Administrator. "
+      throw std::runtime_error("Failed to open AegisSentinel device. "
+                               "Run 'sc start Ring0Core' as Administrator. "
                                "Error: " +
                                std::to_string(GetLastError()));
     }

@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="ARM64" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="Ring0Core.vcxproj">
+    <Deploy />
+  </Project>
+</Solution>

@@ -2,8 +2,8 @@
 
 namespace AegisNT {
 
-const std::array<PageDefinition, 21> &PageDefinitions() {
-  static constexpr std::array<PageDefinition, 21> Pages{{
+const std::array<PageDefinition, 24> &PageDefinitions() {
+  static constexpr std::array<PageDefinition, 24> Pages{{
       {"Information",
        "Application overview, environment status, and system information.",
        Fluent::IconType::INFO},
@@ -31,6 +31,8 @@ const std::array<PageDefinition, 21> &PageDefinitions() {
        Fluent::IconType::LIBRARY},
       {"Console", "Integrated command-line console for debugging.",
        Fluent::IconType::COMMAND_PROMPT},
+      {"Chat", "Real-time chat client with online user list and private messaging.",
+       Fluent::IconType::CHAT},
       {"Settings", "Application settings and configuration options.",
        Fluent::IconType::SETTING},
       {"KernelInspector",
@@ -39,17 +41,21 @@ const std::array<PageDefinition, 21> &PageDefinitions() {
        Fluent::IconType::SEARCH},
       {"ServiceManager", "Windows services and kernel driver management.",
        Fluent::IconType::DEVELOPER_TOOLS},
-      {"HandleLab",
+      {"Handle",
        "Enumerate, correlate, and operate on system handles across processes.",
        Fluent::IconType::LINK},
-      {"SnapshotLab",
+      {"Snapshot",
        "Capture, persist, and compare process, driver, and callback snapshots.",
        Fluent::IconType::SEARCH},
       {"Disk", "DiskDrv protection, blocked events, and one-shot allow tokens.",
        Fluent::IconType::SAVE},
-{"KernelResearch",
+      {"KernelResearch",
         "Symbols, integrity baselines, big pool, objects, and address ownership.",
         Fluent::IconType::SEARCH},
+      {"Hook", "Install, inspect, verify, and restore kernel hooks.",
+       Fluent::IconType::DEVELOPER_TOOLS},
+      {"Account", "User account management and license server authentication.",
+       Fluent::IconType::PEOPLE},
   }};
   return Pages;
 }

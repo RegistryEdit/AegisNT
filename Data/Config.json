@@ -8,6 +8,11 @@
         "Version": "3.5.0",
         "Width": 1600
     },
+    "Chat": {
+        "ServerIP": "127.0.0.1",
+        "ServerPort": "1145",
+        "UserName": ""
+    },
     "Drivers": {
         "AutoLoad": true,
         "Paths": [

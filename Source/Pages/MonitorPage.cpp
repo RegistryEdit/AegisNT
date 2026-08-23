@@ -143,6 +143,7 @@ public:
     Tabs->addTab("network", "Network", Fluent::IconType::GLOBE);
     Tabs->addTab("http", "HTTP(S)", Fluent::IconType::LINK);
     Tabs->addTab("history", "History", Fluent::IconType::HISTORY);
+    Tabs->addTab("rules", "Rules", Fluent::IconType::EDIT);
     Layout->addWidget(Tabs);
     Pages = new QStackedWidget;
     Pages->addWidget(CreateSystemPage());
@@ -150,6 +151,7 @@ public:
     Pages->addWidget(CreateNetworkPage());
     Pages->addWidget(CreateHttpPage());
     Pages->addWidget(CreateHistoryPage());
+    Pages->addWidget(CreateRulesPage());
     Layout->addWidget(Pages, 1);
     QObject::connect(Tabs, &TabBar::currentChanged, Pages,
                      &QStackedWidget::setCurrentIndex);
@@ -173,6 +175,8 @@ public:
           PopulateHistory(HistorySearchEdit
                               ? HistorySearchEdit->text().trimmed()
                               : QString());
+        } else if (Index == 5) {
+          RefreshRules();
         }
       }
     });
@@ -188,6 +192,8 @@ public:
             PopulateHistory(HistorySearchEdit
                                 ? HistorySearchEdit->text().trimmed()
                                 : QString());
+          } else if (Index == 5) {
+            RefreshRules();
           }
         });
     UpdateTimer->start(150);
@@ -409,6 +415,213 @@ private:
     });
 
     return Page;
+  }
+
+  QWidget *CreateRulesPage() {
+    auto *Page = new QWidget;
+    auto *Layout = new QVBoxLayout(Page);
+    Layout->setContentsMargins(0, 0, 0, 0);
+    Layout->setSpacing(KCompactPageSpacing);
+    auto *Controls = new QHBoxLayout;
+    const auto MakeRuleField = [](const QString &Label, QWidget *Control) {
+      auto *Field = new QVBoxLayout;
+      Field->setContentsMargins(0, 0, 0, 0);
+      Field->setSpacing(2);
+      Field->addWidget(MakeLabel(Label, 11, KTextPrimary));
+      Field->addWidget(Control);
+      return Field;
+    };
+    RuleType = new ComboBox;
+    RuleType->addItems({"File", "Registry", "Network"});
+    RuleAction = new ComboBox;
+    RuleAction->addItems({"Audit", "Block"});
+    RulePid = new LineEdit;
+    ConfigureLineEdit(RulePid, "PID (0 = all)", 125);
+    RulePid->setText("0");
+    RuleProtocol = new LineEdit;
+    ConfigureLineEdit(RuleProtocol, "Protocol (0 = all)", 145);
+    RuleProtocol->setText("0");
+    RulePort = new LineEdit;
+    ConfigureLineEdit(RulePort, "Remote port (0 = all)", 175);
+    RulePort->setText("0");
+    RuleTarget = new LineEdit;
+    ConfigureLineEdit(RuleTarget, "Path or registry prefix");
+    auto *Add = MakeButton("Add rule", true);
+    auto *Remove = MakeButton("Remove rule");
+    auto *ClearAll = MakeButton("Clear rules");
+    auto *Refresh = MakeButton("Refresh rules");
+    for (PushButton *Button : {Add, Remove, ClearAll, Refresh})
+      ConfigureActionButton(Button);
+    RulesStatus = new BodyLabel("Rules not loaded");
+    Controls->addLayout(MakeRuleField("Rule type", RuleType));
+    Controls->addLayout(MakeRuleField("Rule action", RuleAction));
+    Controls->addLayout(MakeRuleField("Process ID", RulePid));
+    Controls->addLayout(MakeRuleField("Protocol", RuleProtocol));
+    Controls->addLayout(MakeRuleField("Remote port", RulePort));
+    Controls->addLayout(MakeRuleField("Target", RuleTarget), 1);
+    auto *Actions = new QVBoxLayout;
+    Actions->setContentsMargins(0, 0, 0, 0);
+    Actions->setSpacing(2);
+    Actions->addWidget(MakeLabel("Actions", 11, KTextPrimary));
+    auto *ActionButtons = new QHBoxLayout;
+    ActionButtons->setContentsMargins(0, 0, 0, 0);
+    ActionButtons->setSpacing(KCompactPageSpacing);
+    ActionButtons->addWidget(Add);
+    ActionButtons->addWidget(Remove);
+    ActionButtons->addWidget(ClearAll);
+    ActionButtons->addWidget(Refresh);
+    Actions->addLayout(ActionButtons);
+    Controls->addLayout(Actions);
+    Layout->addLayout(Controls);
+    RulesTable = MakeTable({"ID", "Type", "Action", "PID", "Protocol",
+                            "Remote Port", "Target", "Hit count"});
+    RulesTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    for (int Column = 0; Column < RulesTable->columnCount(); ++Column)
+      RulesTable->horizontalHeader()->setSectionResizeMode(
+          Column, Column == 6 ? QHeaderView::Stretch
+                              : QHeaderView::ResizeToContents);
+    Layout->addWidget(RulesTable, 1);
+    Layout->addWidget(RulesStatus);
+    QObject::connect(RuleType, &ComboBox::currentTextChanged, this,
+                     [this](const QString &) { UpdateRuleInputState(); });
+    QObject::connect(Add, &QPushButton::clicked, this, [this] { AddRule(); });
+    QObject::connect(Remove, &QPushButton::clicked, this,
+                     [this] { RemoveSelectedRule(); });
+    QObject::connect(ClearAll, &QPushButton::clicked, this,
+                     [this] { ClearRules(); });
+    QObject::connect(Refresh, &QPushButton::clicked, this,
+                     [this] { RefreshRules(); });
+    UpdateRuleInputState();
+    return Page;
+  }
+
+  void UpdateRuleInputState() {
+    const bool IsNetwork = RuleType && RuleType->currentIndex() == 2;
+    RuleProtocol->setEnabled(IsNetwork);
+    RulePort->setEnabled(IsNetwork);
+    RuleTarget->setEnabled(!IsNetwork);
+    RuleTarget->setPlaceholderText(IsNetwork ? "Network rules match PID, protocol, and port"
+                                             : "Path or registry prefix");
+  }
+
+  bool ParseRuleNumber(LineEdit *Input, ULONG Maximum, ULONG *Value,
+                       const QString &Field) {
+    bool Ok = false;
+    const qulonglong Number = Input->text().trimmed().toULongLong(&Ok);
+    if (!Ok || Number > Maximum) {
+      ShowErrorNotice(this, "Monitor", QString("Invalid %1.").arg(Field));
+      return false;
+    }
+    *Value = static_cast<ULONG>(Number);
+    return true;
+  }
+
+  void AddRule() {
+    MonitorRuleV3 Rule{};
+    Rule.Type = static_cast<MonitorRuleType>(RuleType->currentIndex() + 1);
+    Rule.Action = static_cast<MonitorRuleAction>(RuleAction->currentIndex() + 1);
+    if (!ParseRuleNumber(RulePid, static_cast<ULONG>(0xFFFFFFFFu),
+                         &Rule.ProcessId, "PID"))
+      return;
+    if (Rule.Type == MonitorRuleNetwork) {
+      if (!ParseRuleNumber(RuleProtocol, 255, &Rule.Protocol, "protocol") ||
+          !ParseRuleNumber(RulePort, 65535, &Rule.RemotePort, "remote port"))
+        return;
+    } else {
+      const std::wstring Target = RuleTarget->text().trimmed().toStdWString();
+      if (Target.empty()) {
+        ShowErrorNotice(this, "Monitor", "A path or registry prefix is required for this rule.");
+        return;
+      }
+      wcsncpy_s(Rule.Target, Target.c_str(), _TRUNCATE);
+    }
+    if (!AegisSentinelOperateRule(MonitorRuleAdd, &Rule)) {
+      ShowErrorNotice(this, "Monitor", QString("Failed to add rule (error %1).").arg(GetLastError()));
+      return;
+    }
+    ShowSuccessNotice(this, "Monitor", "Rule added.");
+    RefreshRules();
+  }
+
+  void RemoveSelectedRule() {
+    const int Row = RulesTable ? RulesTable->currentRow() : -1;
+    if (Row < 0 || Row >= static_cast<int>(Rules.size())) {
+      ShowErrorNotice(this, "Monitor", "Select a rule first.");
+      return;
+    }
+    MonitorRuleV3 Rule{};
+    Rule.Id = Rules[static_cast<size_t>(Row)].Id;
+    if (!AegisSentinelOperateRule(MonitorRuleRemove, &Rule)) {
+      ShowErrorNotice(this, "Monitor", QString("Failed to remove rule (error %1).").arg(GetLastError()));
+      return;
+    }
+    ShowSuccessNotice(this, "Monitor", "Rule removed.");
+    RefreshRules();
+  }
+
+  void ClearRules() {
+    if (QMessageBox::question(this, "Clear rules", "Remove all monitor rules?") != QMessageBox::Yes)
+      return;
+    if (!AegisSentinelOperateRule(MonitorRuleClear)) {
+      ShowErrorNotice(this, "Monitor", QString("Failed to clear rules (error %1).").arg(GetLastError()));
+      return;
+    }
+    ShowSuccessNotice(this, "Monitor", "All monitor rules were removed.");
+    RefreshRules();
+  }
+
+  void RefreshRules() {
+    if (!RulesTable || !RulesStatus)
+      return;
+    if (RulesRefreshing.exchange(true))
+      return;
+    RulesStatus->setText("Loading rules...");
+    QPointer<MonitorManagerPage> Page(this);
+    std::thread([Page] {
+      MonitorRuleListV3 List{};
+      const bool Ok = AegisSentinelEnumerateRules(&List);
+      const DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
+      if (!Page)
+        return;
+      QMetaObject::invokeMethod(
+          Page,
+          [Page, Ok, Error, List = std::move(List)]() mutable {
+            if (!Page)
+              return;
+            Page->RulesRefreshing = false;
+            if (!Ok) {
+              Page->RulesStatus->setText(
+                  QString("Rules unavailable (error %1)").arg(Error));
+              return;
+            }
+            Page->Rules.assign(List.Rules, List.Rules + List.Count);
+            Page->PopulateRules();
+          },
+          Qt::QueuedConnection);
+    }).detach();
+  }
+
+  void PopulateRules() {
+    SetTableRefreshEnabled(RulesTable, false);
+    RulesTable->clearContents();
+    RulesTable->setRowCount(static_cast<int>(Rules.size()));
+    for (int Row = 0; Row < static_cast<int>(Rules.size()); ++Row) {
+      const MonitorRuleV3 &Rule = Rules[static_cast<size_t>(Row)];
+      const QString Type = Rule.Type == MonitorRuleFile ? "File"
+                         : Rule.Type == MonitorRuleRegistry ? "Registry" : "Network";
+      const QString Action = Rule.Action == MonitorRuleBlock ? "Block" : "Audit";
+      RulesTable->setItem(Row, 0, new QTableWidgetItem(QString::number(Rule.Id)));
+      RulesTable->setItem(Row, 1, new QTableWidgetItem(Type));
+      RulesTable->setItem(Row, 2, new QTableWidgetItem(Action));
+      RulesTable->setItem(Row, 3, new QTableWidgetItem(QString::number(Rule.ProcessId)));
+      RulesTable->setItem(Row, 4, new QTableWidgetItem(QString::number(Rule.Protocol)));
+      RulesTable->setItem(Row, 5, new QTableWidgetItem(QString::number(Rule.RemotePort)));
+      RulesTable->setItem(Row, 6, new QTableWidgetItem(QString::fromWCharArray(Rule.Target)));
+      RulesTable->setItem(Row, 7, new QTableWidgetItem(QString::number(Rule.HitCount)));
+      RulesTable->setRowHeight(Row, KCompactTableRowHeight);
+    }
+    SetTableRefreshEnabled(RulesTable, true);
+    RulesStatus->setText(QString("Rules: %1").arg(Rules.size()));
   }
 
   void Populate(int Index) {
@@ -649,7 +862,7 @@ private:
           Filter.Flags |= MONITOR_FILTER_REGISTRY_PREVIEW;
           Filter.RegistryPreviewBytes = 256;
         }
-        MonitorDrvSetFilterV2(Filter);
+        AegisSentinelSetFilterV2(Filter);
         Kernel = std::make_unique<KernelMonitorV2>();
         Kernel->SetCallback([WeakState](const MonitorEventV2 &Event) {
           if (const auto State = WeakState.lock())
@@ -685,12 +898,36 @@ private:
     if (!KernelTelemetryStatus || !SystemRunning || !SystemMode ||
         SystemMode->currentIndex() != 1)
       return;
-    MonitorStatsV2 Stats{};
-    if (!MonitorDrvQueryStatsV2(&Stats)) {
-      KernelTelemetryStatus->setText(
-          QString("V3 telemetry unavailable (%1)").arg(GetLastError()));
+    if (KernelTelemetryRefreshing.exchange(true))
       return;
-    }
+    QPointer<MonitorManagerPage> Page(this);
+    std::thread([Page] {
+      MonitorStatsV2 Stats{};
+      const bool Ok = AegisSentinelQueryStatsV2(&Stats);
+      const DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
+      if (!Page)
+        return;
+      QMetaObject::invokeMethod(
+          Page,
+          [Page, Ok, Error, Stats = std::move(Stats)]() mutable {
+            if (!Page)
+              return;
+            Page->KernelTelemetryRefreshing = false;
+            if (!Page->SystemRunning || !Page->SystemMode ||
+                Page->SystemMode->currentIndex() != 1)
+              return;
+            if (!Ok) {
+              Page->KernelTelemetryStatus->setText(
+                  QString("V3 telemetry unavailable (%1)").arg(Error));
+              return;
+            }
+            Page->UpdateKernelTelemetry(Stats);
+          },
+          Qt::QueuedConnection);
+    }).detach();
+  }
+
+  void UpdateKernelTelemetry(const MonitorStatsV2 &Stats) {
     const quint64 Dropped = Stats.SystemDropped + Stats.FileDropped +
                             Stats.NetworkDropped;
     KernelTelemetryStatus->setText(
@@ -1087,6 +1324,17 @@ private:
   BodyLabel *HistoryStatus = nullptr;
   BodyLabel *KernelTelemetryStatus = nullptr;
   QTimer *HistorySearchDebounceTimer = nullptr;
+  ComboBox *RuleType = nullptr;
+  ComboBox *RuleAction = nullptr;
+  LineEdit *RulePid = nullptr;
+  LineEdit *RuleProtocol = nullptr;
+  LineEdit *RulePort = nullptr;
+  LineEdit *RuleTarget = nullptr;
+  TableWidget *RulesTable = nullptr;
+  BodyLabel *RulesStatus = nullptr;
+  std::vector<MonitorRuleV3> Rules;
+  std::atomic_bool RulesRefreshing = false;
+  std::atomic_bool KernelTelemetryRefreshing = false;
   void PopulateHistory(const QString &Query) {
     if (!HistoryTable)
       return;
@@ -1158,6 +1406,8 @@ protected:
       DisplayedVersions[Index] =
           SharedState->Streams[Index].Version.load(std::memory_order_relaxed);
       Populate(Index);
+    } else if (Index == 5) {
+      RefreshRules();
     }
   }
 

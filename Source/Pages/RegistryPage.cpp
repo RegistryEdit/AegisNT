@@ -1046,7 +1046,7 @@ private:
         Status = ERROR_SUCCESS;
         return true;
       }
-      Status = G_LastMultiDrvError;
+      Status = G_LastAegisCoreError;
     }
     HKEY Key = nullptr;
     DWORD Disposition = 0;
@@ -1074,7 +1074,7 @@ private:
         Status = ERROR_SUCCESS;
         return true;
       }
-      Status = G_LastMultiDrvError;
+      Status = G_LastAegisCoreError;
     }
     HKEY Key = nullptr;
     const LSTATUS OpenStatus = RegOpenKeyExW(
@@ -1104,7 +1104,7 @@ private:
         Status = ERROR_SUCCESS;
         return true;
       }
-      Status = G_LastMultiDrvError;
+      Status = G_LastAegisCoreError;
     }
     HKEY Key = nullptr;
     const LSTATUS OpenStatus = RegOpenKeyExW(
@@ -1132,10 +1132,10 @@ private:
     }
     const std::wstring WidePath = KernelPath.toStdWString();
     ProtectRegistryKey(WidePath.c_str());
-    if (G_LastMultiDrvError != ERROR_SUCCESS) {
+    if (G_LastAegisCoreError != ERROR_SUCCESS) {
       ShowErrorNotice(
           this, "Registry",
-          QString("Protection failed (error %1).").arg(G_LastMultiDrvError));
+          QString("Protection failed (error %1).").arg(G_LastAegisCoreError));
       return;
     }
     const auto Match = std::find_if(
@@ -1194,7 +1194,7 @@ private:
     for (const QString &KernelPath : KernelPaths) {
       const std::wstring WidePath = KernelPath.toStdWString();
       UnprotectRegistryKey(WidePath.c_str());
-      if (G_LastMultiDrvError != ERROR_SUCCESS)
+      if (G_LastAegisCoreError != ERROR_SUCCESS)
         Failures.append(KernelPath);
       else {
         const auto Match =

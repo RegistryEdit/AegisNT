@@ -1,0 +1,2 @@
+D:\C++\Tools\AegisNT\x64\Release\libcrypto-3-x64.dll
+D:\C++\Tools\AegisNT\x64\Release\sqlite3.dll

@@ -1,3 +1,5 @@
+#include "../../Platform/AegisCoreCall.h"
+
 QWidget *CreateKernelResearchPage() {
   using namespace AegisNT::KernelResearch;
   auto *Page = new QWidget;
@@ -71,8 +73,27 @@ QWidget *CreateKernelResearchPage() {
   struct StateData {
     std::vector<MDV2_RECORD> Modules;
     QJsonObject Baseline;
+    std::atomic_bool Refreshing = false;
   };
   auto State = std::make_shared<StateData>();
+
+  struct SymbolRow { QString Module, Base, Size, Symbol, Path, Status; };
+  struct AddressRow { QString Source, Address, Module, Rva, Symbol, Status; };
+  struct IntegrityRow { QString Kind, Index, Address, Baseline, Owner, State; };
+  struct PoolRow { QString Tag, Count, Bytes, Largest, Paged, Status; };
+  struct ObjectRow { QString Name, Type, Address, Detail; };
+  struct RefreshResult {
+    std::vector<MDV2_RECORD> Modules;
+    std::vector<SymbolRow> Symbols;
+    std::vector<AddressRow> Ownership;
+    std::vector<IntegrityRow> Integrity;
+    std::vector<PoolRow> BigPool;
+    std::vector<ObjectRow> Objects;
+    QJsonObject CurrentBaseline;
+    bool SymbolsOk = false;
+    bool BigPoolOk = false;
+    QString SymbolError;
+  };
 
   const auto AddCell = [](QTableWidget *Table, int Row, int Column,
                           const QString &Text) {
@@ -92,136 +113,256 @@ QWidget *CreateKernelResearchPage() {
   };
 
   const auto RefreshAll = [=] {
+    bool Expected = false;
+    if (!State->Refreshing.compare_exchange_strong(Expected, true))
+      return;
     Status->setText("Refreshing kernel research data...");
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    State->Modules = QueryAll(IOCTL_ENUM_KERNEL_MODULES_V2);
-    QString SymbolError;
-    auto &SymbolSvc = SymbolService::Instance();
-    const bool SymbolsOk = SymbolSvc.Initialize(&SymbolError);
-    if (SymbolsOk)
-      SymbolSvc.ReloadModules(State->Modules);
+    Refresh->setEnabled(false);
+    const QJsonObject Baseline = State->Baseline;
+    QPointer<QWidget> Guard(Page);
+    std::thread([=]() mutable {
+      RefreshResult Result;
+      Result.Modules = QueryAll(IOCTL_ENUM_KERNEL_MODULES_V2);
+      auto &SymbolSvc = SymbolService::Instance();
+      Result.SymbolsOk = SymbolSvc.Initialize(&Result.SymbolError);
+      if (Result.SymbolsOk)
+        SymbolSvc.ReloadModules(Result.Modules);
 
+      for (const auto &Module : Result.Modules) {
+        const auto Owner = ResolveAddress(Module.Address, Result.Modules);
+        Result.Symbols.push_back({QString::fromWCharArray(Module.Name),
+                                  Hex(Module.Address),
+                                  QString::number(Module.SizeBytes),
+                                  Owner.Symbol.isEmpty() ? "-" : Owner.Symbol,
+                                  QString::fromWCharArray(Module.Path),
+                                  Result.SymbolsOk ? "Loaded/Deferred"
+                                                  : Result.SymbolError});
+      }
+
+      const auto AddAddress = [&Result](const QString &Source, quint64 Address,
+                                        const AddressInfo &Info) {
+        Result.Ownership.push_back({Source, Hex(Address), Info.Module,
+                                    Hex(Info.Rva),
+                                    Info.Symbol.isEmpty() ? "-" : Info.Symbol,
+                                    Info.Status});
+      };
+      SYSTEM_TABLES_OUTPUT Summary{};
+      if (QuerySystemTables(&Summary)) {
+        AddAddress("SSDT", Summary.SsdtBase,
+                   ResolveAddress(Summary.SsdtBase, Result.Modules));
+        AddAddress("ShadowSSDT", Summary.ShadowSsdtBase,
+                   ResolveAddress(Summary.ShadowSsdtBase, Result.Modules));
+        AddAddress("IDT", Summary.IdtBase,
+                   ResolveAddress(Summary.IdtBase, Result.Modules));
+        AddAddress("GDT", Summary.GdtBase,
+                   ResolveAddress(Summary.GdtBase, Result.Modules));
+      }
+      const auto CallbackRecords = QueryAll(IOCTL_ENUM_CALLBACKS);
+      ULONG CallbackCount = 0;
+      if (CallbackRecords.empty() &&
+          SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0,
+                              &CallbackCount, sizeof(CallbackCount), nullptr) &&
+          CallbackCount != 0) {
+        const size_t Bytes = FIELD_OFFSET(CALLBACK_ENUM_OUTPUT, Entries) +
+                             CallbackCount * sizeof(CALLBACK_ENTRY);
+        std::vector<unsigned char> Buffer(Bytes);
+        if (SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, Buffer.data(),
+                                static_cast<DWORD>(Bytes), nullptr)) {
+          const auto *Output =
+              reinterpret_cast<const CALLBACK_ENUM_OUTPUT *>(Buffer.data());
+          for (ULONG I = 0; I < Output->Count; ++I)
+            AddAddress("Callback", Output->Entries[I].Address,
+                       ResolveAddress(Output->Entries[I].Address,
+                                      Result.Modules));
+        }
+      }
+
+      for (ULONG Kind : {SYSTEM_TABLE_KIND_IDT, SYSTEM_TABLE_KIND_SSDT,
+                         SYSTEM_TABLE_KIND_SHADOW_SSDT}) {
+        SYSTEM_TABLE_ENTRIES_OUTPUT Entries{};
+        if (!QuerySystemTableEntries(Kind, &Entries))
+          continue;
+        const QString KindName = Kind == SYSTEM_TABLE_KIND_IDT ? "IDT" :
+            (Kind == SYSTEM_TABLE_KIND_SSDT ? "SSDT" : "ShadowSSDT");
+        QJsonArray Values;
+        const QJsonArray BaselineValues = Baseline.value(KindName).toArray();
+        for (ULONG I = 0; I < Entries.Count; ++I) {
+          const auto &Entry = Entries.Entries[I];
+          const QString Now = Hex(Entry.Address);
+          const QString Old = static_cast<int>(I) < BaselineValues.size()
+                                  ? BaselineValues.at(static_cast<int>(I)).toString()
+                                  : QString();
+          const auto Owner = ResolveAddress(Entry.Address, Result.Modules);
+          Result.Integrity.push_back({KindName, QString::number(Entry.Index),
+                                      Now, Old.isEmpty() ? "-" : Old,
+                                      Owner.Module + (Owner.Symbol.isEmpty()
+                                                          ? ""
+                                                          : "!" + Owner.Symbol),
+                                      Old.isEmpty() ? "Unknown"
+                                                    : (Old == Now ? "Clean" : "Changed")});
+          Values.append(Now);
+        }
+        Result.CurrentBaseline.insert(KindName, Values);
+      }
+      Result.CurrentBaseline.insert("capturedAtUtc",
+          QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+      Result.CurrentBaseline.insert("schemaVersion", 1);
+
+      struct PoolAggregate { quint64 Count = 0, Bytes = 0, Largest = 0, Paged = 0; };
+      std::map<QString, PoolAggregate> Pools;
+      std::vector<MDV2_RECORD> BigPoolRecords = QueryAll(IOCTL_ENUM_BIG_POOL_V2);
+      Result.BigPoolOk = !BigPoolRecords.empty();
+
+      // Older Ring0Core builds may not expose SystemBigPoolInformation. Use
+      // the same native query from user mode as a compatibility fallback so
+      // the page does not silently render an empty table.
+      if (BigPoolRecords.empty()) {
+        using NtQuerySystemInformationFn =
+            NTSTATUS(NTAPI *)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+        struct NativeBigPoolEntry {
+          union { PVOID VirtualAddress; ULONG_PTR NonPaged : 1; };
+          ULONG_PTR SizeInBytes;
+          union { UCHAR Tag[4]; ULONG TagUlong; };
+        };
+        struct NativeBigPoolInformation {
+          ULONG Count;
+          NativeBigPoolEntry AllocatedInfo[1];
+        };
+        const auto QueryNative = reinterpret_cast<NtQuerySystemInformationFn>(
+            GetProcAddress(GetModuleHandleW(L"ntdll.dll"),
+                           "NtQuerySystemInformation"));
+        constexpr SYSTEM_INFORMATION_CLASS BigPoolClass =
+            static_cast<SYSTEM_INFORMATION_CLASS>(66);
+        constexpr NTSTATUS ResizeStatuses[] = {
+            static_cast<NTSTATUS>(0xC0000004L),
+            static_cast<NTSTATUS>(0x80000005L),
+            static_cast<NTSTATUS>(0xC0000023L)};
+        auto IsResizeStatus = [&](NTSTATUS Status) {
+          return Status == ResizeStatuses[0] || Status == ResizeStatuses[1] ||
+                 Status == ResizeStatuses[2];
+        };
+        if (QueryNative) {
+          ULONG Size = 1u << 20;
+          std::vector<BYTE> Buffer(Size);
+          ULONG ReturnLength = 0;
+          NTSTATUS Status = QueryNative(BigPoolClass, Buffer.data(), Size,
+                                        &ReturnLength);
+          for (int Attempt = 0; IsResizeStatus(Status) && Attempt < 8;
+               ++Attempt) {
+            Size = std::max(Size * 2u, ReturnLength + 0x1000u);
+            Buffer.resize(Size);
+            Status = QueryNative(BigPoolClass, Buffer.data(), Size,
+                                 &ReturnLength);
+          }
+          if (Status >= 0 && Buffer.size() >= sizeof(ULONG)) {
+            const auto *Native = reinterpret_cast<const NativeBigPoolInformation *>(
+                Buffer.data());
+            const size_t Required = FIELD_OFFSET(NativeBigPoolInformation, AllocatedInfo) +
+                static_cast<size_t>(Native->Count) * sizeof(NativeBigPoolEntry);
+            if (Required <= Buffer.size()) {
+              BigPoolRecords.reserve(Native->Count);
+              for (ULONG Index = 0; Index < Native->Count; ++Index) {
+                const auto &Pool = Native->AllocatedInfo[Index];
+                MDV2_RECORD Record{};
+                Record.Kind = 5;
+                Record.Address = reinterpret_cast<ULONG64>(Pool.VirtualAddress) & ~1ull;
+                Record.SizeBytes = Pool.SizeInBytes;
+                Record.Flags = (reinterpret_cast<ULONG_PTR>(Pool.VirtualAddress) & 1) ? 1u : 0u;
+                for (ULONG Char = 0; Char < 4; ++Char)
+                  Record.Name[Char] = static_cast<WCHAR>(Pool.Tag[Char]);
+                Record.Name[4] = L'\0';
+                BigPoolRecords.push_back(Record);
+              }
+              Result.BigPoolOk = true;
+            }
+          }
+        }
+      }
+      for (const auto &Record : BigPoolRecords) {
+        QString Tag = QString::fromWCharArray(Record.Name);
+        if (Tag.isEmpty()) Tag = QString::fromWCharArray(Record.TypeName);
+        auto &A = Pools[Tag.isEmpty() ? "????" : Tag];
+        ++A.Count; A.Bytes += Record.SizeBytes; A.Largest = std::max(A.Largest, Record.SizeBytes);
+        A.Paged += (Record.Flags & 1) ? 1 : 0;
+      }
+      for (const auto &[Tag, A] : Pools)
+        Result.BigPool.push_back({Tag, QString::number(A.Count),
+                                  QString::number(A.Bytes), QString::number(A.Largest),
+                                  QString::number(A.Paged),
+                                  A.Bytes > 64ull * 1024 * 1024 ? "Large" : "Normal"});
+      if (Result.BigPool.empty())
+        Result.BigPool.push_back({"(none)", "0", "0", "0", "0",
+                                  Result.BigPoolOk ? "No allocations" :
+                                                      "Unavailable"});
+      for (const auto &Record : QueryAll(IOCTL_ENUM_OBJECTS_V2, "\\"))
+        Result.Objects.push_back({QString::fromWCharArray(Record.Name),
+                                  QString::fromWCharArray(Record.TypeName),
+                                  Hex(Record.Address),
+                                  QString::fromWCharArray(Record.Detail)});
+
+      if (!Guard)
+        return;
+      QMetaObject::invokeMethod(Guard, [=, Result = std::move(Result)]() mutable {
+        if (!Guard)
+          return;
+        State->Modules = std::move(Result.Modules);
     Symbols->setSortingEnabled(false);
     Symbols->setRowCount(0);
-    for (const auto &Module : State->Modules) {
-      const int Row = Symbols->rowCount();
-      Symbols->insertRow(Row);
-      const auto Owner = ResolveAddress(Module.Address, State->Modules);
-      AddCell(Symbols, Row, 0, QString::fromWCharArray(Module.Name));
-      AddCell(Symbols, Row, 1, Hex(Module.Address));
-      AddCell(Symbols, Row, 2, QString::number(Module.SizeBytes));
-      AddCell(Symbols, Row, 3, Owner.Symbol.isEmpty() ? "-" : Owner.Symbol);
-      AddCell(Symbols, Row, 4, QString::fromWCharArray(Module.Path));
-      AddCell(Symbols, Row, 5, SymbolsOk ? "Loaded/Deferred" : SymbolError);
+        for (const auto &Value : Result.Symbols) {
+          const int Row = Symbols->rowCount();
+          Symbols->insertRow(Row);
+          AddCell(Symbols, Row, 0, Value.Module);
+          AddCell(Symbols, Row, 1, Value.Base);
+          AddCell(Symbols, Row, 2, Value.Size);
+          AddCell(Symbols, Row, 3, Value.Symbol);
+          AddCell(Symbols, Row, 4, Value.Path);
+          AddCell(Symbols, Row, 5, Value.Status);
     }
     Symbols->setSortingEnabled(true);
 
     Ownership->setSortingEnabled(false);
     Ownership->setRowCount(0);
-    SYSTEM_TABLES_OUTPUT Summary{};
-    if (QuerySystemTables(&Summary)) {
-      AddAddressRow(Ownership, "SSDT", Summary.SsdtBase,
-                    ResolveAddress(Summary.SsdtBase, State->Modules));
-      AddAddressRow(Ownership, "ShadowSSDT", Summary.ShadowSsdtBase,
-                    ResolveAddress(Summary.ShadowSsdtBase, State->Modules));
-      AddAddressRow(Ownership, "IDT", Summary.IdtBase,
-                    ResolveAddress(Summary.IdtBase, State->Modules));
-      AddAddressRow(Ownership, "GDT", Summary.GdtBase,
-                    ResolveAddress(Summary.GdtBase, State->Modules));
-    }
-    auto CallbackRecords = QueryAll(IOCTL_ENUM_CALLBACKS);
-    if (CallbackRecords.empty()) {
-      ULONG Count = 0;
-      if (SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, &Count,
-                              sizeof(Count), nullptr) && Count) {
-        const size_t Bytes = FIELD_OFFSET(CALLBACK_ENUM_OUTPUT, Entries) +
-                             Count * sizeof(CALLBACK_ENTRY);
-        std::vector<unsigned char> Buffer(Bytes);
-        if (SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, Buffer.data(),
-                                static_cast<DWORD>(Bytes), nullptr)) {
-          auto *Output = reinterpret_cast<CALLBACK_ENUM_OUTPUT *>(Buffer.data());
-          for (ULONG I = 0; I < Output->Count; ++I)
-            AddAddressRow(Ownership, "Callback", Output->Entries[I].Address,
-                          ResolveAddress(Output->Entries[I].Address,
-                                         State->Modules));
+        for (const auto &Value : Result.Ownership) {
+          const int Row = Ownership->rowCount(); Ownership->insertRow(Row);
+          AddCell(Ownership, Row, 0, Value.Source); AddCell(Ownership, Row, 1, Value.Address);
+          AddCell(Ownership, Row, 2, Value.Module); AddCell(Ownership, Row, 3, Value.Rva);
+          AddCell(Ownership, Row, 4, Value.Symbol); AddCell(Ownership, Row, 5, Value.Status);
         }
-      }
-    }
     Ownership->setSortingEnabled(true);
 
     Integrity->setSortingEnabled(false);
     Integrity->setRowCount(0);
-    QJsonObject Current;
-    for (ULONG Kind : {SYSTEM_TABLE_KIND_IDT, SYSTEM_TABLE_KIND_SSDT,
-                       SYSTEM_TABLE_KIND_SHADOW_SSDT}) {
-      SYSTEM_TABLE_ENTRIES_OUTPUT Entries{};
-      if (!QuerySystemTableEntries(Kind, &Entries))
-        continue;
-      const QString KindName = Kind == SYSTEM_TABLE_KIND_IDT ? "IDT" :
-          (Kind == SYSTEM_TABLE_KIND_SSDT ? "SSDT" : "ShadowSSDT");
-      QJsonArray Values;
-      for (ULONG I = 0; I < Entries.Count; ++I) {
-        const auto &Entry = Entries.Entries[I];
-        Values.append(Hex(Entry.Address));
-        const QString Key = KindName + ":" + QString::number(Entry.Index);
-        const QJsonArray BaselineValues = State->Baseline.value(KindName).toArray();
-        const QString Old = static_cast<int>(I) < BaselineValues.size()
-                                ? BaselineValues.at(static_cast<int>(I)).toString()
-                                : QString();
-        const QString Now = Hex(Entry.Address);
-        const auto Owner = ResolveAddress(Entry.Address, State->Modules);
+        for (const auto &Value : Result.Integrity) {
         const int Row = Integrity->rowCount();
         Integrity->insertRow(Row);
-        AddCell(Integrity, Row, 0, KindName);
-        AddCell(Integrity, Row, 1, QString::number(Entry.Index));
-        AddCell(Integrity, Row, 2, Now);
-        AddCell(Integrity, Row, 3, Old.isEmpty() ? "-" : Old);
-        AddCell(Integrity, Row, 4, Owner.Module + (Owner.Symbol.isEmpty() ? "" : "!" + Owner.Symbol));
-        AddCell(Integrity, Row, 5, Old.isEmpty() ? "Unknown" : (Old == Now ? "Clean" : "Changed"));
-        (void)Key;
+          AddCell(Integrity, Row, 0, Value.Kind); AddCell(Integrity, Row, 1, Value.Index);
+          AddCell(Integrity, Row, 2, Value.Address); AddCell(Integrity, Row, 3, Value.Baseline);
+          AddCell(Integrity, Row, 4, Value.Owner); AddCell(Integrity, Row, 5, Value.State);
       }
-      Current.insert(KindName, Values);
-    }
-    Current.insert("capturedAtUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
-    Current.insert("schemaVersion", 1);
-    Integrity->setProperty("currentBaseline", QJsonDocument(Current).toJson(QJsonDocument::Compact));
+        Integrity->setProperty("currentBaseline", QJsonDocument(Result.CurrentBaseline).toJson(QJsonDocument::Compact));
     Integrity->setSortingEnabled(true);
 
-    struct PoolAggregate { quint64 Count = 0, Bytes = 0, Largest = 0, Paged = 0; };
-    std::map<QString, PoolAggregate> Pools;
-    for (const auto &Record : QueryAll(IOCTL_ENUM_BIG_POOL_V2)) {
-      QString Tag = QString::fromWCharArray(Record.Name);
-      if (Tag.isEmpty()) Tag = QString::fromWCharArray(Record.TypeName);
-      auto &A = Pools[Tag.isEmpty() ? "????" : Tag];
-      ++A.Count; A.Bytes += Record.SizeBytes; A.Largest = std::max(A.Largest, Record.SizeBytes);
-      A.Paged += (Record.Flags & 1) ? 1 : 0;
-    }
     BigPool->setSortingEnabled(false); BigPool->setRowCount(0);
-    for (const auto &[Tag, A] : Pools) {
-      const int Row = BigPool->rowCount(); BigPool->insertRow(Row);
-      AddCell(BigPool, Row, 0, Tag); AddCell(BigPool, Row, 1, QString::number(A.Count));
-      AddCell(BigPool, Row, 2, QString::number(A.Bytes));
-      AddCell(BigPool, Row, 3, QString::number(A.Largest));
-      AddCell(BigPool, Row, 4, QString::number(A.Paged));
-      AddCell(BigPool, Row, 5, A.Bytes > 64ull * 1024 * 1024 ? "Large" : "Normal");
+        for (const auto &Value : Result.BigPool) {
+          const int Row = BigPool->rowCount(); BigPool->insertRow(Row);
+          AddCell(BigPool, Row, 0, Value.Tag); AddCell(BigPool, Row, 1, Value.Count);
+          AddCell(BigPool, Row, 2, Value.Bytes); AddCell(BigPool, Row, 3, Value.Largest);
+          AddCell(BigPool, Row, 4, Value.Paged); AddCell(BigPool, Row, 5, Value.Status);
     }
     BigPool->setSortingEnabled(true);
 
     Objects->clear();
-    std::map<QString, QTreeWidgetItem *> Nodes;
-    Nodes["\\"] = new QTreeWidgetItem(Objects, {"\\", "Directory", "", "Object namespace"});
-    for (const auto &Record : QueryAll(IOCTL_ENUM_OBJECTS_V2, "\\")) {
-      const QString Name = QString::fromWCharArray(Record.Name);
-      auto *Item = new QTreeWidgetItem(Nodes["\\"],
-          {Name, QString::fromWCharArray(Record.TypeName), Hex(Record.Address),
-           QString::fromWCharArray(Record.Detail)});
-      (void)Item;
-    }
+        auto *Root = new QTreeWidgetItem(Objects, {"\\", "Directory", "", "Object namespace"});
+        for (const auto &Value : Result.Objects)
+          new QTreeWidgetItem(Root, {Value.Name, Value.Type, Value.Address, Value.Detail});
     Objects->expandToDepth(0);
-    QApplication::restoreOverrideCursor();
     Status->setText(QString("%1 modules | %2 symbols | %3 pool tags | %4 objects")
-                        .arg(State->Modules.size()).arg(SymbolsOk ? "ready" : "offline")
-                        .arg(Pools.size()).arg(Objects->topLevelItem(0)->childCount()));
+                        .arg(State->Modules.size()).arg(Result.SymbolsOk ? "ready" : "offline")
+                        .arg(Result.BigPool.size()).arg(Result.Objects.size()));
+        Refresh->setEnabled(true);
+        State->Refreshing.store(false);
+      }, Qt::QueuedConnection);
+    }).detach();
   };
 
   QObject::connect(Refresh, &QPushButton::clicked, Page, RefreshAll);

@@ -2,7 +2,7 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调试工具。主程序使用 C++20、Qt 6 和 QFluent 构建，并通过 `MultiDrv` 与 `MonitorDrv` 驱动扩展用户态 API 无法完成的查询、保护和操作能力。
+AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调试工具。主程序使用 C++20、Qt 6 和 QFluent 构建，并通过 `Ring0Core.sys` 提供的 `AegisCore` 与 `AegisSentinel` 设备通道扩展用户态 API 无法完成的查询、保护和操作能力。
 
 > 本项目包含进程终止、句柄关闭、内存读写、驱动加载、DLL 注入和安全策略修改等高权限功能。请仅在自己拥有或明确获准测试的设备上使用。错误使用可能导致应用崩溃、系统不稳定或蓝屏。
 
@@ -10,7 +10,7 @@ AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调�
 
 - **系统与任务管理**：查看进程、线程、令牌、模块、内存、PEB、句柄及缓解策略，支持实时刷新和详细检查。
 - **进程操作**：终止、挂起、恢复、设置 PPL/关键进程状态、令牌操作、DLL 注入及进程保护。
-- **句柄管理**：内置 `HandleLab` 系统级句柄实验室，可按进程、类型、对象和风险视角分析句柄，支持关闭、复制或降低句柄权限。
+- **句柄管理**：内置 `Handle` 系统级句柄页面，可按进程、类型、对象和风险视角分析句柄，支持关闭、复制或降低句柄权限。
 - **系统监控**：采集进程、线程、映像、注册表、文件与网络事件。
 - **注册表与文件工具**：浏览、编辑、监控和配置保护规则。
 - **窗口管理**：枚举窗口、修改窗口状态，并通过驱动配置窗口保护。
@@ -18,7 +18,7 @@ AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调�
 - **驱动对象检查**：Driver Inspector 展示 IRP MajorFunction、Fast I/O dispatch、DeviceObject/AttachedDevice/NextDevice 链及函数地址符号归属。
 - **内核分析视图**：`KernelInspector` 提供过滤器、网络、安全状态、同步对象与会话等内核检查能力。
 - **内核研究中心**：通过 Microsoft 公共符号缓存解析内核地址归属，提供系统表完整性基线、Big Pool 聚合与对象命名空间浏览。
-- **内存工具**：通过用户态 API 或 `MultiDrv` 读取、写入和查看目标进程内存。
+- **内存工具**：通过用户态 API 或 `AegisCore` 读取、写入和查看目标进程内存。
 - **事务化内核写入**：写入立即执行，同时静默保存原值，执行写后读回验证、失败自动恢复、会话回滚和 JSONL 审计。
 - **模块系统**：加载独立功能模块，仓库包含 ARP、HTTP/2 和 Payload 相关示例项目。
 - **可定制界面**：QFluent 风格界面，支持主题颜色、背景、字体缩放、密度和窗口透明度设置。
@@ -34,8 +34,7 @@ AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调�
 |-- AegisNT.slnx            # 主程序、驱动和模块解决方案
 |-- Platform/               # 驱动通信、注入、权限与平台封装
 |-- Drivers/
-|   |-- MultiDrv/           # 内核查询、保护和系统操作驱动
-|   `-- MonitorDrv/         # 系统、文件和网络事件监控驱动
+|   `-- Ring0Core/          # AegisCore、AegisSentinel 与 DiskDrv 内核实现
 |-- Module/                 # 模块 ABI、加载器与输出捕获
 |-- ModulesProject/         # 独立模块项目
 |-- Data/                   # 默认配置、图标及运行时数据
@@ -50,7 +49,7 @@ AegisNT 是一个面向 Windows x64 的系统检查、进程管理和内核调�
 
 - **Information / Task / Monitor / Registry / File / Window**：基础系统信息、任务管理与用户态工具页。
 - **Kernel / Overview**：`KernelInspector`
-- **Kernel / Execution**：`Driver`、`ServiceManager`、`HandleLab`、`Memory`、`Table`、`Callback`
+- **Kernel / Execution**：`Driver`、`ServiceManager`、`Handle`、`Memory`、`Table`、`Callback`
 - **Kernel / Storage**：`Disk`
 - **Module**：`Payload`、`ModuleRun`、`ModuleManager`
 - **Console / Settings**：调试控制台与主题、语言、路径配置
@@ -82,7 +81,7 @@ D:\OpenSSL-Win64
 1. 安装上述依赖，并在 Qt VS Tools 中注册 MSVC 版本的 Qt。
 2. 使用 Visual Studio 打开 `AegisNT.slnx`。
 3. 选择 `x64` 和 `Release`。
-4. 先构建 `MultiDrv`、`MonitorDrv` 及需要的模块，再构建 `AegisNT`。
+4. 先构建 `Ring0Core` 及需要的模块，再构建 `AegisNT`。
 5. 主程序 Release 输出位于 `Bin/`。
 
 也可以在已初始化 MSVC 环境的终端中构建：
@@ -108,23 +107,19 @@ QMAKE_MSC_VER isn't set
 .\Bin\AegisNT.exe
 ```
 
-内核功能依赖 `MultiDrv`，监控功能依赖 `MonitorDrv`。驱动必须与当前系统架构匹配并具有 Windows 接受的有效签名。开发环境中若使用测试签名，请仅在隔离测试机或虚拟机中配置相应启动策略。
+内核功能使用 `AegisCore` 设备通道，监控功能使用 `AegisSentinel` 设备通道；二者均由 `Ring0Core.sys` 提供。驱动必须与当前系统架构匹配并具有 Windows 接受的有效签名。开发环境中若使用测试签名，请仅在隔离测试机或虚拟机中配置相应启动策略。
 
 驱动服务可按实际 `.sys` 路径创建并启动：
 
 ```powershell
-sc.exe create MultiDrv type= kernel binPath= "C:\path\to\MultiDrv.sys"
-sc.exe start MultiDrv
-
-sc.exe create MonitorDrv type= kernel binPath= "C:\path\to\MonitorDrv.sys"
-sc.exe start MonitorDrv
+sc.exe create Ring0Core type= kernel binPath= "C:\path\to\Ring0Core.sys"
+sc.exe start Ring0Core
 ```
 
 停止服务：
 
 ```powershell
-sc.exe stop MonitorDrv
-sc.exe stop MultiDrv
+sc.exe stop Ring0Core
 ```
 
 设备打开失败时，请检查管理员权限、服务状态、驱动签名、系统事件日志，以及驱动和主程序的通信结构是否来自同一次构建。
@@ -146,7 +141,7 @@ sc.exe stop MultiDrv
 - 优先在虚拟机中测试驱动、注入、DSE、回调移除和内核内存操作。
 - 操作关键进程、系统句柄或未知内核地址前先创建快照。
 - 用户态回退结果可能受权限、PPL 和系统版本限制，不一定与内核视图完全一致。
-- 驱动与 `Platform/MultiDrvCall.h` 的 IOCTL、结构大小和版本必须同步。
+- 驱动与 `Platform/AegisCoreCall.h` 的 IOCTL、结构大小和版本必须同步。
 - 网络与 Payload 模块仅用于授权测试和防御研究。
 
 ## License

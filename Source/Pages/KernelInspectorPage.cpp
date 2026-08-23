@@ -601,11 +601,11 @@ QWidget *CreateKernelInspectorPage() {
 
           KernelControlState KernelState;
           KernelState.DebugOk = QueryDebugState(&KernelState.Debug);
-          KernelState.DebugError = G_LastMultiDrvError;
+          KernelState.DebugError = G_LastAegisCoreError;
           KernelState.DseOk = QueryDse(&KernelState.Dse);
-          KernelState.DseError = G_LastMultiDrvError;
+          KernelState.DseError = G_LastAegisCoreError;
           KernelState.PatchGuardOk = QueryPatchGuard(&KernelState.PatchGuard);
-          KernelState.PatchGuardError = G_LastMultiDrvError;
+          KernelState.PatchGuardError = G_LastAegisCoreError;
 
           std::vector<Result> Results(State->size());
           for (size_t Index = 0; Index < State->size(); ++Index) {
@@ -614,7 +614,7 @@ QWidget *CreateKernelInspectorPage() {
             if (!(*State)[Index].Path.isEmpty())
               wcsncpy_s(Request.Path,
                         (*State)[Index].Path.toStdWString().c_str(), _TRUNCATE);
-            QueryMultiDrvRecordsV2((*State)[Index].Ioctl, Request,
+            QueryAegisCoreRecordsV2((*State)[Index].Ioctl, Request,
                                    Results[Index].Records,
                                    &Results[Index].Header);
           }
@@ -920,7 +920,7 @@ QWidget *CreateKernelInspectorPage() {
                     Page, "Kernel Inspector",
                     QString("Unable to log off session %1 (error %2).")
                         .arg(SessionId.value())
-                        .arg(G_LastMultiDrvError));
+                        .arg(G_LastAegisCoreError));
                 return;
               }
               Dialog->accept();
@@ -1178,7 +1178,7 @@ QWidget *CreateKernelInspectorPage() {
                  SetKernelControlButtonsEnabled, ActionName,
                  Action = std::move(Action)]() mutable {
       const bool Success = Action();
-      const DWORD ErrorCode = G_LastMultiDrvError;
+      const DWORD ErrorCode = G_LastAegisCoreError;
       QMetaObject::invokeMethod(
           qApp,
           [SafePage, Refresh, Status, LoadStatus, Loading,
@@ -1222,7 +1222,7 @@ QWidget *CreateKernelInspectorPage() {
                  SetKernelControlButtonsEnabled] {
       IDT_LIMIT_OUTPUT IdtOut{};
       const bool Success = SetIdtLimit();
-      const DWORD ErrorCode = G_LastMultiDrvError;
+      const DWORD ErrorCode = G_LastAegisCoreError;
       QMetaObject::invokeMethod(
           qApp,
           [SafePage, Refresh, Status, LoadStatus, Loading,

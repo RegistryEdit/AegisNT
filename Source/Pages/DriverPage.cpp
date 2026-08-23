@@ -142,7 +142,7 @@ public:
                   QString Message = QString("%1\nService: %2\nWin32 error: %3")
                                         .arg(DriverMessage)
                                         .arg(Name)
-                                        .arg(G_LastMultiDrvError);
+                                        .arg(G_LastAegisCoreError);
                   if (HasKernelResult)
                     Message += QString("\nNTSTATUS: 0x%1")
                                    .arg(static_cast<quint32>(Output.NtStatus),
@@ -160,9 +160,10 @@ public:
 
             DRIVER_CONTROL_OUTPUT Output{};
             const std::wstring ServiceName = Name.toStdWString();
-            const bool IsMultiDrv =
-                Name.compare("MultiDrv", Qt::CaseInsensitive) == 0;
-            if (IsMultiDrv) {
+            const bool IsRing0Core =
+                Name.compare("Ring0Core", Qt::CaseInsensitive) == 0 ||
+                Name.compare("AegisCore", Qt::CaseInsensitive) == 0;
+            if (IsRing0Core) {
               if (UnloadDriverService(ServiceName.c_str()) == 0)
                 ShowSuccessNotice(this, "Driver",
                                   "Driver unloaded via SCM mode.");
@@ -300,7 +301,7 @@ private:
                   : "DeviceIoControl(IOCTL_LOAD_DRIVER) failed before the "
                     "driver returned a result.";
           const QString DriverDetails =
-              QString::fromStdWString(G_LastMultiDrvDetails);
+              QString::fromStdWString(G_LastAegisCoreDetails);
           const QString EffectiveKernelPath = QString::fromWCharArray(
               Output.ImagePath[0] ? Output.ImagePath : KernelPath.c_str());
           const QString EffectiveRegistryPath =
@@ -311,7 +312,7 @@ private:
                                 .arg(QString::fromStdWString(ServiceName))
                                 .arg(QString::fromStdWString(RequestedPath))
                                 .arg(EffectiveKernelPath)
-                                .arg(G_LastMultiDrvError);
+                                .arg(G_LastAegisCoreError);
           if (HasKernelResult)
             Message += QString("\nNTSTATUS: 0x%1")
                            .arg(static_cast<quint32>(Output.NtStatus), 8, 16,
@@ -478,7 +479,22 @@ private:
     std::thread([SafeDialog, Name, Overview, Dispatch, FastIo, Devices, Loading] {
       std::vector<MDV2_RECORD> Records;
       MDV2_LIST_HEADER Header{};
-      QueryNamedDriverRecordsV2(Name.toStdWString(), Records, &Header);
+      // Service names and driver-object names are not always identical. Try
+      // the common spellings; QueryNamedDriverRecordsV2 normalizes qualified
+      // paths before sending the request to the driver.
+      const QStringList Candidates{
+          Name,
+          Name.isEmpty() ? QString() : "\\Driver\\" + Name,
+          QFileInfo(Name).completeBaseName()};
+      for (const QString &Candidate : Candidates) {
+        if (Candidate.isEmpty())
+          continue;
+        Records.clear();
+        if (QueryNamedDriverRecordsV2(Candidate.toStdWString(), Records,
+                                      &Header) &&
+            !Records.empty())
+          break;
+      }
       const auto Modules = AegisNT::KernelResearch::QueryAll(IOCTL_ENUM_KERNEL_MODULES_V2);
       QMetaObject::invokeMethod(
           qApp,
@@ -536,6 +552,13 @@ private:
                                       16, QLatin1Char('0'))
                                  .toUpper(),
                              {}});
+            // An empty Fast I/O table is otherwise indistinguishable from a
+            // failed render. Keep the tab explicit when the driver really
+            // has no registered callbacks (or the query is unsupported).
+            if (FastIo->rowCount() == 0)
+              Add(FastIo, {"(none)", {}, {},
+                           Records.empty() ? "Driver details unavailable"
+                                            : "No Fast I/O callbacks"});
           },
           Qt::QueuedConnection);
     }).detach();
@@ -604,7 +627,7 @@ private:
       QHash<QString, QPair<QString, QString>> DriverDecorationCache;
       QHash<QString, UserFileTrustInfo> TrustCache;
       Result.Success = QueryDriverEntries(Entries, &Header);
-      Result.ErrorCode = G_LastMultiDrvError;
+      Result.ErrorCode = G_LastAegisCoreError;
       Result.NtStatus = Header.NtStatus;
       if (Result.Success || Header.NtStatus != 0) {
         Result.Success = true;

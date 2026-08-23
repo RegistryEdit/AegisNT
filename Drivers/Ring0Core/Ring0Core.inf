@@ -1,0 +1,73 @@
+;
+; Ring0Core.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ManufacturerName%
+DriverVer=07/10/2026,1.0.0.0
+CatalogFile=Ring0Core.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+Ring0Core.sys = 1
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%Ring0Core.DeviceDesc% = Ring0Core_Install, Root\Ring0Core
+
+; -----------------------------------------------------------------
+; Device Install
+; -----------------------------------------------------------------
+[Ring0Core_Install.NT]
+CopyFiles = Ring0Core_CopyFiles
+
+[Ring0Core_CopyFiles]
+Ring0Core.sys
+
+[Ring0Core_Install.NT.Services]
+AddService = Ring0Core, %SPSVCINST_ASSOCSERVICE%, Ring0Core_Service
+
+; -----------------------------------------------------------------
+; Service Configuration
+; -----------------------------------------------------------------
+[Ring0Core_Service]
+DisplayName    = %Ring0Core.ServiceDesc%
+ServiceType    = 2          ; SERVICE_FILE_SYSTEM_DRIVER
+StartType      = 3          ; SERVICE_DEMAND_START
+ErrorControl   = 1          ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\Ring0Core.sys
+Dependencies   = FltMgr
+LoadOrderGroup = "FSFilter Activity Monitor"
+AddReg         = Ring0Core_FltReg
+
+; -----------------------------------------------------------------
+; Minifilter Registry Configuration (single merged instance)
+; Values are under the Parameters subkey as required by Windows 11
+; 24H2+ driver isolation / InfVerif (infverif.exe).
+; -----------------------------------------------------------------
+[Ring0Core_FltReg]
+HKR, "Parameters", "SupportedFeatures", 0x00010001, 0x3
+HKR, "Parameters\Instances", "DefaultInstance", 0x00000000, "Ring0CoreInstance"
+HKR, "Parameters\Instances\Ring0CoreInstance", "Altitude", 0x00000000, "360000"
+HKR, "Parameters\Instances\Ring0CoreInstance", "Flags", 0x00010001, 0x00000000
+
+; -----------------------------------------------------------------
+; Strings
+; -----------------------------------------------------------------
+[Strings]
+ManufacturerName     = "<Your manufacturer name>" ; TODO: Replace with your manufacturer name
+DiskName             = "Ring0Core Source Disk"
+Ring0Core.DeviceDesc  = "Ring0Core"
+Ring0Core.ServiceDesc = "Ring0Core Service"
+SPSVCINST_ASSOCSERVICE = 0x00000002

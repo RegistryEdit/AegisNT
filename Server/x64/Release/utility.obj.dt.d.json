@@ -1,0 +1,29 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\utility",
+        "ProvidedModule": "",
+        "Includes": [
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\yvals_core.h",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\vcruntime.h",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\sal.h",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\concurrencysal.h",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\vadefs.h",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\xkeycheck.h",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\__msvc_doom_core.hpp",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\initializer_list",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\cstddef",
+            "c:\\program files (x86)\\windows kits\\10\\include\\10.0.28000.0\\ucrt\\stddef.h",
+            "c:\\program files (x86)\\windows kits\\10\\include\\10.0.28000.0\\ucrt\\corecrt.h",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\xtr1common",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\type_traits",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\cstdint",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\stdint.h",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\compare",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\concepts",
+            "d:\\visual studio\\vc\\tools\\msvc\\14.51.36231\\include\\vcruntime_new.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

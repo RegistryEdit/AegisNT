@@ -1,0 +1,11 @@
+#pragma once
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#include <WinSock2.h>
+#include <string>
+#include <iostream>
+#include <vector>
+#include <map>
+#include <thread>
+#include <WS2tcpip.h>
+#include <memory>
+#include "ChatProtocol.h"

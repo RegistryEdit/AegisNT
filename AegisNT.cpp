@@ -136,8 +136,8 @@
 #include "Platform/ETWMonitor.h"
 #include "Platform/GetPEB.h"
 #include "Platform/HttpCapture.h"
-#include "Platform/MonitorDrvCall.h"
-#include "Platform/MultiDrvCall.h"
+#include "Platform/AegisSentinelCall.h"
+#include "Platform/AegisCoreCall.h"
 #include "Platform/NetMon.h"
 #include "Platform/ProcessCtl.h"
 #include "Platform/UserProcessCtl.h"
@@ -2135,7 +2135,7 @@ void ShowLaunchAsDialog(QWidget *Parent) {
         if (!LaunchAs(AccountType, NtPath.toStdWString().c_str(), &ProcessId)) {
           ShowErrorNotice(
               Parent, "Run",
-              DescribeLaunchAsError(AccountType, G_LastMultiDrvError));
+              DescribeLaunchAsError(AccountType, G_LastAegisCoreError));
           return;
         }
         ShowSuccessNotice(
@@ -2683,6 +2683,10 @@ QWidget *CreateWindowPage() { return new WindowManagerPage; }
 
 #include "Source/Pages/ConsolePage.cpp"
 
+#include "Source/Pages/ChatPage.cpp"
+
+#include "Source/Pages/AccountPage.cpp"
+
 #include "Source/Pages/ModuleManagerPage.cpp"
 
 #include "Source/Pages/KernelInspectorPage.cpp"
@@ -2690,6 +2694,8 @@ QWidget *CreateWindowPage() { return new WindowManagerPage; }
 #include "Source/Pages/KernelResearchPage.cpp"
 
 #include "Source/Pages/HandleLabPage.cpp"
+
+#include "Source/Pages/HookLabPage.cpp"
 
 #include "Source/Pages/SnapshotLabPage.cpp"
 
@@ -2726,19 +2732,25 @@ QWidget *CreatePageBody(int Index) {
   case 13:
     return CreateConsolePage();
   case 14:
-    return CreateSettingsPage();
+    return CreateChatPage();
   case 15:
-    return CreateKernelInspectorPage();
+    return CreateSettingsPage();
   case 16:
-    return CreateServiceManagerPage();
+    return CreateKernelInspectorPage();
   case 17:
-    return CreateHandleLabPage();
+    return CreateServiceManagerPage();
   case 18:
-    return CreateSnapshotLabPage();
+    return CreateHandleLabPage();
   case 19:
-    return CreateDiskPage();
+    return CreateSnapshotLabPage();
   case 20:
+    return CreateDiskPage();
+  case 21:
     return CreateKernelResearchPage();
+  case 22:
+    return CreateHookLabPage();
+  case 23:
+    return CreateAccountPage();
   default:
     return new QWidget;
   }
@@ -2783,6 +2795,9 @@ public:
           (ConfigurationValue("Drivers", "AutoLoad", true).toBool() ||
            ConfigurationValue("Modules", "AutoLoad", true).toBool()))
         ScanRuntimeModules();
+		if (TryOpenDevice()) {
+			ProtectProcess(GetCurrentProcessId());
+		}
     });
   }
 
@@ -3018,7 +3033,7 @@ private:
         "kernel-overview", CreateFluentIcon(Fluent::IconType::SEARCH),
         "Overview", nullptr, false, NavigationPanel::ItemPosition::SCROLL,
         "Overview", "kernel");
-    for (int Index : {15, 20})
+    for (int Index : {16, 21})
       AddPageItem(Index, "kernel-overview");
 
     NavigationPanelWidget->addItem(
@@ -3026,14 +3041,14 @@ private:
         CreateFluentIcon(Fluent::IconType::DEVELOPER_TOOLS), "Execution",
         nullptr, false, NavigationPanel::ItemPosition::SCROLL, "Execution",
         "kernel");
-    for (int Index : {6, 16, 17, 18, 7, 8, 9})
+    for (int Index : {6, 17, 18, 22, 7, 8, 9})
       AddPageItem(Index, "kernel-execution");
 
     NavigationPanelWidget->addItem(
         "kernel-storage", CreateFluentIcon(Fluent::IconType::SAVE), "Storage",
         nullptr, false, NavigationPanel::ItemPosition::SCROLL, "Storage",
         "kernel");
-    for (int Index : {19})
+    for (int Index : {19, 20})
       AddPageItem(Index, "kernel-storage");
 
     NavigationPanelWidget->addItem(
@@ -3042,7 +3057,7 @@ private:
     for (int Index : {10, 11, 12})
       AddPageItem(Index, "module");
 
-for (int Index : {13, 14})
+    for (int Index : {13, 14, 23, 15})
       AddPageItem(Index);
     Layout->addWidget(NavigationPanelWidget, 1);
     NavigationPanelWidget->expand(false);
@@ -3123,7 +3138,8 @@ for (int Index : {13, 14})
     TrayIcon->setIcon(Icon);
     TrayIcon->setToolTip("AegisNT");
 
-    auto *TrayMenu = new RoundMenu("AegisNT", this);
+    auto *TrayMenu = new QMenu(this);
+    TrayMenu->setTitle("AegisNT");
     auto *RestoreAction = new QAction("Restore", TrayMenu);
     auto *HideAction = new QAction("Hide", TrayMenu);
     auto *ExitAction = new QAction("Exit", TrayMenu);
@@ -3202,6 +3218,10 @@ int main(int Argc, char *Argv[]) {
   Application.setApplicationName("AegisNT");
   Application.setApplicationDisplayName("AegisNT");
   Application.setOrganizationName("AegisNT");
+  InitInjectLog();
+  SetInjectLogSink([](const char *Data, size_t Len) {
+    AppendConsoleOutput(QString::fromUtf8(Data, static_cast<int>(Len)));
+  });
   LoadConfiguration();
   LoadLanguageResources();
   ActiveLanguage =
@@ -3247,6 +3267,7 @@ EnsureThemeConfiguration();
         StopModule();
     }
   }
+  UnprotectProcess(GetCurrentProcessId());
   CleanupManagedDriversOnExit();
   if (!ModuleRunning.load()) {
     for (ModuleEntry &Module : DllModules)

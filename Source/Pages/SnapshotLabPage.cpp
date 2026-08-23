@@ -1,8 +1,8 @@
 QWidget *CreateSnapshotLabPage() {
   struct SnapshotLabPage final : public QWidget {
     struct SnapshotDriverState {
-      bool MultiDrvAvailable = false;
-      bool MonitorDrvAvailable = false;
+      bool AegisCoreAvailable = false;
+      bool AegisSentinelAvailable = false;
     };
 
     struct SnapshotMeta {
@@ -345,10 +345,11 @@ QWidget *CreateSnapshotLabPage() {
       Meta.WindowsVersion = QueryWindowsVersionText();
       Meta.AppVersion =
           ConfigurationValue("Application", "Version", "1.0.0").toString();
-      Meta.DriverState.MultiDrvAvailable =
+      Meta.DriverState.AegisCoreAvailable =
           G_DeviceHandle != INVALID_HANDLE_VALUE ||
-          IsDriverServiceRunning(L"MultiDrv");
-      Meta.DriverState.MonitorDrvAvailable = IsDriverServiceRunning(L"MonitorDrv");
+          IsDriverServiceRunning(L"Ring0Core");
+      Meta.DriverState.AegisSentinelAvailable =
+          IsDriverServiceRunning(L"Ring0Core");
       return Meta;
     }
 
@@ -432,7 +433,7 @@ QWidget *CreateSnapshotLabPage() {
           Success = true;
         else {
           Warnings.append(QString("Driver capture failed: %1")
-                              .arg(DescribeWin32ErrorMessage(G_LastMultiDrvError)));
+                              .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
           return Result;
         }
       }
@@ -467,7 +468,7 @@ QWidget *CreateSnapshotLabPage() {
                                     sizeof(Count), &BytesReturned) != FALSE;
       if (!Success) {
         Warnings.append(QString("Callback capture failed: %1")
-                            .arg(DescribeWin32ErrorMessage(G_LastMultiDrvError)));
+                            .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
         return Rows;
       }
       if (Count == 0)
@@ -481,7 +482,7 @@ QWidget *CreateSnapshotLabPage() {
                                     Size, &BytesReturned) != FALSE;
       if (!Success) {
         Warnings.append(QString("Callback capture failed: %1")
-                            .arg(DescribeWin32ErrorMessage(G_LastMultiDrvError)));
+                            .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
         return Rows;
       }
       for (ULONG Index = 0; Index < Output->Count; ++Index) {
@@ -533,9 +534,9 @@ QWidget *CreateSnapshotLabPage() {
       Object.insert("WindowsVersion", Meta.WindowsVersion);
       Object.insert("AppVersion", Meta.AppVersion);
       QJsonObject DriverState;
-      DriverState.insert("MultiDrvAvailable", Meta.DriverState.MultiDrvAvailable);
-      DriverState.insert("MonitorDrvAvailable",
-                         Meta.DriverState.MonitorDrvAvailable);
+      DriverState.insert("AegisCoreAvailable", Meta.DriverState.AegisCoreAvailable);
+      DriverState.insert("AegisSentinelAvailable",
+                         Meta.DriverState.AegisSentinelAvailable);
       Object.insert("DriverState", DriverState);
       return Object;
     }
@@ -756,10 +757,10 @@ QWidget *CreateSnapshotLabPage() {
       Parsed.Meta.WindowsVersion = Meta.value("WindowsVersion").toString();
       Parsed.Meta.AppVersion = Meta.value("AppVersion").toString();
       const QJsonObject DriverState = Meta.value("DriverState").toObject();
-      Parsed.Meta.DriverState.MultiDrvAvailable =
-          DriverState.value("MultiDrvAvailable").toBool(false);
-      Parsed.Meta.DriverState.MonitorDrvAvailable =
-          DriverState.value("MonitorDrvAvailable").toBool(false);
+      Parsed.Meta.DriverState.AegisCoreAvailable =
+          DriverState.value("AegisCoreAvailable").toBool(false);
+      Parsed.Meta.DriverState.AegisSentinelAvailable =
+          DriverState.value("AegisSentinelAvailable").toBool(false);
       const auto ParseArray = [&Error](const QJsonObject &RootObject,
                                        const char *Name, auto Parser,
                                        auto &Output) {
@@ -1328,9 +1329,9 @@ QWidget *CreateSnapshotLabPage() {
                       .arg(Page->SnapshotFor(Slot)->value().Callbacks.size());
               if (!Result.Failures.isEmpty()) {
                 Message += "\nFailures:\n" + Result.Failures.join("\n");
-                ShowWarningNotice(Page, "SnapshotLab", Message);
+                ShowWarningNotice(Page, "Snapshot", Message);
               } else {
-                ShowSuccessNotice(Page, "SnapshotLab", Message);
+                ShowSuccessNotice(Page, "Snapshot", Message);
               }
             },
             Qt::QueuedConnection);
@@ -1354,19 +1355,19 @@ QWidget *CreateSnapshotLabPage() {
         return;
       QFile File(Path);
       if (!File.open(QIODevice::ReadOnly)) {
-        ShowErrorNotice(this, "SnapshotLab",
+        ShowErrorNotice(this, "Snapshot",
                         "Unable to open file.\n" + QDir::toNativeSeparators(Path));
         return;
       }
       SnapshotDocument Document;
       QString Error;
       if (!ParseDocument(File.readAll(), Document, Error)) {
-        ShowErrorNotice(this, "SnapshotLab", Error);
+        ShowErrorNotice(this, "Snapshot", Error);
         return;
       }
       Document.LoadPath = QDir::toNativeSeparators(Path);
       AssignSnapshot(*Slot, std::move(Document));
-      ShowSuccessNotice(this, "SnapshotLab",
+      ShowSuccessNotice(this, "Snapshot",
                         "Snapshot JSON loaded.\n" +
                             QDir::toNativeSeparators(Path));
     }
@@ -1374,7 +1375,7 @@ QWidget *CreateSnapshotLabPage() {
     void SaveSelectedSnapshot() {
       const std::optional<SnapshotDocument> Document = SelectedSnapshot();
       if (!Document.has_value()) {
-        ShowWarningNotice(this, "SnapshotLab",
+        ShowWarningNotice(this, "Snapshot",
                           "Select Snapshot A or B before saving.");
         return;
       }
@@ -1388,26 +1389,26 @@ QWidget *CreateSnapshotLabPage() {
         return;
       QSaveFile File(Path);
       if (!File.open(QIODevice::WriteOnly)) {
-        ShowErrorNotice(this, "SnapshotLab",
+        ShowErrorNotice(this, "Snapshot",
                         "Unable to open file for writing.\n" +
                             QDir::toNativeSeparators(Path));
         return;
       }
       File.write(SerializeDocument(*Document));
       if (!File.commit()) {
-        ShowErrorNotice(this, "SnapshotLab",
+        ShowErrorNotice(this, "Snapshot",
                         "Failed to save snapshot JSON.\n" +
                             QDir::toNativeSeparators(Path));
         return;
       }
-      ShowSuccessNotice(this, "SnapshotLab",
+      ShowSuccessNotice(this, "Snapshot",
                         "Snapshot JSON saved.\n" +
                             QDir::toNativeSeparators(Path));
     }
 
     void CompareSnapshots() {
       if (!SnapshotA.has_value() || !SnapshotB.has_value()) {
-        ShowWarningNotice(this, "SnapshotLab",
+        ShowWarningNotice(this, "Snapshot",
                           "Compare requires both Snapshot A and Snapshot B.");
         return;
       }
@@ -1418,11 +1419,11 @@ QWidget *CreateSnapshotLabPage() {
       SummaryView->setPlainText(BuildSummaryText());
       RefreshUiState();
       if (!LastDiff.Warnings.isEmpty()) {
-        ShowWarningNotice(this, "SnapshotLab",
+        ShowWarningNotice(this, "Snapshot",
                           "Compare completed with warnings.\n" +
                               LastDiff.Warnings.join("\n"));
       } else {
-        ShowSuccessNotice(this, "SnapshotLab", "Compare completed.");
+        ShowSuccessNotice(this, "Snapshot", "Compare completed.");
       }
     }
 
@@ -1500,7 +1501,7 @@ QWidget *CreateSnapshotLabPage() {
       SnapshotB.reset();
       ClearDiffViews();
       RefreshUiState();
-      ShowSuccessNotice(this, "SnapshotLab",
+      ShowSuccessNotice(this, "Snapshot",
                         "Snapshot A, Snapshot B, and diff results cleared.");
     }
 
