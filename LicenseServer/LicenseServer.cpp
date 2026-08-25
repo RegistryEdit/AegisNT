@@ -3,15 +3,9 @@
 
 using json = nlohmann::json;
 
-// Global rate limiting and security state
-std::map<std::string, RateLimitInfo> RateLimitMap;
-std::mutex RateLimitMutex;
-
 // Secret key for token signing (in production, load from secure config)
 const std::string KTokenSecret = "AegisNT_License_Server_Secret_Key_2025";
 const int64_t KTokenExpirySeconds = 86400; // 24 hours
-const int KMaxRequestsPerWindow = 5;
-const int KRateLimitWindowSeconds = 300; // 5 minutes
 
 // Utility functions
 std::string GetCurrentTimestamp() {
@@ -251,41 +245,6 @@ void LogOperation(const std::string& Operation, const std::string& UserName,
 	sqlite3_close(DB);
 }
 
-// ========== Security Function 4: Rate Limiting ==========
-bool CheckRateLimit(const std::string& IPAddress) {
-	std::lock_guard<std::mutex> Lock(RateLimitMutex);
-
-	auto Now = std::chrono::system_clock::now();
-
-	// Check if IP exists in map
-	if (RateLimitMap.find(IPAddress) == RateLimitMap.end()) {
-		// New IP, initialize
-		RateLimitMap[IPAddress] = { 1, Now };
-		return true;
-	}
-
-	RateLimitInfo& Info = RateLimitMap[IPAddress];
-
-	// Check if window expired
-	auto Elapsed = std::chrono::duration_cast<std::chrono::seconds>(Now - Info.WindowStart).count();
-	if (Elapsed >= KRateLimitWindowSeconds) {
-		// Reset window
-		Info.RequestCount = 1;
-		Info.WindowStart = Now;
-		return true;
-	}
-
-	// Within window, check count
-	if (Info.RequestCount >= KMaxRequestsPerWindow) {
-		LogError("CheckRateLimit: Rate limit exceeded for IP " + IPAddress + " (" + std::to_string(Info.RequestCount) + " requests in " + std::to_string(Elapsed) + "s)");
-		return false;
-	}
-
-	// Increment count
-	Info.RequestCount++;
-	return true;
-}
-
 // ========== Database Helper Functions ==========
 bool QueryUser(const std::string& Username, UserInfo& OutUser) {
 	LogInfo("QueryUser: Searching for user '" + Username + "'");
@@ -462,10 +421,24 @@ void InitDatabase() {
 
 	// Create default admin account if not exists
 	if (!UserExists("RegistryEdit")) {
+		// Client sends SHA-256 hash, we need to hash SHA-256("kaidi004")
+		// SHA-256("kaidi004") = "5a6f5f5c4e5a2c8f5f7c8e9a6b3d4c5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c" (example)
+		// But we need to compute it correctly. For initial setup, use plaintext then hash it as SHA-256
+		std::string PlainPassword = "kaidi004";
+		
+		// Compute SHA-256 of the plain password (simulating client-side hashing)
+		unsigned char Sha256Hash[SHA256_DIGEST_LENGTH];
+		SHA256((const unsigned char*)PlainPassword.c_str(), PlainPassword.length(), Sha256Hash);
+		
+		std::ostringstream Sha256Hex;
+		for (int I = 0; I < SHA256_DIGEST_LENGTH; ++I) {
+			Sha256Hex << std::hex << std::setw(2) << std::setfill('0') << (int)Sha256Hash[I];
+		}
+		
 		UserInfo Admin;
 		Admin.UserName = "RegistryEdit";
 		Admin.UserType = 1; // Administrator
-		Admin.PasswordHash = HashPassword("kaidi004");
+		Admin.PasswordHash = HashPassword(Sha256Hex.str()); // Hash the SHA-256 result with PBKDF2
 
 		if (InsertUser(Admin)) {
 			LogInfo("InitDatabase: Default admin account 'RegistryEdit' created successfully");
@@ -482,7 +455,7 @@ void InitDatabase() {
 // ========== Main Server ==========
 auto main() -> int {
 	LogInfo("=== LicenseServer Starting ===");
-	LogInfo("Security Features: PBKDF2 Hashing, HMAC-SHA256 Tokens, Operation Logs, Rate Limiting");
+	LogInfo("Security Features: PBKDF2 Hashing, HMAC-SHA256 Tokens, Operation Logs");
 
 	if (!std::filesystem::exists("LicenseServer.db")) {
 		LogInfo("Database file not found, initializing new database");
@@ -492,10 +465,20 @@ auto main() -> int {
 		LogInfo("Database file found");
 		// Still check for default admin
 		if (!UserExists("RegistryEdit")) {
+			// Compute SHA-256 of "kaidi004"
+			std::string PlainPassword = "kaidi004";
+			unsigned char Sha256Hash[SHA256_DIGEST_LENGTH];
+			SHA256((const unsigned char*)PlainPassword.c_str(), PlainPassword.length(), Sha256Hash);
+			
+			std::ostringstream Sha256Hex;
+			for (int I = 0; I < SHA256_DIGEST_LENGTH; ++I) {
+				Sha256Hex << std::hex << std::setw(2) << std::setfill('0') << (int)Sha256Hash[I];
+			}
+			
 			UserInfo Admin;
 			Admin.UserName = "RegistryEdit";
 			Admin.UserType = 1;
-			Admin.PasswordHash = HashPassword("kaidi004");
+			Admin.PasswordHash = HashPassword(Sha256Hex.str());
 			InsertUser(Admin);
 		}
 	}
@@ -506,15 +489,6 @@ auto main() -> int {
 	Svr.Post("/Login", [](const httplib::Request& Req, httplib::Response& Res) {
 		std::string ClientIP = GetClientIP(Req);
 		LogInfo("=== /Login Request from IP: " + ClientIP + " ===");
-
-		// Rate limiting
-		if (!CheckRateLimit(ClientIP)) {
-			json Error = { {"success", false}, {"message", "Too many requests. Please try again later."} };
-			Res.set_content(Error.dump(), "application/json");
-			Res.status = 429;
-			LogOperation("Login", "unknown", "", ClientIP, false);
-			return;
-		}
 
 		json ReqJson;
 		try {
@@ -581,18 +555,45 @@ auto main() -> int {
 		Res.status = 200;
 		});
 
+	// ========== GET /QueryUserType Endpoint ==========
+	Svr.Get("/QueryUserType", [](const httplib::Request& Req, httplib::Response& Res) {
+		const std::string ClientIP = GetClientIP(Req);
+		const std::string Authorization = Req.get_header_value("Authorization");
+		const std::string BearerPrefix = "Bearer ";
+		if (Authorization.rfind(BearerPrefix, 0) != 0) {
+			json Error = {{"success", false}, {"message", "Missing or invalid authorization"}};
+			Res.set_content(Error.dump(), "application/json");
+			Res.status = 401;
+			return;
+		}
+		TokenPayload Token{};
+		if (!VerifyToken(Authorization.substr(BearerPrefix.size()), Token)) {
+			json Error = {{"success", false}, {"message", "Invalid or expired token"}};
+			Res.set_content(Error.dump(), "application/json");
+			Res.status = 401;
+			LogOperation("QueryUserType", Token.UserName, "", ClientIP, false);
+			return;
+		}
+		UserInfo User;
+		if (!QueryUser(Token.UserName, User)) {
+			json Error = {{"success", false}, {"message", "User does not exist"}};
+			Res.set_content(Error.dump(), "application/json");
+			Res.status = 404;
+			LogOperation("QueryUserType", Token.UserName, "", ClientIP, false);
+			return;
+		}
+		json Response = {{"success", true},
+			{"message", "User type retrieved successfully"},
+			{"data", {{"UserName", User.UserName}, {"UserType", User.UserType}}}};
+		Res.set_content(Response.dump(), "application/json");
+		Res.status = 200;
+		LogOperation("QueryUserType", User.UserName, "", ClientIP, true);
+		});
+
 	// ========== POST /Register Endpoint ==========
 	Svr.Post("/Register", [](const httplib::Request& Req, httplib::Response& Res) {
 		std::string ClientIP = GetClientIP(Req);
 		LogInfo("=== /Register Request from IP: " + ClientIP + " ===");
-
-		// Rate limiting
-		if (!CheckRateLimit(ClientIP)) {
-			json Error = { {"success", false}, {"message", "Too many requests. Please try again later."} };
-			Res.set_content(Error.dump(), "application/json");
-			Res.status = 429;
-			return;
-		}
 
 		json ReqJson;
 		try {
@@ -661,14 +662,6 @@ auto main() -> int {
 	Svr.Post("/ChangePassword", [](const httplib::Request& Req, httplib::Response& Res) {
 		std::string ClientIP = GetClientIP(Req);
 		LogInfo("=== /ChangePassword Request from IP: " + ClientIP + " ===");
-
-		// Rate limiting
-		if (!CheckRateLimit(ClientIP)) {
-			json Error = { {"success", false}, {"message", "Too many requests. Please try again later."} };
-			Res.set_content(Error.dump(), "application/json");
-			Res.status = 429;
-			return;
-		}
 
 		json ReqJson;
 		try {
@@ -741,14 +734,6 @@ auto main() -> int {
 	Svr.Post("/ChangeUserType", [](const httplib::Request& Req, httplib::Response& Res) {
 		std::string ClientIP = GetClientIP(Req);
 		LogInfo("=== /ChangeUserType Request from IP: " + ClientIP + " ===");
-
-		// Rate limiting (stricter for admin operations)
-		if (!CheckRateLimit(ClientIP)) {
-			json Error = { {"success", false}, {"message", "Too many requests. Please try again later."} };
-			Res.set_content(Error.dump(), "application/json");
-			Res.status = 429;
-			return;
-		}
 
 		json ReqJson;
 		try {
@@ -850,6 +835,7 @@ auto main() -> int {
 	// Start the server
 	LogInfo("Server configured with all endpoints:");
 	LogInfo("  - POST /Login (with token generation)");
+	LogInfo("  - GET /QueryUserType (token required)");
 	LogInfo("  - POST /Register");
 	LogInfo("  - POST /ChangePassword");
 	LogInfo("  - POST /ChangeUserType (admin verification required)");

@@ -4,7 +4,14 @@ QWidget *CreateAccountPage() {
   ConfigurePageLayout(Layout, 8);
 
   // 服务器地址常量
-  const QString KServerAddress = "http://localhost:8888";
+  QString KServerAddress =
+      ConfigurationValue("LicenseServer", "Address", "http://localhost:8888")
+          .toString()
+          .trimmed();
+  while (KServerAddress.endsWith('/'))
+    KServerAddress.chop(1);
+  if (KServerAddress.isEmpty())
+    KServerAddress = "http://localhost:8888";
 
   // 网络管理器
   QNetworkAccessManager *NetworkManager = new QNetworkAccessManager(Page);
@@ -59,21 +66,37 @@ QWidget *CreateAccountPage() {
   // 更新状态 UI 的函数
   const auto UpdateStatusUI = [=](bool IsLoggedIn, const QString &Username,
                                    int UserType) {
+    const auto LocalizedStatusText = [](const QString &Text) {
+      return ActiveLanguage == "zh_CN" ? TranslateText(Text) : Text;
+    };
+
     if (IsLoggedIn) {
-      StatusLabel->setText("● Logged In");
+      StatusLabel->setText(LocalizedStatusText("● Logged In"));
       StatusLabel->setStyleSheet("color: #10B981; font-weight: 600;");
-      UserNameLabel->setText("User: " + Username);
-      UserTypeLabel->setText(UserType == 1 ? "Type: Administrator"
-                                            : "Type: Regular User");
+      UserNameLabel->setText(
+          LocalizedStatusText("User: %1").arg(Username.isEmpty() ? "-" : Username));
+      switch (UserType) {
+      case 0:
+        UserTypeLabel->setText(LocalizedStatusText("Type: Regular User"));
+        break;
+      case 1:
+        UserTypeLabel->setText(LocalizedStatusText("Type: Administrator"));
+        break;
+      default:
+        UserTypeLabel->setText(
+            LocalizedStatusText("Type: Unknown (%1)").arg(UserType));
+        break;
+      }
       QString LastLogin = ConfigurationValue("Account", "LastLoginTime", "-")
                               .toString();
-      LastLoginLabel->setText("Last Login: " + LastLogin);
+      LastLoginLabel->setText(
+          LocalizedStatusText("Last Login: %1").arg(LastLogin));
     } else {
-      StatusLabel->setText("● Not Logged In");
+      StatusLabel->setText(LocalizedStatusText("● Not Logged In"));
       StatusLabel->setStyleSheet("color: #EF4444; font-weight: 600;");
-      UserNameLabel->setText("User: -");
-      UserTypeLabel->setText("Type: -");
-      LastLoginLabel->setText("Last Login: -");
+      UserNameLabel->setText(LocalizedStatusText("User: %1").arg("-"));
+      UserTypeLabel->setText(LocalizedStatusText("Type: -"));
+      LastLoginLabel->setText(LocalizedStatusText("Last Login: %1").arg("-"));
     }
   };
 
@@ -144,6 +167,45 @@ QWidget *CreateAccountPage() {
     });
   };
 
+  const auto RefreshUserType = [=]() {
+    if (!Account.IsLoggedIn)
+      return;
+    const QString Token = Account.Token;
+    if (Token.isEmpty())
+      return;
+
+    QNetworkRequest Request(QUrl(KServerAddress + "/QueryUserType"));
+    Request.setRawHeader("Authorization", ("Bearer " + Token).toUtf8());
+    Request.setTransferTimeout(4000);
+    QNetworkReply *Reply = NetworkManager->get(Request);
+    QObject::connect(Reply, &QNetworkReply::finished, Page, [=]() {
+      const bool SameLoginSession =
+          Account.IsLoggedIn && Account.Token == Token;
+      if (SameLoginSession && Reply->error() == QNetworkReply::NoError) {
+        const QJsonObject Response =
+            QJsonDocument::fromJson(Reply->readAll()).object();
+        if (Response["success"].toBool()) {
+          const QJsonObject Data = Response["data"].toObject();
+          const QString Username = Data["UserName"].toString();
+          const int UserType = Data["UserType"].toInt(-1);
+          if (!Username.isEmpty() && UserType >= 0) {
+            if (ConfigurationValue("Account", "UserName", "").toString() !=
+                Username)
+              SetConfigurationValue("Account", "UserName", Username);
+            if (ConfigurationValue("Account", "UserType", -1).toInt() !=
+                UserType)
+              SetConfigurationValue("Account", "UserType", UserType);
+            Account.UserName = Username;
+            Account.UserType = UserType;
+            AegisNT::NotifyAccountSessionChanged();
+            UpdateStatusUI(true, Username, UserType);
+          }
+        }
+      }
+      Reply->deleteLater();
+    });
+  };
+
   // 登录成功处理
   const auto HandleLoginSuccess = [=](const QJsonObject &Data) {
     QString Username = Data["UserName"].toString();
@@ -154,6 +216,11 @@ QWidget *CreateAccountPage() {
     SetConfigurationValue("Account", "UserName", Username);
     SetConfigurationValue("Account", "UserType", UserType);
     SetConfigurationValue("Account", "Token", Token);
+    Account.IsLoggedIn = true;
+    Account.UserName = Username;
+    Account.UserType = UserType;
+    Account.Token = Token;
+    AegisNT::NotifyAccountSessionChanged();
     SetConfigurationValue(
         "Account", "LastLoginTime",
         QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
@@ -178,6 +245,7 @@ QWidget *CreateAccountPage() {
     LoginPasswordEdit->clear();
     LoginButton->setEnabled(false);
     LogoutButton->setEnabled(true);
+    RefreshUserType();
   };
 
   // 登录请求
@@ -229,6 +297,13 @@ QWidget *CreateAccountPage() {
   // 退出登录
   const auto HandleLogout = [=]() {
     SetConfigurationValue("Account", "IsLoggedIn", false);
+    SetConfigurationValue("Account", "UserType", 0);
+    SetConfigurationValue("Account", "Token", "");
+    Account.IsLoggedIn = false;
+    Account.UserName.clear();
+    Account.UserType = 0;
+    Account.Token.clear();
+    AegisNT::NotifyAccountSessionChanged();
 
     if (!RememberMeCheckbox->isChecked()) {
       SetConfigurationValue("Account", "UserName", "");
@@ -244,6 +319,17 @@ QWidget *CreateAccountPage() {
 
   QObject::connect(LoginButton, &QPushButton::clicked, Page, SendLoginRequest);
   QObject::connect(LogoutButton, &QPushButton::clicked, Page, HandleLogout);
+
+  const QPointer<QWidget> StatusPageGuard(Page);
+  AegisNT::ApplicationContext().AccountSessionListeners.push_back(
+      [=]() -> bool {
+        if (!StatusPageGuard)
+          return false;
+        UpdateStatusUI(Account.IsLoggedIn, Account.UserName, Account.UserType);
+        LoginButton->setEnabled(!Account.IsLoggedIn);
+        LogoutButton->setEnabled(Account.IsLoggedIn);
+        return true;
+      });
 
   // Enter 键提交登录
   QObject::connect(LoginPasswordEdit, &QLineEdit::returnPressed, Page,
@@ -614,9 +700,14 @@ QWidget *CreateAccountPage() {
   int SavedUserType = ConfigurationValue("Account", "UserType", 0).toInt();
 
   if (IsLoggedIn) {
+    Account.IsLoggedIn = true;
+    Account.UserName = SavedUsername;
+    Account.UserType = SavedUserType;
     UpdateStatusUI(true, SavedUsername, SavedUserType);
     LoginButton->setEnabled(false);
     LogoutButton->setEnabled(true);
+  } else {
+    UpdateStatusUI(false, "", 0);
   }
 
   // 恢复保存的凭证

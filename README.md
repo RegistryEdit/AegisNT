@@ -147,3 +147,17 @@ sc.exe stop Ring0Core
 ## License
 
 仓库当前未包含许可证文件。在添加明确的 `LICENSE` 前，默认保留全部权利，不应假定代码可以复制、修改或重新分发。
+## Cross-platform servers
+
+The standalone TCP chat server and HTTP license server support Windows and
+Linux. Use the repository CMake project for both platforms:
+
+```sh
+cmake -S . -B build
+cmake --build build --config Release
+```
+
+Use `-DAEGISNT_BUILD_CHAT_SERVER=OFF` or
+`-DAEGISNT_BUILD_LICENSE_SERVER=OFF` to build only one server. Linux requires
+a C++20 toolchain plus OpenSSL, SQLite3, cpp-httplib, and nlohmann/json
+development packages.

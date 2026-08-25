@@ -927,6 +927,7 @@ auto &ApplicationState = AegisNT::ApplicationContext();
 auto &Configuration = ApplicationState.Configuration;
 auto &ChineseTranslations = ApplicationState.ChineseTranslations;
 auto &ActiveLanguage = ApplicationState.ActiveLanguage;
+auto &Account = ApplicationState.Account;
 auto &ModulesScanned = ApplicationState.ModulesScanned;
 auto &ModuleRunning = ApplicationState.ModuleRunning;
 auto &RunningModulePath = ApplicationState.RunningModulePath;
@@ -3223,6 +3224,10 @@ int main(int Argc, char *Argv[]) {
     AppendConsoleOutput(QString::fromUtf8(Data, static_cast<int>(Len)));
   });
   LoadConfiguration();
+  Account.IsLoggedIn = ConfigurationValue("Account", "IsLoggedIn", false).toBool();
+  Account.UserName = ConfigurationValue("Account", "UserName", "").toString();
+  Account.UserType = ConfigurationValue("Account", "UserType", 0).toInt();
+  Account.Token = ConfigurationValue("Account", "Token", "").toString();
   LoadLanguageResources();
   ActiveLanguage =
       ConfigurationValue("Application", "Language", "en_US").toString() ==

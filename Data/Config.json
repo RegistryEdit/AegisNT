@@ -19,6 +19,9 @@
             "./Drivers"
         ]
     },
+    "LicenseServer": {
+        "Address": "http://localhost:8888"
+    },
     "Modules": {
         "AutoLoad": true,
         "Paths": [

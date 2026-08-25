@@ -4,13 +4,24 @@
 #include <QString>
 
 #include <atomic>
+#include <functional>
+#include <vector>
 
 namespace AegisNT {
+
+struct AccountSession {
+  bool IsLoggedIn = false;
+  QString UserName;
+  int UserType = 0;
+  QString Token;
+};
 
 struct AppContext {
   QJsonObject Configuration;
   QJsonObject ChineseTranslations;
   QString ActiveLanguage = QStringLiteral("en_US");
+  AccountSession Account;
+  std::vector<std::function<bool()>> AccountSessionListeners;
 
   bool ModulesScanned = false;
   std::atomic_bool ModuleRunning = false;
@@ -24,5 +35,6 @@ struct AppContext {
 };
 
 AppContext &ApplicationContext();
+void NotifyAccountSessionChanged();
 
 } // namespace AegisNT
