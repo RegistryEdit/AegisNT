@@ -1,27 +1,45 @@
 ﻿#include "LicenseServer.h"
 #include <iomanip>
+#include <string>
+#include <fstream>
+#include <cpr/cpr.h>
+#include <cstdlib>
+#include <mutex>
 
 using json = nlohmann::json;
+using std::string;
 
 // Secret key for token signing (in production, load from secure config)
 const std::string KTokenSecret = "AegisNT_License_Server_Secret_Key_2025";
 const int64_t KTokenExpirySeconds = 86400; // 24 hours
+std::mutex LogMutex;
 
 // Utility functions
 std::string GetCurrentTimestamp() {
 	auto Now = std::time(nullptr);
-	auto Tm = *std::localtime(&Now);
+	std::tm Tm{};
+#ifdef _WIN32
+	localtime_s(&Tm, &Now);
+#else
+	localtime_r(&Now, &Tm);
+#endif
 	std::ostringstream Oss;
 	Oss << std::put_time(&Tm, "%Y-%m-%d %H:%M:%S");
 	return Oss.str();
 }
 
 void LogInfo(const std::string& Message) {
-	std::cout << "[" << GetCurrentTimestamp() << "] [INFO] " << Message << std::endl;
+	const std::string Line = "[" + GetCurrentTimestamp() + "] [INFO] " + Message;
+	std::lock_guard<std::mutex> Lock(LogMutex);
+	std::cout << Line << std::endl;
+	std::ofstream("LicenseServer.runtime.log", std::ios::app) << Line << '\n';
 }
 
 void LogError(const std::string& Message) {
-	std::cerr << "[" << GetCurrentTimestamp() << "] [ERROR] " << Message << std::endl;
+	const std::string Line = "[" + GetCurrentTimestamp() + "] [ERROR] " + Message;
+	std::lock_guard<std::mutex> Lock(LogMutex);
+	std::cerr << Line << std::endl;
+	std::ofstream("LicenseServer.runtime.log", std::ios::app) << Line << '\n';
 }
 
 std::string GetClientIP(const httplib::Request& Req) {
@@ -31,6 +49,42 @@ std::string GetClientIP(const httplib::Request& Req) {
 	}
 	// Fallback to remote_addr
 	return Req.remote_addr;
+}
+
+struct UpdateSourceConfig {
+	std::string Url;
+	std::string Password;
+};
+
+bool LoadUpdateSourceConfig(UpdateSourceConfig& Config, std::string& Error) {
+	const std::string ConfigFile = "UpdateConfig.json";
+	std::ifstream Stream(ConfigFile);
+	if (!Stream) {
+		Error = ConfigFile + " was not found in the LicenseServer working directory";
+		return false;
+	}
+
+	const json Document = json::parse(Stream, nullptr, false);
+	if (Document.is_discarded() || !Document.is_object()) {
+		Error = ConfigFile + " contains invalid JSON";
+		return false;
+	}
+	if (!Document.contains("url") || !Document["url"].is_string()) {
+		Error = ConfigFile + " must contain a string field named url";
+		return false;
+	}
+	if (Document.contains("password") && !Document["password"].is_string()) {
+		Error = ConfigFile + " field password must be a string";
+		return false;
+	}
+
+	Config.Url = Document["url"].get<std::string>();
+	Config.Password = Document.value("password", "");
+	if (Config.Url.empty()) {
+		Error = ConfigFile + " field url cannot be empty";
+		return false;
+	}
+	return true;
 }
 
 // ========== Security Function 1: PBKDF2 Password Hashing ==========
@@ -255,7 +309,7 @@ bool QueryUser(const std::string& Username, UserInfo& OutUser) {
 	}
 
 	sqlite3_stmt* Stmt;
-	std::string Sql = "SELECT UserName, UserType, PasswordHash FROM Users WHERE UserName = ?;";
+	std::string Sql = "SELECT UserName, UserType, COALESCE(Title, ''), PasswordHash FROM Users WHERE UserName = ?;";
 
 	if (sqlite3_prepare_v2(DB, Sql.c_str(), -1, &Stmt, nullptr) != SQLITE_OK) {
 		LogError("QueryUser: Failed to prepare statement");
@@ -269,7 +323,8 @@ bool QueryUser(const std::string& Username, UserInfo& OutUser) {
 	if (sqlite3_step(Stmt) == SQLITE_ROW) {
 		OutUser.UserName = reinterpret_cast<const char*>(sqlite3_column_text(Stmt, 0));
 		OutUser.UserType = sqlite3_column_int(Stmt, 1);
-		OutUser.PasswordHash = reinterpret_cast<const char*>(sqlite3_column_text(Stmt, 2));
+		OutUser.Title = reinterpret_cast<const char*>(sqlite3_column_text(Stmt, 2));
+		OutUser.PasswordHash = reinterpret_cast<const char*>(sqlite3_column_text(Stmt, 3));
 		Found = true;
 		LogInfo("QueryUser: User '" + Username + "' found (UserType=" + std::to_string(OutUser.UserType) + ")");
 	}
@@ -291,7 +346,7 @@ bool InsertUser(const UserInfo& User) {
 	}
 
 	sqlite3_stmt* Stmt;
-	std::string Sql = "INSERT INTO Users (UserName, UserType, PasswordHash) VALUES (?, ?, ?);";
+	std::string Sql = "INSERT INTO Users (UserName, UserType, Title, PasswordHash) VALUES (?, ?, ?, ?);";
 
 	if (sqlite3_prepare_v2(DB, Sql.c_str(), -1, &Stmt, nullptr) != SQLITE_OK) {
 		LogError("InsertUser: Failed to prepare statement");
@@ -301,7 +356,8 @@ bool InsertUser(const UserInfo& User) {
 
 	sqlite3_bind_text(Stmt, 1, User.UserName.c_str(), -1, SQLITE_STATIC);
 	sqlite3_bind_int(Stmt, 2, User.UserType);
-	sqlite3_bind_text(Stmt, 3, User.PasswordHash.c_str(), -1, SQLITE_STATIC);
+	sqlite3_bind_text(Stmt, 3, User.Title.c_str(), -1, SQLITE_STATIC);
+	sqlite3_bind_text(Stmt, 4, User.PasswordHash.c_str(), -1, SQLITE_STATIC);
 
 	bool Success = (sqlite3_step(Stmt) == SQLITE_DONE);
 
@@ -385,6 +441,23 @@ bool UpdateUserType(const std::string& Username, int NewUserType) {
 	return Success;
 }
 
+bool UpdateUserTitle(const std::string& Username, const std::string& NewTitle) {
+	if (NewTitle.size() > 48) return false;
+	sqlite3* DB = nullptr;
+	if (sqlite3_open("LicenseServer.db", &DB) != SQLITE_OK) return false;
+	const char* Sql = "UPDATE Users SET Title = ? WHERE UserName = ?;";
+	sqlite3_stmt* Stmt = nullptr;
+	bool Success = sqlite3_prepare_v2(DB, Sql, -1, &Stmt, nullptr) == SQLITE_OK;
+	if (Success) {
+		sqlite3_bind_text(Stmt, 1, NewTitle.c_str(), -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(Stmt, 2, Username.c_str(), -1, SQLITE_TRANSIENT);
+		Success = sqlite3_step(Stmt) == SQLITE_DONE;
+	}
+	if (Stmt) sqlite3_finalize(Stmt);
+	sqlite3_close(DB);
+	return Success;
+}
+
 bool UserExists(const std::string& Username) {
 	UserInfo Temp;
 	return QueryUser(Username, Temp);
@@ -407,6 +480,7 @@ void InitDatabase() {
 	std::string Sql = "CREATE TABLE IF NOT EXISTS Users ("
 		"UserName TEXT PRIMARY KEY NOT NULL,"
 		"UserType INT NOT NULL,"
+		"Title TEXT NOT NULL DEFAULT '',"
 		"PasswordHash TEXT NOT NULL);";
 	char* ErrMsg;
 	Exit = sqlite3_exec(DB, Sql.c_str(), NULL, 0, &ErrMsg);
@@ -416,6 +490,18 @@ void InitDatabase() {
 	}
 	else {
 		LogInfo("InitDatabase: Users table created or already exists");
+	}
+	// Migrate databases created before the Title column was introduced.
+	char* MigrationError = nullptr;
+	const int MigrationResult = sqlite3_exec(
+		DB, "ALTER TABLE Users ADD COLUMN Title TEXT NOT NULL DEFAULT '';",
+		nullptr, nullptr, &MigrationError);
+	if (MigrationResult != SQLITE_OK && MigrationError != nullptr) {
+		const std::string ErrorText = MigrationError;
+		sqlite3_free(MigrationError);
+		if (ErrorText.find("duplicate column name") == std::string::npos) {
+			LogError("Failed to migrate Users.Title: " + ErrorText);
+		}
 	}
 	sqlite3_close(DB);
 
@@ -438,6 +524,7 @@ void InitDatabase() {
 		UserInfo Admin;
 		Admin.UserName = "RegistryEdit";
 		Admin.UserType = 1; // Administrator
+		Admin.Title = "Dev";
 		Admin.PasswordHash = HashPassword(Sha256Hex.str()); // Hash the SHA-256 result with PBKDF2
 
 		if (InsertUser(Admin)) {
@@ -449,11 +536,14 @@ void InitDatabase() {
 	}
 	else {
 		LogInfo("InitDatabase: Default admin account 'RegistryEdit' already exists");
+		UserInfo Admin;
+		if (QueryUser("RegistryEdit", Admin) && Admin.Title.empty())
+			UpdateUserTitle("RegistryEdit", "Dev");
 	}
 }
 
 // ========== Main Server ==========
-auto main() -> int {
+auto RunLicenseServer() -> int {
 	LogInfo("=== LicenseServer Starting ===");
 	LogInfo("Security Features: PBKDF2 Hashing, HMAC-SHA256 Tokens, Operation Logs");
 
@@ -478,8 +568,13 @@ auto main() -> int {
 			UserInfo Admin;
 			Admin.UserName = "RegistryEdit";
 			Admin.UserType = 1;
+			Admin.Title = "Dev";
 			Admin.PasswordHash = HashPassword(Sha256Hex.str());
 			InsertUser(Admin);
+		} else {
+			UserInfo Admin;
+			if (QueryUser("RegistryEdit", Admin) && Admin.Title.empty())
+				UpdateUserTitle("RegistryEdit", "Dev");
 		}
 	}
 
@@ -547,6 +642,7 @@ auto main() -> int {
 			{"data", {
 				{"UserName", User.UserName},
 				{"UserType", User.UserType},
+				{"Title", User.Title},
 				{"Token", Token}
 			}}
 		};
@@ -584,7 +680,8 @@ auto main() -> int {
 		}
 		json Response = {{"success", true},
 			{"message", "User type retrieved successfully"},
-			{"data", {{"UserName", User.UserName}, {"UserType", User.UserType}}}};
+			{"data", {{"UserName", User.UserName}, {"UserType", User.UserType},
+			           {"Title", User.Title}}}};
 		Res.set_content(Response.dump(), "application/json");
 		Res.status = 200;
 		LogOperation("QueryUserType", User.UserName, "", ClientIP, true);
@@ -635,6 +732,7 @@ auto main() -> int {
 		UserInfo NewUser;
 		NewUser.UserName = Username;
 		NewUser.UserType = UserType;
+		NewUser.Title = "Regular";
 		NewUser.PasswordHash = HashPassword(Password);
 
 		if (!InsertUser(NewUser)) {
@@ -751,6 +849,7 @@ auto main() -> int {
 		std::string AdminPassword = ReqJson.value("AdminPassword", "");
 		std::string TargetUserName = ReqJson.value("TargetUserName", "");
 		int NewUserType = ReqJson.value("NewUserType", -1);
+		const std::string NewTitle = ReqJson.value("Title", "");
 
 		if (AdminName.empty() || AdminPassword.empty() || TargetUserName.empty() || NewUserType == -1) {
 			LogError("/ChangeUserType: Missing required fields");
@@ -763,6 +862,12 @@ auto main() -> int {
 		if (NewUserType != 0 && NewUserType != 1) {
 			LogError("/ChangeUserType: Invalid NewUserType (" + std::to_string(NewUserType) + ")");
 			json Error = { {"success", false}, {"message", "Invalid NewUserType (must be 0 or 1)"} };
+			Res.set_content(Error.dump(), "application/json");
+			Res.status = 400;
+			return;
+		}
+		if (NewTitle.size() > 48) {
+			json Error = {{"success", false}, {"message", "Title is too long"}};
 			Res.set_content(Error.dump(), "application/json");
 			Res.status = 400;
 			return;
@@ -819,6 +924,13 @@ auto main() -> int {
 			LogOperation("ChangeUserType", AdminName, TargetUserName, ClientIP, false);
 			return;
 		}
+		if (!UpdateUserTitle(TargetUserName, NewTitle)) {
+			json Error = {{"success", false}, {"message", "Failed to update title"}};
+			Res.set_content(Error.dump(), "application/json");
+			Res.status = 500;
+			LogOperation("ChangeUserType", AdminName, TargetUserName, ClientIP, false);
+			return;
+		}
 
 		LogInfo("/ChangeUserType: UserType changed successfully for user '" + TargetUserName + "' to " + std::to_string(NewUserType) + " by admin '" + AdminName + "'");
 		LogOperation("ChangeUserType", AdminName, TargetUserName, ClientIP, true);
@@ -832,6 +944,122 @@ auto main() -> int {
 		Res.status = 200;
 		});
 
+	Svr.Post("/ChangeUserTitle", [](const httplib::Request& Req, httplib::Response& Res) {
+		const std::string ClientIP = GetClientIP(Req);
+		json Json = json::parse(Req.body, nullptr, false);
+		if (Json.is_discarded() || !Json.is_object()) {
+			Res.status = 400;
+			Res.set_content(json({{"success", false}, {"message", "Invalid JSON"}}).dump(), "application/json");
+			return;
+		}
+		const std::string AdminName = Json.value("AdminName", "");
+		const std::string AdminPassword = Json.value("AdminPassword", "");
+		const std::string Target = Json.value("TargetUserName", "");
+		const std::string Title = Json.value("Title", "");
+		UserInfo Admin;
+		if (AdminName.empty() || AdminPassword.empty() || Target.empty() || Title.size() > 48) {
+			Res.status = 400;
+			Res.set_content(json({{"success", false}, {"message", "Title update failed"}}).dump(), "application/json");
+			return;
+		}
+		if (!QueryUser(AdminName, Admin) || !VerifyPassword(AdminPassword, Admin.PasswordHash) || Admin.UserType != 1 || !UserExists(Target) || !UpdateUserTitle(Target, Title)) {
+			Res.status = 403;
+			Res.set_content(json({{"success", false}, {"message", "Title update failed"}}).dump(), "application/json");
+			LogOperation("ChangeUserTitle", AdminName, Target, ClientIP, false);
+			return;
+		}
+		LogInfo("/ChangeUserTitle: title updated for '" + Target + "' by admin '" + AdminName + "'");
+		LogOperation("ChangeUserTitle", AdminName, Target, ClientIP, true);
+		Res.set_content(json({{"success", true}, {"message", "Title updated"}}).dump(), "application/json");
+	});
+
+	// ========== GET /GetLatestVersion Endpoint ==========
+	Svr.Get("/GetLatestVersion", [](const httplib::Request& Req, httplib::Response& Res) {
+		const std::string ClientIP = GetClientIP(Req);
+		UpdateSourceConfig UpdateConfig;
+		std::string ConfigError;
+		if (!LoadUpdateSourceConfig(UpdateConfig, ConfigError)) {
+			LogError("/GetLatestVersion: " + ConfigError);
+			Res.status = 500;
+			Res.set_content(json({
+				{"success", false},
+				{"message", ConfigError}
+			}).dump(), "application/json");
+			return;
+		}
+		json Body;
+		Body["pwd"] = UpdateConfig.Password;
+		Body["type"] = "parse";
+		Body["url"] = UpdateConfig.Url;
+		const auto ParseResponse = cpr::Post(
+			cpr::Url{ "https://lanzou.yuyuqaq.cn/api/parse" },
+			cpr::Body(Body.dump()),
+			cpr::Header{ { "Content-Type", "application/json" } },
+			cpr::ConnectTimeout{ 4000 }, cpr::Timeout{ 10000 });
+		if (ParseResponse.status_code != 200) {
+			const std::string ErrorMessage = ParseResponse.error.message.empty()
+				? "HTTP " + std::to_string(ParseResponse.status_code)
+				: ParseResponse.error.message;
+			LogError("/GetLatestVersion: download URL parser failed for IP " +
+				ClientIP + ": " + ErrorMessage);
+			Res.status = 502;
+			Res.set_content(json({
+				{"success", false},
+				{"message", "Failed to resolve the update download URL: " + ErrorMessage}
+			}).dump(), "application/json");
+			return;
+		}
+
+		const json ParseJson = json::parse(ParseResponse.text, nullptr, false);
+		if (ParseJson.is_discarded() || !ParseJson.is_object() ||
+			!ParseJson.contains("data") || !ParseJson["data"].is_object() ||
+			!ParseJson["data"].contains("downUrl") ||
+			!ParseJson["data"]["downUrl"].is_string()) {
+			LogError("/GetLatestVersion: download URL parser returned invalid JSON");
+			Res.status = 502;
+			Res.set_content(json({
+				{"success", false},
+				{"message", "The update download URL parser returned invalid data"}
+			}).dump(), "application/json");
+			return;
+		}
+
+		const std::string DownloadUrl =
+			ParseJson["data"]["downUrl"].get<std::string>();
+		if (DownloadUrl.empty()) {
+			LogError("/GetLatestVersion: download URL parser returned an empty URL");
+			Res.status = 502;
+			Res.set_content(json({
+				{"success", false},
+				{"message", "The update download URL parser returned an empty URL"}
+			}).dump(), "application/json");
+			return;
+		}
+		LogInfo("/GetLatestVersion: resolved update download URL in " +
+			std::to_string(ParseResponse.elapsed) + " seconds");
+
+		const std::string VersionFile = "LatestVersion.txt";
+		std::string LatestVersion = "3.6.0";
+		std::ifstream VersionStream(VersionFile);
+		if (VersionStream) {
+			std::getline(VersionStream, LatestVersion);
+			LatestVersion.erase(0, LatestVersion.find_first_not_of(" \t\r\n"));
+			LatestVersion.erase(LatestVersion.find_last_not_of(" \t\r\n") + 1);
+			if (LatestVersion.empty())
+				LatestVersion = "3.6.0";
+		} else {
+			LogError("/GetLatestVersion: " + VersionFile + " not found, using default 3.6.0");
+		}
+		json Response = {
+			{"success", true},
+			{"message", "Latest version retrieved successfully"},
+			{"data", {{"version", LatestVersion}, {"DownloadURL", DownloadUrl}}}
+		};
+		Res.set_content(Response.dump(), "application/json");
+		Res.status = 200;
+		LogInfo("/GetLatestVersion: returning version " + LatestVersion + " for IP " + ClientIP);
+		});
+
 	// Start the server
 	LogInfo("Server configured with all endpoints:");
 	LogInfo("  - POST /Login (with token generation)");
@@ -839,6 +1067,7 @@ auto main() -> int {
 	LogInfo("  - POST /Register");
 	LogInfo("  - POST /ChangePassword");
 	LogInfo("  - POST /ChangeUserType (admin verification required)");
+	LogInfo("  - GET /GetLatestVersion (update version check)");
 	LogInfo("Starting server on 0.0.0.0:8888...");
 
 	if (!Svr.listen("0.0.0.0", 8888)) {
@@ -847,4 +1076,18 @@ auto main() -> int {
 	}
 
 	return 0;
+}
+
+int main() {
+	SetConsoleOutputCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
+	try {
+		return RunLicenseServer();
+	} catch (const std::exception& Exception) {
+		LogError(std::string("Fatal startup exception: ") + Exception.what());
+		return 2;
+	} catch (...) {
+		LogError("Fatal startup exception: unknown exception");
+		return 3;
+	}
 }

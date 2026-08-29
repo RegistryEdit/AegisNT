@@ -12,6 +12,7 @@ namespace AegisNT {
 struct AccountSession {
   bool IsLoggedIn = false;
   QString UserName;
+  QString Title;
   int UserType = 0;
   QString Token;
 };
@@ -22,6 +23,8 @@ struct AppContext {
   QString ActiveLanguage = QStringLiteral("en_US");
   AccountSession Account;
   std::vector<std::function<bool()>> AccountSessionListeners;
+  std::vector<std::function<bool(const QString &, const QString &)>>
+      UserTitleChangedListeners;
 
   bool ModulesScanned = false;
   std::atomic_bool ModuleRunning = false;
@@ -36,5 +39,6 @@ struct AppContext {
 
 AppContext &ApplicationContext();
 void NotifyAccountSessionChanged();
+void NotifyUserTitleChanged(const QString &UserName, const QString &Title);
 
 } // namespace AegisNT

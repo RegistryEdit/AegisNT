@@ -97,7 +97,9 @@ QWidget *CreateHookLabPage() {
         Table->clearContents();
         Table->setRowCount(0);
         if (!Ok) {
-          Status->setText(QString("Hook query failed (%1)").arg(Error));
+          const QString Message = QString("Hook query failed (%1)").arg(Error);
+          Status->setText(Message);
+          AppendConsoleOutput("[!] Hook: " + Message + "\n");
           SetTableRefreshEnabled(Table, true);
           return;
         }
@@ -135,7 +137,10 @@ QWidget *CreateHookLabPage() {
         if (!SafePage)
           return;
         if (!Ok) {
-          Capabilities->setText(QString("Capabilities unavailable (%1)").arg(Error));
+          const QString Message =
+              QString("Capabilities unavailable (%1)").arg(Error);
+          Capabilities->setText(Message);
+          AppendConsoleOutput("[!] Hook: " + Message + "\n");
           return;
         }
         QStringList Targets;
@@ -416,7 +421,11 @@ QWidget *CreateHookLabPage() {
       QMetaObject::invokeMethod(qApp, [SafePage, Status, Ok, Error, RefreshTable] {
         if (!SafePage)
           return;
-        Status->setText(Ok ? "All hooks restored." : QString("Restore failed (%1)").arg(Error));
+        Status->setText(Ok ? "All hooks restored."
+                           : QString("Restore failed (%1)").arg(Error));
+        if (!Ok)
+          AppendConsoleOutput(
+              QString("[!] Hook: Restore failed (%1)\n").arg(Error));
         RefreshTable();
       }, Qt::QueuedConnection);
     }).detach();

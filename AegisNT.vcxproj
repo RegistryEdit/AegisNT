@@ -187,7 +187,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Data\Config.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </Content>
     <Content Include="Data\zh_CN.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -201,5 +201,24 @@
   </ImportGroup>
   <Target Name="DeployQWindowKit" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
     <Copy SourceFiles="D:\Qt\6.7.3\msvc2022_64\bin\QWKCore.dll;D:\Qt\6.7.3\msvc2022_64\bin\QWKWidgets.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="DeployInitialConfiguration" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)Data" Condition="!Exists('$(OutDir)Data')" />
+    <Copy SourceFiles="$(ProjectDir)Data\Config.json" DestinationFiles="$(OutDir)Data\Config.json" Condition="!Exists('$(OutDir)Data\Config.json')" />
+  </Target>
+  <Target Name="PreserveUserConfiguration" BeforeTargets="IncrementalClean" Condition="Exists('$(OutDir)Data\Config.json')">
+    <MakeDir Directories="$(IntDir)PreservedData" />
+    <Copy SourceFiles="$(OutDir)Data\Config.json" DestinationFiles="$(IntDir)PreservedData\Config.json" />
+  </Target>
+  <Target Name="RestoreUserConfiguration" AfterTargets="IncrementalClean" Condition="Exists('$(IntDir)PreservedData\Config.json')">
+    <MakeDir Directories="$(OutDir)Data" Condition="!Exists('$(OutDir)Data')" />
+    <Copy SourceFiles="$(IntDir)PreservedData\Config.json" DestinationFiles="$(OutDir)Data\Config.json" />
+    <Delete Files="$(IntDir)PreservedData\Config.json" />
+  </Target>
+  <Target Name="DeployQtTlsBackend" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)tls" Condition="!Exists('$(OutDir)tls')" />
+    <Copy SourceFiles="D:\Qt\6.7.3\msvc2022_64\plugins\tls\qschannelbackend.dll"
+          DestinationFiles="$(OutDir)tls\qschannelbackend.dll"
+          SkipUnchangedFiles="true" />
   </Target>
 </Project>

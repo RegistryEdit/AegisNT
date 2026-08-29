@@ -402,7 +402,12 @@ private:
           for (const auto &Evt : HistoryRows)
             Out << Evt.Timestamp << "," << Evt.Type << "," << Evt.Pid << ","
                 << Evt.Process << ",\"" << Evt.Detail << "\"\n";
-        }
+          if (Out.status() != QTextStream::Ok)
+            ShowErrorNotice(this, "Monitor",
+                            "Failed to export events: " + File.errorString());
+        } else
+          ShowErrorNotice(this, "Monitor",
+                          "Failed to export events: " + File.errorString());
       }
     });
     QObject::connect(ClearBtn, &QPushButton::clicked, this, [this] {

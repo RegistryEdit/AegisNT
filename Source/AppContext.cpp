@@ -17,4 +17,14 @@ void NotifyAccountSessionChanged() {
   }
 }
 
+void NotifyUserTitleChanged(const QString &UserName, const QString &Title) {
+  auto &Listeners = ApplicationContext().UserTitleChangedListeners;
+  for (auto It = Listeners.begin(); It != Listeners.end();) {
+    if ((*It)(UserName, Title))
+      ++It;
+    else
+      It = Listeners.erase(It);
+  }
+}
+
 } // namespace AegisNT

@@ -9,6 +9,7 @@
 #include <mutex>
 #include <sstream>
 #include <filesystem>
+#include <atomic>
 
 using std::cout;
 using std::endl;
@@ -16,9 +17,26 @@ using std::endl;
 std::map<SocketHandle, ClientInfo> ClientNames;
 std::mutex ClientNamesMutex;
 std::mutex LogMutex;
-std::ofstream LogFile(
-    (std::filesystem::current_path() / "Server.log").string(),
-    std::ios::app);
+std::ofstream LogFile;
+std::atomic<std::int32_t> NextMessageId{1};
+
+struct LogFileInitializer {
+  LogFileInitializer() noexcept {
+    std::error_code Error;
+    const auto Directory = std::filesystem::current_path(Error);
+    if (!Error)
+      LogFile.open((Directory / "Server.log").string(), std::ios::app);
+    if (!LogFile.is_open())
+      LogFile.open("Server.log", std::ios::app);
+  }
+};
+LogFileInitializer LogFileSetup;
+
+void LogRuntime(const std::string &Line) {
+  std::ofstream RuntimeFile("Server.runtime.log", std::ios::app);
+  if (RuntimeFile.is_open())
+    RuntimeFile << Line << std::endl;
+}
 
 void Log(const char *Level, const std::string &Message) {
   const auto Now = std::chrono::system_clock::now();
@@ -36,6 +54,7 @@ void Log(const char *Level, const std::string &Message) {
     LogFile << '[' << std::put_time(&LocalTime, "%Y-%m-%d %H:%M:%S") << "] ["
             << Level << "] " << Message << std::endl;
   }
+  LogRuntime(std::string("[") + Level + "] " + Message);
 }
 
 bool ReceiveAll(SocketHandle Socket, char *Data, std::size_t Size) {
@@ -85,7 +104,9 @@ void BroadcastOnlineUsers() {
   for (const auto &[Socket, Info] : ClientNames) {
     if (UserIndex >= static_cast<int>(ChatMaxOnlineUsers))
       break;
-    std::strncpy(OnlineUsers.OnlineUsers[UserIndex], Info.ClientName,
+    std::string DisplayName = Info.Title[0] ? (std::string("[") + Info.Title + "]") : "";
+    DisplayName += Info.ClientName;
+    std::strncpy(OnlineUsers.OnlineUsers[UserIndex], DisplayName.c_str(),
                  sizeof(OnlineUsers.OnlineUsers[UserIndex]) - 1);
     ++UserIndex;
   }
@@ -117,6 +138,51 @@ void RevcMsg(SocketHandle ClientSocket) {
       break;
     Log("DEBUG", "Received packet type " + std::to_string(Header.Type) +
                      ", payload bytes: " + std::to_string(Header.Size));
+    if (Header.Type == static_cast<std::uint32_t>(ChatPacketType::ClientInfo) &&
+        Header.Size == sizeof(ClientInfo)) {
+      ClientInfo UpdatedInfo{};
+      if (!ReceiveAll(ClientSocket, reinterpret_cast<char *>(&UpdatedInfo),
+                      sizeof(UpdatedInfo)))
+        break;
+      UpdatedInfo.ClientName[sizeof(UpdatedInfo.ClientName) - 1] = '\0';
+      UpdatedInfo.Title[sizeof(UpdatedInfo.Title) - 1] = '\0';
+      if (UpdatedInfo.ClientName[0] == '\0')
+        continue;
+      std::lock_guard<std::mutex> Lock(ClientNamesMutex);
+      const auto It = ClientNames.find(ClientSocket);
+      if (It != ClientNames.end() &&
+          std::strcmp(It->second.ClientName, UpdatedInfo.ClientName) == 0) {
+        It->second.Title[sizeof(It->second.Title) - 1] = '\0';
+        std::strncpy(It->second.Title, UpdatedInfo.Title,
+                     sizeof(It->second.Title) - 1);
+        BroadcastOnlineUsers();
+        Log("INFO", std::string("Updated title for ") +
+                        It->second.ClientName + ": " + It->second.Title);
+      }
+      continue;
+    }
+    if (Header.Type == static_cast<std::uint32_t>(ChatPacketType::UpdateUserTitle) &&
+        Header.Size == sizeof(UserTitleUpdate)) {
+      UserTitleUpdate Update{};
+      if (!ReceiveAll(ClientSocket, reinterpret_cast<char *>(&Update), sizeof(Update)))
+        break;
+      Update.UserName[sizeof(Update.UserName) - 1] = '\0';
+      Update.Title[sizeof(Update.Title) - 1] = '\0';
+      std::lock_guard<std::mutex> Lock(ClientNamesMutex);
+      const auto Sender = ClientNames.find(ClientSocket);
+      if (Sender == ClientNames.end() || Sender->second.Type != 1)
+        continue;
+      for (auto &[Socket, Info] : ClientNames) {
+        if (std::strcmp(Info.ClientName, Update.UserName) == 0) {
+          std::memset(Info.Title, 0, sizeof(Info.Title));
+          std::strncpy(Info.Title, Update.Title, sizeof(Info.Title) - 1);
+          SendPacket(Socket, ChatPacketType::ClientInfo, Info);
+          BroadcastOnlineUsers();
+          break;
+        }
+      }
+      continue;
+    }
     if (Header.Type == static_cast<std::uint32_t>(ChatPacketType::QueryOnlineUsers) &&
         Header.Size == 0) {
       std::lock_guard<std::mutex> Lock(ClientNamesMutex);
@@ -127,8 +193,10 @@ void RevcMsg(SocketHandle ClientSocket) {
       for (const auto &[Socket, Info] : ClientNames) {
         if (UserIndex >= static_cast<int>(ChatMaxOnlineUsers))
           break;
-        std::strncpy(OnlineUsers.OnlineUsers[UserIndex], Info.ClientName,
-                     sizeof(OnlineUsers.OnlineUsers[UserIndex]) - 1);
+      std::string DisplayName = Info.Title[0] ? (std::string("[") + Info.Title + "]") : "";
+      DisplayName += Info.ClientName;
+      std::strncpy(OnlineUsers.OnlineUsers[UserIndex], DisplayName.c_str(),
+                   sizeof(OnlineUsers.OnlineUsers[UserIndex]) - 1);
         ++UserIndex;
       }
       SendPacket(ClientSocket, ChatPacketType::OnlineUsers, OnlineUsers);
@@ -150,12 +218,17 @@ void RevcMsg(SocketHandle ClientSocket) {
     ForwardMsg.From[sizeof(ForwardMsg.From) - 1] = '\0';
     ForwardMsg.To[sizeof(ForwardMsg.To) - 1] = '\0';
     ForwardMsg.Content[sizeof(ForwardMsg.Content) - 1] = '\0';
+    ForwardMsg.FromType = NextMessageId.fetch_add(1, std::memory_order_relaxed);
     const auto Sender = ClientNames.find(ClientSocket);
     if (Sender == ClientNames.end())
       break;
     Log("DEBUG", std::string("Processing message from ") +
                      Sender->second.ClientName);
-    std::strncpy(ForwardMsg.From, Sender->second.ClientName,
+    std::string DisplayName = Sender->second.Title[0]
+                                  ? (std::string("[") + Sender->second.Title + "]")
+                                  : "";
+    DisplayName += Sender->second.ClientName;
+    std::strncpy(ForwardMsg.From, DisplayName.c_str(),
                  sizeof(ForwardMsg.From) - 1);
     ForwardMsg.From[sizeof(ForwardMsg.From) - 1] = '\0';
     if (std::strcmp(ForwardMsg.To, "0") == 0) {
@@ -165,10 +238,33 @@ void RevcMsg(SocketHandle ClientSocket) {
       Log("CHAT", std::string(ForwardMsg.From) + " -> all: " +
                       ForwardMsg.Content);
     } else {
+      SocketHandle RecipientSocket = InvalidSocket;
+      std::string RecipientName;
       for (const auto &[Socket, Info] : ClientNames) {
-        if (std::strcmp(Info.ClientName, ForwardMsg.To) == 0)
-          SendPacket(Socket, ChatPacketType::Message, ForwardMsg);
+        const std::string DisplayTarget =
+            Info.Title[0] ? (std::string("[") + Info.Title + "]" + Info.ClientName)
+                          : std::string(Info.ClientName);
+        if (std::strcmp(Info.ClientName, ForwardMsg.To) == 0 ||
+            DisplayTarget == ForwardMsg.To) {
+          RecipientSocket = Socket;
+          RecipientName = DisplayTarget;
+          break;
+        }
       }
+
+      if (RecipientSocket == InvalidSocket) {
+        SendNotice(ClientSocket, "Private message target is offline.");
+        Log("WARN", std::string(ForwardMsg.From) + " private target not found: " +
+                        ForwardMsg.To);
+        continue;
+      }
+
+      std::strncpy(ForwardMsg.To, RecipientName.c_str(),
+                   sizeof(ForwardMsg.To) - 1);
+      ForwardMsg.To[sizeof(ForwardMsg.To) - 1] = '\0';
+      SendPacket(ClientSocket, ChatPacketType::Message, ForwardMsg);
+      if (RecipientSocket != ClientSocket)
+        SendPacket(RecipientSocket, ChatPacketType::Message, ForwardMsg);
       Log("CHAT", std::string(ForwardMsg.From) + " -> " + ForwardMsg.To +
                       ": " + ForwardMsg.Content);
     }
@@ -191,7 +287,7 @@ void RevcMsg(SocketHandle ClientSocket) {
   CloseSocket(ClientSocket);
 }
 
-int main() {
+int RunServer() {
 #ifdef _WIN32
   SetConsoleOutputCP(CP_UTF8);
   SetConsoleCP(CP_UTF8);
@@ -203,8 +299,18 @@ int main() {
 #endif
 
   const SocketHandle ServerSocket = socket(AF_INET, SOCK_STREAM, 0);
-  if (ServerSocket == InvalidSocket)
+  if (ServerSocket == InvalidSocket) {
+    Log("ERROR", "Failed to create server socket");
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 1;
+  }
+
+  int ReuseAddress = 1;
+  setsockopt(ServerSocket, SOL_SOCKET, SO_REUSEADDR,
+             reinterpret_cast<const char *>(&ReuseAddress),
+             static_cast<int>(sizeof(ReuseAddress)));
 
   sockaddr_in ServerAddr{};
   ServerAddr.sin_family = AF_INET;
@@ -213,7 +319,11 @@ int main() {
   if (bind(ServerSocket, reinterpret_cast<sockaddr *>(&ServerAddr),
            sizeof(ServerAddr)) < 0 ||
       listen(ServerSocket, 5) < 0) {
+    Log("ERROR", "Failed to bind/listen on port 1145");
     CloseSocket(ServerSocket);
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 1;
   }
 
@@ -264,5 +374,17 @@ int main() {
     }
     Log("DEBUG", "Registered chat client: " + UserName);
     std::thread(RevcMsg, ClientSocket).detach();
+  }
+}
+
+int main() {
+  try {
+    return RunServer();
+  } catch (const std::exception &Exception) {
+    Log("FATAL", std::string("Unhandled server exception: ") + Exception.what());
+    return 2;
+  } catch (...) {
+    Log("FATAL", "Unhandled server exception: unknown exception");
+    return 3;
   }
 }

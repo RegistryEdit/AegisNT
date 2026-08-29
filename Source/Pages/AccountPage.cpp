@@ -73,8 +73,11 @@ QWidget *CreateAccountPage() {
     if (IsLoggedIn) {
       StatusLabel->setText(LocalizedStatusText("● Logged In"));
       StatusLabel->setStyleSheet("color: #10B981; font-weight: 600;");
+      const QString DisplayName = Account.Title.trimmed().isEmpty()
+                                       ? Username
+                                       : QString("[%1]%2").arg(Account.Title.trimmed(), Username);
       UserNameLabel->setText(
-          LocalizedStatusText("User: %1").arg(Username.isEmpty() ? "-" : Username));
+          LocalizedStatusText("User: %1").arg(DisplayName.isEmpty() ? "-" : DisplayName));
       switch (UserType) {
       case 0:
         UserTypeLabel->setText(LocalizedStatusText("Type: Regular User"));
@@ -159,6 +162,7 @@ QWidget *CreateAccountPage() {
 
   // 显示/隐藏登录错误信息
   const auto ShowLoginError = [=](const QString &Message) {
+    AppendConsoleOutput("[!] Account login: " + Message + "\n");
     LoginErrorLabel->setText("Error: " + Message);
     LoginErrorLabel->setStyleSheet("color: #EF4444;");
     LoginErrorLabel->setVisible(true);
@@ -187,6 +191,7 @@ QWidget *CreateAccountPage() {
         if (Response["success"].toBool()) {
           const QJsonObject Data = Response["data"].toObject();
           const QString Username = Data["UserName"].toString();
+          const QString Title = Data["Title"].toString();
           const int UserType = Data["UserType"].toInt(-1);
           if (!Username.isEmpty() && UserType >= 0) {
             if (ConfigurationValue("Account", "UserName", "").toString() !=
@@ -195,7 +200,11 @@ QWidget *CreateAccountPage() {
             if (ConfigurationValue("Account", "UserType", -1).toInt() !=
                 UserType)
               SetConfigurationValue("Account", "UserType", UserType);
+            if (ConfigurationValue("Account", "Title", "").toString() !=
+                Title)
+              SetConfigurationValue("Account", "Title", Title);
             Account.UserName = Username;
+            Account.Title = Title;
             Account.UserType = UserType;
             AegisNT::NotifyAccountSessionChanged();
             UpdateStatusUI(true, Username, UserType);
@@ -208,16 +217,27 @@ QWidget *CreateAccountPage() {
 
   // 登录成功处理
   const auto HandleLoginSuccess = [=](const QJsonObject &Data) {
-    QString Username = Data["UserName"].toString();
-    int UserType = Data["UserType"].toInt();
-    QString Token = Data["Token"].toString();
+    const QString Username = Data["UserName"].toString().trimmed();
+    QString Title = Data["Title"].toString();
+    const int UserType = Data["UserType"].toInt(-1);
+    const QString Token = Data["Token"].toString().trimmed();
+    if (Username.isEmpty() || Token.isEmpty() || (UserType != 0 && UserType != 1)) {
+      Account = {};
+      SetConfigurationValue("Account", "IsLoggedIn", false);
+      SetConfigurationValue("Account", "Token", "");
+      ShowLoginError("Server returned an invalid login session");
+      AegisNT::NotifyAccountSessionChanged();
+      return;
+    }
 
     SetConfigurationValue("Account", "IsLoggedIn", true);
     SetConfigurationValue("Account", "UserName", Username);
     SetConfigurationValue("Account", "UserType", UserType);
+    SetConfigurationValue("Account", "Title", Title);
     SetConfigurationValue("Account", "Token", Token);
     Account.IsLoggedIn = true;
     Account.UserName = Username;
+    Account.Title = Title;
     Account.UserType = UserType;
     Account.Token = Token;
     AegisNT::NotifyAccountSessionChanged();
@@ -301,6 +321,7 @@ QWidget *CreateAccountPage() {
     SetConfigurationValue("Account", "Token", "");
     Account.IsLoggedIn = false;
     Account.UserName.clear();
+    Account.Title.clear();
     Account.UserType = 0;
     Account.Token.clear();
     AegisNT::NotifyAccountSessionChanged();
@@ -373,6 +394,7 @@ QWidget *CreateAccountPage() {
   Layout->addLayout(RegisterLayout);
 
   const auto ShowRegisterError = [=](const QString &Message) {
+    AppendConsoleOutput("[!] Account registration: " + Message + "\n");
     RegisterErrorLabel->setText("Error: " + Message);
     RegisterErrorLabel->setStyleSheet("color: #EF4444;");
     RegisterErrorLabel->setVisible(true);
@@ -485,6 +507,7 @@ QWidget *CreateAccountPage() {
   Layout->addLayout(ChangePasswordLayout);
 
   const auto ShowCPError = [=](const QString &Message) {
+    AppendConsoleOutput("[!] Change password: " + Message + "\n");
     CPErrorLabel->setText("Error: " + Message);
     CPErrorLabel->setStyleSheet("color: #EF4444;");
     CPErrorLabel->setVisible(true);
@@ -563,6 +586,7 @@ QWidget *CreateAccountPage() {
                    SendChangePasswordRequest);
 
   // ========== Change User Type Section ==========
+  auto *AdminPanel = new QWidget;
   auto *ChangeUserTypeLayout = new QVBoxLayout;
   ChangeUserTypeLayout->setContentsMargins(16, 12, 16, 12);
   ChangeUserTypeLayout->setSpacing(12);
@@ -589,6 +613,9 @@ QWidget *CreateAccountPage() {
   NewUserTypeCombo->setItemData(0, 0, Qt::UserRole);
   NewUserTypeCombo->setItemData(1, 1, Qt::UserRole);
   ChangeUserTypeLayout->addWidget(NewUserTypeCombo);
+  auto *NewUserTitleEdit = new LineEdit;
+  NewUserTitleEdit->setPlaceholderText("Title (optional, max 48 characters)");
+  ChangeUserTypeLayout->addWidget(NewUserTitleEdit);
 
   auto *CUTStatusLayout = new QHBoxLayout;
   auto *CUTLoadingRing = new IndeterminateProgressRing;
@@ -608,9 +635,20 @@ QWidget *CreateAccountPage() {
   CUTButtonLayout->addWidget(ChangeUserTypeButton);
   ChangeUserTypeLayout->addLayout(CUTButtonLayout);
 
-  Layout->addLayout(ChangeUserTypeLayout);
+  AdminPanel->setLayout(ChangeUserTypeLayout);
+  AdminPanel->setVisible(false);
+  Layout->addWidget(AdminPanel);
+  const QPointer<QWidget> AdminPanelGuard(AdminPanel);
+  AegisNT::ApplicationContext().AccountSessionListeners.push_back(
+      [AdminPanelGuard]() -> bool {
+        if (!AdminPanelGuard)
+          return false;
+        AdminPanelGuard->setVisible(Account.IsLoggedIn && Account.UserType == 1);
+        return true;
+      });
 
   const auto ShowCUTError = [=](const QString &Message) {
+    AppendConsoleOutput("[!] Change user type: " + Message + "\n");
     CUTErrorLabel->setText("Error: " + Message);
     CUTErrorLabel->setStyleSheet("color: #EF4444;");
     CUTErrorLabel->setVisible(true);
@@ -639,6 +677,7 @@ QWidget *CreateAccountPage() {
     Json["AdminPassword"] = CalculateSHA256(AdminPassword);  // Send SHA-256 hash
     Json["TargetUserName"] = TargetUser;
     Json["NewUserType"] = NewUserType;
+    Json["Title"] = NewUserTitleEdit->text().trimmed();
 
     QByteArray Data = QJsonDocument(Json).toJson();
 
@@ -659,6 +698,8 @@ QWidget *CreateAccountPage() {
         if (Response["success"].toBool()) {
           QString TypeName =
               (NewUserType == 1) ? "Administrator" : "Regular User";
+          const QString NewTitle = NewUserTitleEdit->text().trimmed();
+          AegisNT::NotifyUserTitleChanged(TargetUser, NewTitle);
           ShowSuccessNotice(
               Page, "Account",
               QString("User '%1' changed to %2!").arg(TargetUser, TypeName));
@@ -672,6 +713,11 @@ QWidget *CreateAccountPage() {
               ConfigurationValue("Account", "UserName", "").toString();
           if (TargetUser == CurrentUser) {
             SetConfigurationValue("Account", "UserType", NewUserType);
+            SetConfigurationValue("Account", "Title", NewTitle);
+            Account.UserName = CurrentUser;
+            Account.UserType = NewUserType;
+            Account.Title = NewTitle;
+            AegisNT::NotifyAccountSessionChanged();
             bool IsLoggedIn =
                 ConfigurationValue("Account", "IsLoggedIn", false).toBool();
             if (IsLoggedIn) {
@@ -693,21 +739,32 @@ QWidget *CreateAccountPage() {
                    SendChangeUserTypeRequest);
 
   // ========== 初始化：读取配置并更新状态 ==========
-  bool IsLoggedIn =
-      ConfigurationValue("Account", "IsLoggedIn", false).toBool();
-  QString SavedUsername =
+  const QString SavedUsername =
       ConfigurationValue("Account", "UserName", "").toString();
-  int SavedUserType = ConfigurationValue("Account", "UserType", 0).toInt();
+  const int SavedUserType = ConfigurationValue("Account", "UserType", -1).toInt();
+  const QString SavedToken = ConfigurationValue("Account", "Token", "").toString();
+  const bool SavedSessionValid =
+      ConfigurationValue("Account", "IsLoggedIn", false).toBool() &&
+      !SavedUsername.trimmed().isEmpty() && !SavedToken.trimmed().isEmpty() &&
+      (SavedUserType == 0 || SavedUserType == 1);
 
-  if (IsLoggedIn) {
+  if (SavedSessionValid) {
     Account.IsLoggedIn = true;
-    Account.UserName = SavedUsername;
+    Account.UserName = SavedUsername.trimmed();
+    Account.Title = ConfigurationValue("Account", "Title", "").toString();
     Account.UserType = SavedUserType;
+    Account.Token = SavedToken.trimmed();
     UpdateStatusUI(true, SavedUsername, SavedUserType);
+    AdminPanel->setVisible(SavedUserType == 1);
     LoginButton->setEnabled(false);
     LogoutButton->setEnabled(true);
   } else {
+    Account = {};
+    SetConfigurationValue("Account", "IsLoggedIn", false);
+    SetConfigurationValue("Account", "UserType", 0);
+    SetConfigurationValue("Account", "Token", "");
     UpdateStatusUI(false, "", 0);
+    AdminPanel->setVisible(false);
   }
 
   // 恢复保存的凭证
@@ -724,7 +781,7 @@ QWidget *CreateAccountPage() {
   // 自动登录
   if (ConfigurationValue("Account", "AutoLogin", false).toBool() &&
       ConfigurationValue("Account", "SaveCredentials", false).toBool() &&
-      !IsLoggedIn) {
+      !SavedSessionValid) {
     QString SavedPassword = DecryptPassword(
         ConfigurationValue("Account", "Password", "").toString());
     if (!SavedUsername.isEmpty() && !SavedPassword.isEmpty()) {

@@ -1,19 +1,132 @@
 void LoadConfiguration() {
-  QFile File(ConfigurationPath());
-  if (!File.open(QIODevice::ReadOnly))
+  const QString Path = ConfigurationPath();
+  if (QFile::exists(Path)) {
+    QFile File(Path);
+    if (!File.open(QIODevice::ReadOnly)) {
+      AppendConsoleOutput("[!] Configuration: Failed to open " + Path + ": " +
+                          File.errorString() + "\n");
+      return;
+    }
+    QJsonParseError ParseError;
+    const QJsonDocument Document =
+        QJsonDocument::fromJson(File.readAll(), &ParseError);
+    if (Document.isObject())
+      Configuration = Document.object();
+    else
+      AppendConsoleOutput(
+          QString("[!] Configuration: Invalid JSON in %1 at offset %2: %3\n")
+              .arg(Path)
+              .arg(ParseError.offset)
+              .arg(ParseError.errorString()));
     return;
-  const QJsonDocument Document = QJsonDocument::fromJson(File.readAll());
-  if (Document.isObject())
-    Configuration = Document.object();
+  }
+  const QString DefaultConfig = QStringLiteral(R"({
+    "Application": {
+        "FPS": 90,
+        "Height": 1000,
+        "Language": "en_US",
+        "Opacity": 1,
+        "Title": "AegisNT",
+        "Width": 1600
+    },
+    "Chat": {
+        "ServerIP": "127.0.0.1",
+        "ServerPort": "1145",
+        "UserName": ""
+    },
+    "Drivers": {
+        "AutoLoad": true,
+        "Paths": [
+            "./Drivers"
+        ]
+    },
+    "LicenseServer": {
+        "Address": "http://localhost:8888"
+    },
+    "Modules": {
+        "AutoLoad": true,
+        "Paths": [
+            "./Modules"
+        ]
+    },
+    "Payload": {
+        "Encoder": [],
+        "Nop": []
+    },
+    "PayloadShell": {
+        "Host": "127.0.0.1",
+        "Hosts": [
+            {
+                "Host": "127.0.0.1",
+                "Port": "4444"
+            }
+        ],
+        "Port": "4444",
+        "SelectedHost": 0
+    },
+    "Theme": {
+        "AccentColor": "#2E6CFF",
+        "AccentHoverColor": "#3E7BFF",
+        "AccentPressedColor": "#2458D9",
+        "BackgroundColor": "#F4F6FA",
+        "BackgroundMaterial": 0,
+        "BorderColor": "#D7DDE8",
+        "CardSurfaceColor": "#FFFFFF",
+        "CornerRadius": 4,
+        "DangerColor": "#C53D32",
+        "DarkMode": false,
+        "Density": 99,
+        "DividerColor": "#E6EBF2",
+        "EnablePageTransition": true,
+        "FontScale": 100,
+        "InputSurfaceColor": "#FFFFFF",
+        "MutedTextColor": "#667287",
+        "PageBackgroundColor": "#F4F6FA",
+        "Preset": "default_blue",
+        "PopupSurfaceColor": "#FFFFFF",
+        "SelectionTextColor": "#FFFFFF",
+        "SuccessColor": "#1E8A5D",
+        "SurfaceColor": "#FFFFFF",
+        "SurfaceElevatedColor": "#F8FAFD",
+        "SurfaceSunkenColor": "#EDF1F7",
+        "TableSurfaceColor": "#FFFFFF",
+        "TextColor": "#18212F",
+        "UseMonoForTechnicalFields": true,
+        "WallpaperMode": 0,
+        "WallpaperOpacity": 28,
+        "WallpaperPath": "",
+        "WarningColor": "#D98A14"
+    }
+})");
+  QDir().mkpath(QFileInfo(Path).absolutePath());
+  QSaveFile DefaultOut(Path);
+  if (DefaultOut.open(QIODevice::WriteOnly)) {
+    const QByteArray Bytes = DefaultConfig.toUtf8();
+    if (DefaultOut.write(Bytes) != Bytes.size() || !DefaultOut.commit())
+      AppendConsoleOutput("[!] Configuration: Failed to create " + Path + ": " +
+                          DefaultOut.errorString() + "\n");
+  } else
+    AppendConsoleOutput("[!] Configuration: Failed to create " + Path + ": " +
+                        DefaultOut.errorString() + "\n");
+  const QJsonDocument DefaultDocument =
+      QJsonDocument::fromJson(DefaultConfig.toUtf8());
+  if (DefaultDocument.isObject())
+    Configuration = DefaultDocument.object();
 }
 
 void SaveConfiguration() {
   QDir().mkpath(QFileInfo(ConfigurationPath()).absolutePath());
   QSaveFile File(ConfigurationPath());
-  if (!File.open(QIODevice::WriteOnly))
+  if (!File.open(QIODevice::WriteOnly)) {
+    AppendConsoleOutput("[!] Configuration: Failed to save " +
+                        ConfigurationPath() + ": " + File.errorString() + "\n");
     return;
-  File.write(QJsonDocument(Configuration).toJson(QJsonDocument::Indented));
-  File.commit();
+  }
+  const QByteArray Bytes =
+      QJsonDocument(Configuration).toJson(QJsonDocument::Indented);
+  if (File.write(Bytes) != Bytes.size() || !File.commit())
+    AppendConsoleOutput("[!] Configuration: Failed to save " +
+                        ConfigurationPath() + ": " + File.errorString() + "\n");
 }
 
 QJsonValue ConfigurationValue(const QString &Section, const QString &Key,
@@ -1064,12 +1177,24 @@ QString TranslationPath(const QString &FileName) {
 
 void LoadLanguageResources() {
   ChineseTranslations = {};
-  QFile File(TranslationPath("zh_CN.json"));
-  if (!File.open(QIODevice::ReadOnly))
+  const QString Path = TranslationPath("zh_CN.json");
+  QFile File(Path);
+  if (!File.open(QIODevice::ReadOnly)) {
+    AppendConsoleOutput("[!] Language: Failed to open " + Path + ": " +
+                        File.errorString() + "\n");
     return;
-  const QJsonDocument Document = QJsonDocument::fromJson(File.readAll());
+  }
+  QJsonParseError ParseError;
+  const QJsonDocument Document =
+      QJsonDocument::fromJson(File.readAll(), &ParseError);
   if (Document.isObject())
     ChineseTranslations = Document.object().value("translations").toObject();
+  else
+    AppendConsoleOutput(
+        QString("[!] Language: Invalid JSON in %1 at offset %2: %3\n")
+            .arg(Path)
+            .arg(ParseError.offset)
+            .arg(ParseError.errorString()));
 }
 
 QString TranslateText(const QString &English) {

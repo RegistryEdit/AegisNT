@@ -15,6 +15,177 @@ void AppendConsoleOutput(const QString &Text) {
       Qt::QueuedConnection);
 }
 
+struct StandardIoCaptureState {
+  int OriginalStdoutDescriptor = -1;
+  int OriginalStderrDescriptor = -1;
+  HANDLE OriginalStdoutHandle = INVALID_HANDLE_VALUE;
+  HANDLE OriginalStderrHandle = INVALID_HANDLE_VALUE;
+  std::thread ReaderThread;
+  bool Active = false;
+};
+
+StandardIoCaptureState &StandardIoCapture() {
+  static StandardIoCaptureState State;
+  return State;
+}
+
+void StartStandardIoCapture() {
+  static std::once_flag Once;
+  std::call_once(Once, [] {
+    const auto EnsureCrtStream = [](FILE *Stream) {
+      if (_fileno(Stream) >= 0)
+        return true;
+      return freopen("NUL", "w", Stream) != nullptr && _fileno(Stream) >= 0;
+    };
+    if (!EnsureCrtStream(stdout) || !EnsureCrtStream(stderr)) {
+      AppendConsoleOutput("[!] Failed to initialize C runtime streams.\n");
+      return;
+    }
+
+    const int StdoutDescriptor = _fileno(stdout);
+    const int StderrDescriptor = _fileno(stderr);
+    const int OldStdoutDescriptor = _dup(StdoutDescriptor);
+    const int OldStderrDescriptor = _dup(StderrDescriptor);
+    if (OldStdoutDescriptor == -1 || OldStderrDescriptor == -1) {
+      if (OldStdoutDescriptor != -1)
+        _close(OldStdoutDescriptor);
+      if (OldStderrDescriptor != -1)
+        _close(OldStderrDescriptor);
+      AppendConsoleOutput("[!] Failed to preserve C runtime streams.\n");
+      return;
+    }
+
+    StandardIoCaptureState &State = StandardIoCapture();
+    State.OriginalStdoutDescriptor = OldStdoutDescriptor;
+    State.OriginalStderrDescriptor = OldStderrDescriptor;
+    State.OriginalStdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+    State.OriginalStderrHandle = GetStdHandle(STD_ERROR_HANDLE);
+
+    HANDLE ReadPipe = nullptr;
+    HANDLE WritePipe = nullptr;
+    if (!CreatePipe(&ReadPipe, &WritePipe, nullptr, 0)) {
+      _close(OldStdoutDescriptor);
+      _close(OldStderrDescriptor);
+      State.OriginalStdoutDescriptor = -1;
+      State.OriginalStderrDescriptor = -1;
+      AppendConsoleOutput(
+          QString("[!] Failed to initialize C runtime output capture "
+                  "(error %1).\n")
+              .arg(GetLastError()));
+      return;
+    }
+
+    const int WriteDescriptor = _open_osfhandle(
+        reinterpret_cast<intptr_t>(WritePipe), _O_TEXT);
+    if (WriteDescriptor == -1 ||
+        _dup2(WriteDescriptor, StdoutDescriptor) != 0 ||
+        _dup2(WriteDescriptor, StderrDescriptor) != 0) {
+      _dup2(OldStdoutDescriptor, StdoutDescriptor);
+      _dup2(OldStderrDescriptor, StderrDescriptor);
+      _close(OldStdoutDescriptor);
+      _close(OldStderrDescriptor);
+      State.OriginalStdoutDescriptor = -1;
+      State.OriginalStderrDescriptor = -1;
+      if (WriteDescriptor != -1)
+        _close(WriteDescriptor);
+      else
+        CloseHandle(WritePipe);
+      CloseHandle(ReadPipe);
+      AppendConsoleOutput("[!] Failed to redirect C runtime output.\n");
+      return;
+    }
+
+    _close(WriteDescriptor);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    SetStdHandle(STD_OUTPUT_HANDLE, reinterpret_cast<HANDLE>(
+                                        _get_osfhandle(_fileno(stdout))));
+    SetStdHandle(STD_ERROR_HANDLE, reinterpret_cast<HANDLE>(
+                                       _get_osfhandle(_fileno(stderr))));
+
+    State.Active = true;
+    State.ReaderThread = std::thread([ReadPipe] {
+      std::array<char, 4096> Buffer{};
+      DWORD BytesRead = 0;
+      while (ReadFile(ReadPipe, Buffer.data(),
+                      static_cast<DWORD>(Buffer.size()), &BytesRead,
+                      nullptr) &&
+             BytesRead != 0) {
+        AppendConsoleOutput(DecodeConsoleProcessOutput(
+            QByteArray(Buffer.data(), static_cast<qsizetype>(BytesRead))));
+      }
+      CloseHandle(ReadPipe);
+    });
+  });
+}
+
+void StopStandardIoCapture() {
+  StandardIoCaptureState &State = StandardIoCapture();
+  if (!State.Active)
+    return;
+
+  fflush(stdout);
+  fflush(stderr);
+  _dup2(State.OriginalStdoutDescriptor, _fileno(stdout));
+  _dup2(State.OriginalStderrDescriptor, _fileno(stderr));
+  _close(State.OriginalStdoutDescriptor);
+  _close(State.OriginalStderrDescriptor);
+  State.OriginalStdoutDescriptor = -1;
+  State.OriginalStderrDescriptor = -1;
+  SetStdHandle(STD_OUTPUT_HANDLE, State.OriginalStdoutHandle);
+  SetStdHandle(STD_ERROR_HANDLE, State.OriginalStderrHandle);
+  State.Active = false;
+  if (State.ReaderThread.joinable())
+    State.ReaderThread.join();
+}
+
+QtMessageHandler PreviousQtMessageHandler = nullptr;
+
+void ApplicationQtMessageHandler(QtMsgType Type,
+                                 const QMessageLogContext &Context,
+                                 const QString &Message) {
+  static thread_local bool HandlingMessage = false;
+  if (!HandlingMessage) {
+    HandlingMessage = true;
+    QString Prefix;
+    switch (Type) {
+    case QtDebugMsg:
+      Prefix = "[DEBUG]";
+      break;
+    case QtInfoMsg:
+      Prefix = "[*]";
+      break;
+    case QtWarningMsg:
+      Prefix = "[WARN]";
+      break;
+    case QtCriticalMsg:
+    case QtFatalMsg:
+      Prefix = "[!]";
+      break;
+    }
+    QString Source;
+    if (Context.file && Context.line > 0)
+      Source = QString(" (%1:%2)")
+                   .arg(QFileInfo(QString::fromUtf8(Context.file)).fileName())
+                   .arg(Context.line);
+    AppendConsoleOutput(QString("%1 Qt%2: %3\n")
+                            .arg(Prefix, Source, Message.trimmed()));
+    HandlingMessage = false;
+  }
+
+  if (PreviousQtMessageHandler)
+    PreviousQtMessageHandler(Type, Context, Message);
+  else {
+    const QString DebugMessage =
+        QString("%1\n").arg(qFormatLogMessage(Type, Context, Message));
+    OutputDebugStringW(DebugMessage.toStdWString().c_str());
+  }
+}
+
+void InstallQtMessageCapture() {
+  PreviousQtMessageHandler = qInstallMessageHandler(ApplicationQtMessageHandler);
+}
+
 void AppendModuleOutput(const QString &Text) {
   {
     std::lock_guard<std::mutex> Lock(OutputMutex);
@@ -390,10 +561,18 @@ bool PayloadShellDecrypt(const QByteArray &HexCipher, const QByteArray &Key,
 }
 
 void PayloadShellLog(const std::shared_ptr<PayloadShellSession> &Session,
-                     const QString &Message,
-                     const QColor &Color = QColor("#7CFC00")) {
+                      const QString &Message,
+                      const QColor &Color = QColor("#7CFC00")) {
   if (!Session)
     return;
+
+  if (Color == QColor("#FF5F56")) {
+    QString Detail = Message.trimmed();
+    Detail.replace('\n', "\n    ");
+    AppendConsoleOutput(
+        QString("[!] PayloadShell %1:%2: %3\n")
+            .arg(Session->Host, Session->Port, Detail));
+  }
 
   Session->Transcript.append(Message);
   Session->Transcript.append('\n');
@@ -673,7 +852,9 @@ void ShowPayloadShellCommandDialog(
           return;
         QFile File(Path);
         if (!File.open(QIODevice::ReadOnly)) {
-          PayloadShellLog(Session, "Upload error: failed to read file.",
+          PayloadShellLog(Session,
+                          "Upload error: failed to read file: " +
+                              File.errorString(),
                           QColor("#FF5F56"));
           return;
         }
@@ -753,14 +934,16 @@ void PayloadShellShowScreenshot(
   Buttons->addWidget(Close);
   Layout->addWidget(Image, 1);
   Layout->addLayout(Buttons);
-  QObject::connect(Save, &QPushButton::clicked, Dialog, [Dialog, PngBytes] {
+  QObject::connect(Save, &QPushButton::clicked, Dialog,
+                   [Dialog, Session, PngBytes] {
     const QString Path = QFileDialog::getSaveFileName(
         Dialog, "Save screenshot", "screenshot.png", "PNG Image (*.png)");
     if (Path.isEmpty())
       return;
     QFile File(Path);
-    if (File.open(QIODevice::WriteOnly))
-      File.write(PngBytes);
+    if (!File.open(QIODevice::WriteOnly) || File.write(PngBytes) != PngBytes.size())
+      PayloadShellLog(Session, "Failed to save screenshot: " + File.errorString(),
+                      QColor("#FF5F56"));
   });
   QObject::connect(Close, &QPushButton::clicked, Dialog, &QDialog::accept);
   Dialog->show();
@@ -814,11 +997,19 @@ void PayloadShellHandleResponse(
 
     QFile File(Path);
     if (!File.open(QIODevice::WriteOnly)) {
-      PayloadShellLog(Session, "ERR: failed to save downloaded file",
+      PayloadShellLog(Session,
+                      "ERR: failed to save downloaded file: " +
+                          File.errorString(),
                       QColor("#FF5F56"));
       return;
     }
-    File.write(FileBytes);
+    if (File.write(FileBytes) != FileBytes.size()) {
+      PayloadShellLog(Session,
+                      "ERR: failed to write downloaded file: " +
+                          File.errorString(),
+                      QColor("#FF5F56"));
+      return;
+    }
     PayloadShellLog(Session,
                     QString("Saved to: %1 (%2 bytes)")
                         .arg(QDir::toNativeSeparators(Path))

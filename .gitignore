@@ -3,14 +3,7 @@
 /Bin/
 /x64/
 /AegisNT/
-/Drivers/*
-!/Drivers/Ring0Core
-!/Drivers/Ring0Core/**
-/Drivers/Ring0Core/Bin/
-/Drivers/Ring0Core/**/Bin/
-/Drivers/Ring0Core/**/*.user
-/Drivers/Ring0Core/**/*.bak_*
-/Drivers/Ring0Core - 副本/
+/Drivers/
 *.ps1
 /.agents/
 .idea/modules.xml

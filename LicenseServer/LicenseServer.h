@@ -18,6 +18,7 @@
 typedef struct _UserInfo{
 	std::string UserName;
 	int UserType;
+	std::string Title;
 	std::string PasswordHash;
 } UserInfo, * PUserInfo;
 
@@ -34,6 +35,7 @@ bool QueryUser(const std::string& Username, UserInfo& OutUser);
 bool InsertUser(const UserInfo& User);
 bool UpdatePassword(const std::string& Username, const std::string& NewPasswordHash);
 bool UpdateUserType(const std::string& Username, int NewUserType);
+bool UpdateUserTitle(const std::string& Username, const std::string& NewTitle);
 bool UserExists(const std::string& Username);
 std::string GetCurrentTimestamp();
 void LogInfo(const std::string& Message);

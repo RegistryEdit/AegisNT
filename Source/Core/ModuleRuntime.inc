@@ -233,7 +233,7 @@ void CleanupManagedDriversOnExit() {
         (QStringLiteral("[AegisNT] Driver shutdown cleanup failures:\n") +
          Failures.join('\n'))
             .toStdWString();
-    OutputDebugStringW(Message.c_str());
+    AppendConsoleOutput(QString::fromStdWString(Message) + "\n");
   }
 }
 

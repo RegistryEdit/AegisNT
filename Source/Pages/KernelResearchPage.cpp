@@ -373,16 +373,27 @@ QWidget *CreateKernelResearchPage() {
     if (Path.isEmpty()) return;
     QFile File(Path);
     if (File.open(QIODevice::WriteOnly)) {
-      File.write(Integrity->property("currentBaseline").toByteArray());
+      const QByteArray Data = Integrity->property("currentBaseline").toByteArray();
+      if (File.write(Data) != Data.size()) {
+        ShowErrorNotice(Page, "Kernel Research",
+                        "Failed to save baseline: " + File.errorString());
+        return;
+      }
       File.close();
       ShowSuccessNotice(Page, "Kernel Research", "Baseline saved.");
-    }
+    } else
+      ShowErrorNotice(Page, "Kernel Research",
+                      "Failed to save baseline: " + File.errorString());
   });
   QObject::connect(LoadBaseline, &QPushButton::clicked, Page, [=] {
     const QString Path = QFileDialog::getOpenFileName(Page, "Load Kernel Baseline", {}, "JSON (*.json)");
     if (Path.isEmpty()) return;
     QFile File(Path);
-    if (!File.open(QIODevice::ReadOnly)) return;
+    if (!File.open(QIODevice::ReadOnly)) {
+      ShowErrorNotice(Page, "Kernel Research",
+                      "Failed to open baseline: " + File.errorString());
+      return;
+    }
     const auto Doc = QJsonDocument::fromJson(File.readAll());
     if (!Doc.isObject()) { ShowErrorNotice(Page, "Kernel Research", "Invalid baseline JSON."); return; }
     State->Baseline = Doc.object();

@@ -343,8 +343,7 @@ QWidget *CreateSnapshotLabPage() {
       Meta.CapturedAtUtc = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
       Meta.MachineName = QSysInfo::machineHostName();
       Meta.WindowsVersion = QueryWindowsVersionText();
-      Meta.AppVersion =
-          ConfigurationValue("Application", "Version", "1.0.0").toString();
+      Meta.AppVersion = KApplicationVersion;
       Meta.DriverState.AegisCoreAvailable =
           G_DeviceHandle != INVALID_HANDLE_VALUE ||
           IsDriverServiceRunning(L"Ring0Core");
@@ -1394,7 +1393,13 @@ QWidget *CreateSnapshotLabPage() {
                             QDir::toNativeSeparators(Path));
         return;
       }
-      File.write(SerializeDocument(*Document));
+      const QByteArray Data = SerializeDocument(*Document);
+      if (File.write(Data) != Data.size()) {
+        ShowErrorNotice(this, "Snapshot",
+                        "Failed to write snapshot JSON.\n" +
+                            QDir::toNativeSeparators(Path));
+        return;
+      }
       if (!File.commit()) {
         ShowErrorNotice(this, "Snapshot",
                         "Failed to save snapshot JSON.\n" +

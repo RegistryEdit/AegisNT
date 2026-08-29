@@ -27,6 +27,8 @@ if(AEGISNT_BUILD_LICENSE_SERVER)
   find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp REQUIRED)
 
   add_executable(LicenseServer LicenseServer/LicenseServer.cpp)
+  configure_file(LicenseServer/UpdateConfig.json
+    ${CMAKE_CURRENT_BINARY_DIR}/UpdateConfig.json COPYONLY)
   target_include_directories(LicenseServer PRIVATE
     LicenseServer
     ${HTTPLIB_INCLUDE_DIR}

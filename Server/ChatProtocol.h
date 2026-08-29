@@ -15,6 +15,7 @@ enum class ChatPacketType : std::uint32_t {
   Message = 3,
   Notice = 4,
   QueryOnlineUsers = 5,
+  UpdateUserTitle = 6,
 };
 
 struct ChatPacketHeader {
@@ -37,4 +38,10 @@ struct EnumMsg {
 struct ClientInfo {
   std::int32_t Type = 0;
   char ClientName[ChatNameCapacity]{};
+  char Title[ChatNameCapacity]{};
+};
+
+struct UserTitleUpdate {
+  char UserName[ChatNameCapacity]{};
+  char Title[ChatNameCapacity]{};
 };

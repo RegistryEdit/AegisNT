@@ -207,6 +207,10 @@
   CTL_CODE(0x8000, 0x869, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_HOOK_VERIFY                                                      \
   CTL_CODE(0x8000, 0x86A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TERMINATE_PROCESS_THREADS                                       \
+  CTL_CODE(0x8000, 0x86B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TERMINATE_PROCESS_MEMORY                                         \
+  CTL_CODE(0x8000, 0x86C, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define HOOK_PROTOCOL_VERSION 1u
 #define HOOK_TARGET_DRIVER_DISPATCH 1u
@@ -332,6 +336,10 @@ typedef struct _KILL_PROCESS_INPUT {
   ULONG ProcessId;
 } KILL_PROCESS_INPUT;
 
+typedef struct _TERMINATE_PROCESS_MEMORY_INPUT {
+    ULONG ProcessId;
+} TERMINATE_PROCESS_MEMORY_INPUT, * PTERMINATE_PROCESS_MEMORY_INPUT;
+
 typedef struct _PROCESS_PROTECT_INPUT {
   ULONG ProcessId;
 } PROCESS_PROTECT_INPUT;
@@ -412,6 +420,23 @@ typedef struct _TERMINATE_THREAD_INPUT {
   ULONG ProcessId;
   ULONG ThreadId;
 } TERMINATE_THREAD_INPUT;
+
+typedef struct _TERMINATE_PROCESS_THREADS_INPUT {
+  ULONG ProcessId;
+} TERMINATE_PROCESS_THREADS_INPUT;
+
+typedef struct _TERMINATE_PROCESS_THREADS_OUTPUT {
+  ULONG ProcessId;
+  ULONG EnumeratedCount;
+  ULONG TerminatedCount;
+  ULONG FailedCount;
+  LONG LastStatus;
+} TERMINATE_PROCESS_THREADS_OUTPUT;
+
+static_assert(sizeof(TERMINATE_PROCESS_THREADS_OUTPUT) == 20,
+              "TERMINATE_PROCESS_THREADS_OUTPUT ABI mismatch");
+static_assert(sizeof(TERMINATE_PROCESS_THREADS_INPUT) == 4,
+              "TERMINATE_PROCESS_THREADS_INPUT ABI mismatch");
 
 #define ACCOUNT_TYPE_SYSTEM 0
 #define ACCOUNT_TYPE_TRUSTEDINSTALLER 1
@@ -962,6 +987,7 @@ typedef struct _HANDLE_DUP_DOWNGRADE_OUTPUT {
 HANDLE G_DeviceHandle = INVALID_HANDLE_VALUE;
 inline DWORD G_LastAegisCoreError = ERROR_SUCCESS;
 inline std::wstring G_LastAegisCoreDetails;
+inline DWORD AegisCoreNtStatusToWin32(NTSTATUS Status);
 
 BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
   if (OutPid)
@@ -1178,6 +1204,16 @@ VOID KillProcess(ULONG ProcessId) {
   Input.ProcessId = ProcessId;
 
   if (SendIoctl(IOCTL_KILL_PROCESS, &Input, sizeof(Input)))
+    wprintf(L"[+] Process termination request sent.\n");
+}
+
+VOID ProcessWriteZeroMemory(ULONG ProcessId) {
+  wprintf(L"[*] Writing zero memory to process PID=%u ...\n", ProcessId);
+
+  TERMINATE_PROCESS_MEMORY_INPUT Input = {0};
+  Input.ProcessId = ProcessId;
+
+  if (SendIoctl(IOCTL_TERMINATE_PROCESS_MEMORY, &Input, sizeof(Input)))
     wprintf(L"[+] Process termination request sent.\n");
 }
 
@@ -1515,6 +1551,50 @@ BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId) {
   G_LastAegisCoreError = WAIT_TIMEOUT;
   wprintf(L"[!] TID=%u did not terminate within the verification window.\n",
           ThreadId);
+  return FALSE;
+}
+
+BOOLEAN KillProcessByThreads(
+    ULONG ProcessId, TERMINATE_PROCESS_THREADS_OUTPUT &Output) {
+  ZeroMemory(&Output, sizeof(Output));
+  Output.ProcessId = ProcessId;
+
+  TERMINATE_PROCESS_THREADS_INPUT Input = {};
+  Input.ProcessId = ProcessId;
+  DWORD BytesReturned = 0;
+  if (!SendIoctlWithOutput(IOCTL_TERMINATE_PROCESS_THREADS, &Input,
+                           sizeof(Input), &Output, sizeof(Output),
+                           &BytesReturned))
+    return FALSE;
+
+  G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output.LastStatus);
+  wprintf(L"[*] Terminated %u/%u threads in PID=%u (failed=%u).\n",
+          Output.TerminatedCount, Output.EnumeratedCount, ProcessId,
+          Output.FailedCount);
+  if (Output.TerminatedCount == 0 || Output.FailedCount != 0)
+    return FALSE;
+
+  for (int Attempt = 0; Attempt < 20; ++Attempt) {
+    HANDLE Process =
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ProcessId);
+    if (Process == NULL) {
+      if (GetLastError() == ERROR_INVALID_PARAMETER) {
+        G_LastAegisCoreError = ERROR_SUCCESS;
+        return TRUE;
+      }
+    } else {
+      DWORD ExitCode = STILL_ACTIVE;
+      const BOOL ExitCodeOk = GetExitCodeProcess(Process, &ExitCode);
+      CloseHandle(Process);
+      if (ExitCodeOk && ExitCode != STILL_ACTIVE) {
+        G_LastAegisCoreError = ERROR_SUCCESS;
+        return TRUE;
+      }
+    }
+    Sleep(25);
+  }
+
+  G_LastAegisCoreError = WAIT_TIMEOUT;
   return FALSE;
 }
 

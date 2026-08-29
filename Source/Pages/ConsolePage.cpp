@@ -72,7 +72,8 @@ QWidget *CreateConsolePage() {
                     .arg(ExitCode));
             ShowErrorNotice(
                 Page, "Console",
-                QString("Command terminated with exit code %1.").arg(ExitCode));
+                QString("Command terminated with exit code %1.").arg(ExitCode),
+                false);
           } else if (ExitCode == 0)
             ShowSuccessNotice(Page, "Console",
                               "Command completed successfully.");
@@ -81,7 +82,8 @@ QWidget *CreateConsolePage() {
                 QString("[!] Command exited with code %1.\n").arg(ExitCode));
             ShowErrorNotice(
                 Page, "Console",
-                QString("Command completed with exit code %1.").arg(ExitCode));
+                QString("Command completed with exit code %1.").arg(ExitCode),
+                false);
           }
           ActiveConsoleProcess = nullptr;
           Run->setEnabled(true);

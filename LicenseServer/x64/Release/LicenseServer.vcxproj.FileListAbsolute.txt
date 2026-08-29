@@ -1,3 +1,7 @@
 D:\C++\Tools\AegisNT\x64\Release\libcrypto-3-x64.dll
 D:\C++\Tools\AegisNT\x64\Release\sqlite3.dll
+D:\C++\Tools\AegisNT\LicenseServer\x64\Release\LicenseS.BA1574EF.Up2Date
+D:\C++\Tools\AegisNT\x64\Release\cpr.dll
+D:\C++\Tools\AegisNT\x64\Release\libcurl.dll
+D:\C++\Tools\AegisNT\x64\Release\z.dll
 D:\C++\Tools\AegisNT\LicenseServer\x64\Release\LicenseServer.exe

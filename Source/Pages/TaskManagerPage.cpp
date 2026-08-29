@@ -1537,10 +1537,15 @@ private:
         QString("Select how to terminate %1 selected process(es). This may "
                 "cause data loss.")
             .arg(Pids.size()),
-        {"R0ZwTerminateProcess", "R3PatchThreadRun", "R3NtTerminate",
-         "R3KillProcessForce", "R3RunInjectProc"},
+        {"R0ZwTerminateProcess", "R0TerminateProcessThreads","R0WriteZeroMemoryToProcess",
+         "R3PatchThreadRun", "R3NtTerminate", "R3KillProcessForce",
+         "R3RunInjectProc"},
         [this, Pids](int Index) {
           int SuccessCount = 0;
+          int PartialCount = 0;
+          quint64 EnumeratedThreads = 0;
+          quint64 TerminatedThreads = 0;
+          quint64 FailedThreads = 0;
           for (const DWORD Pid : Pids) {
             bool Success = false;
             switch (Index) {
@@ -1549,16 +1554,31 @@ private:
               Success = G_LastAegisCoreError == ERROR_SUCCESS;
               break;
             case 1:
+            {
+              TERMINATE_PROCESS_THREADS_OUTPUT Result = {};
+              Success = KillProcessByThreads(Pid, Result) != FALSE;
+              EnumeratedThreads += Result.EnumeratedCount;
+              TerminatedThreads += Result.TerminatedCount;
+              FailedThreads += Result.FailedCount;
+              if (!Success && Result.TerminatedCount != 0)
+                ++PartialCount;
+              break;
+            }
+            case 2:
+				ProcessWriteZeroMemory(Pid);
+                Success = true;
+				break;
+            case 3:
               PatchThreadRun(Pid);
               Success = true;
               break;
-            case 2:
+            case 4:
               Success = NtTerminate(Pid);
               break;
-            case 3:
+            case 5:
               Success = KillProcessForce(Pid);
               break;
-            case 4:
+            case 6:
               Success = RunInjectProc(Pid);
               break;
             default:
@@ -1566,6 +1586,27 @@ private:
             }
             if (Success)
               ++SuccessCount;
+          }
+          if (Index == 1) {
+            const int FailedProcessCount =
+                static_cast<int>(Pids.size()) - SuccessCount - PartialCount;
+            const QString Summary =
+                QString("Processes: %1 complete, %2 partial, %3 failed. "
+                        "Threads: %4/%5 terminated, %6 failed.")
+                    .arg(SuccessCount)
+                    .arg(PartialCount)
+                    .arg(FailedProcessCount)
+                    .arg(TerminatedThreads)
+                    .arg(EnumeratedThreads)
+                    .arg(FailedThreads);
+            if (SuccessCount == 0 && PartialCount == 0)
+              ShowErrorNotice(this, "Terminate", Summary);
+            else if (PartialCount != 0 || FailedProcessCount != 0)
+              ShowWarningNotice(this, "Terminate", Summary);
+            else
+              ShowSuccessNotice(this, "Terminate", Summary);
+            QTimer::singleShot(0, this, [this] { RefreshProcesses(); });
+            return;
           }
           if (SuccessCount == 0)
             ShowErrorNotice(this, "Terminate",
@@ -1580,50 +1621,8 @@ private:
   }
 
   void ShowTerminateDialog(DWORD Pid, const QString &Name) {
-    ShowChoiceDialog(
-        "Terminate",
-        QString(
-            "Select how to terminate %1 (PID %2). This may cause data loss.")
-            .arg(Name)
-            .arg(Pid),
-        {"R0ZwTerminateProcess", "R3PatchThreadRun", "R3NtTerminate",
-         "R3KillProcessForce", "R3RunInjectProc"},
-        [this, Pid](int Index) {
-          switch (Index) {
-          case 0:
-            KillProcess(Pid);
-            ReportDriverResult("Terminate");
-            return;
-          case 1:
-            PatchThreadRun(Pid);
-            ShowSuccessNotice(this, "Terminate",
-                              "Thread execution patch requested.");
-            break;
-          case 2:
-            if (!NtTerminate(Pid))
-              ShowErrorNotice(this, "Terminate", "NtTerminateProcess failed.");
-            else
-              ShowSuccessNotice(this, "Terminate", "Process terminated.");
-            break;
-          case 3:
-            if (!KillProcessForce(Pid))
-              ShowErrorNotice(this, "Terminate", "Thread termination failed.");
-            else
-              ShowSuccessNotice(this, "Terminate",
-                                "Process threads terminated.");
-            break;
-          case 4:
-            if (!RunInjectProc(Pid))
-              ShowErrorNotice(this, "Terminate", "Remote ExitProcess failed.");
-            else
-              ShowSuccessNotice(this, "Terminate",
-                                "Remote ExitProcess completed.");
-            break;
-          default:
-            return;
-          }
-          QTimer::singleShot(0, this, [this] { RefreshProcesses(); });
-        });
+    Q_UNUSED(Name);
+    ShowTerminateDialog(std::vector<DWORD>{Pid});
   }
 
   void ShowIntegrityDialog(DWORD Pid) {
@@ -3173,7 +3172,8 @@ private:
                     .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)
                              .replace('\n', "\n    ")));
             ShowErrorNotice(this, "InjectDLL",
-                            "DLL injection failed. See Console for details.");
+                            "DLL injection failed. See Console for details.",
+                            false);
           } else {
             AppendConsoleOutput(QString("[+] DLL injection started.\n"
                                         "    PID: %1\n"

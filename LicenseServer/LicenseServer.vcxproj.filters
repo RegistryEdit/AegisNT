@@ -24,4 +24,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="UpdateConfig.json">
+      <Filter>资源文件</Filter>
+    </None>
+  </ItemGroup>
 </Project>

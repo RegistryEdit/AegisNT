@@ -72,7 +72,9 @@ QWidget *CreateModuleRunPage() {
 
     QString Error;
     if (!LoadModuleInstance(*Entry, &Error)) {
-      Information->setText("Failed to load module: " + Error + "\n" + Path);
+      const QString Message = "Failed to load module: " + Error + "\n" + Path;
+      Information->setText(Message);
+      AppendConsoleOutput("[!] ModuleRun: " + Message + "\n");
       return;
     }
     ModuleBase *Instance = static_cast<ModuleBase *>(Entry->ModuleInstance);

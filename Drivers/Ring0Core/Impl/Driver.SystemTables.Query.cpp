@@ -395,6 +395,27 @@ ScorePiDdbCacheCandidate(
 }
 
 static BOOLEAN
+ReadKernelPointerSafe(
+	_In_ ULONG_PTR Address,
+	_Out_ PULONG_PTR Value
+)
+{
+	if (Value == NULL || Address == 0 || (Address & (sizeof(PVOID) - 1)) != 0)
+		return FALSE;
+
+	__try
+	{
+		*Value = *reinterpret_cast<volatile ULONG_PTR*>(Address);
+		return TRUE;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		*Value = 0;
+		return FALSE;
+	}
+}
+
+static BOOLEAN
 ExtractAnyLeaRipCandidate(
 	_In_ PUCHAR Start,
 	_In_ SIZE_T NumBytes,
@@ -402,16 +423,23 @@ ExtractAnyLeaRipCandidate(
 	_In_ ULONG NtosSize,
 	_In_reads_(WritableCount) const IMAGE_SECTION_RANGE* WritableRanges,
 	_In_ ULONG WritableCount,
+	_Inout_ PSIZE_T SearchOffset,
 	_Out_ PULONG_PTR Result
 )
 {
 	static const UCHAR Patterns[][3] = {
 		{ 0x48, 0x8D, 0x0D }, { 0x48, 0x8D, 0x15 }, { 0x48, 0x8D, 0x1D },
 		{ 0x4C, 0x8D, 0x05 }, { 0x4C, 0x8D, 0x0D }, { 0x4C, 0x8D, 0x15 },
-		{ 0x4C, 0x8D, 0x1D }, { 0x4C, 0x8D, 0x25 }
+		{ 0x4C, 0x8D, 0x1D }, { 0x4C, 0x8D, 0x25 },
+		{ 0x48, 0x8B, 0x05 }, { 0x48, 0x8B, 0x0D }, { 0x48, 0x8B, 0x15 },
+		{ 0x48, 0x8B, 0x1D }, { 0x4C, 0x8B, 0x05 }, { 0x4C, 0x8B, 0x0D },
+		{ 0x4C, 0x8B, 0x15 }, { 0x4C, 0x8B, 0x1D }
 	};
 
-	for (SIZE_T Offset = 0; Offset + 7 <= NumBytes; ++Offset)
+	if (SearchOffset == NULL)
+		return FALSE;
+
+	for (SIZE_T Offset = *SearchOffset; Offset + 7 <= NumBytes; ++Offset)
 	{
 		for (ULONG PatternIndex = 0; PatternIndex < RTL_NUMBER_OF(Patterns); ++PatternIndex)
 		{
@@ -421,17 +449,26 @@ ExtractAnyLeaRipCandidate(
 			{
 				continue;
 			}
+			if ((Start[Offset + 2] & 0xC7) != 0x05)
+				continue;
 
 			LONG Disp = *reinterpret_cast<PLONG>(Start + Offset + 3);
 			ULONG_PTR Candidate = reinterpret_cast<ULONG_PTR>(Start + Offset + 7) + Disp;
-			if (Candidate < NtosBase || Candidate >= NtosBase + NtosSize)
-				continue;
-			if ((Candidate & (sizeof(PVOID) - 1)) != 0)
-				continue;
-			if (!AddressInImageSections(Candidate, WritableRanges, WritableCount))
+			const BOOLEAN IsLea = Start[Offset + 1] == 0x8D;
+			if (!IsLea)
+			{
+				ULONG_PTR LoadedCandidate = 0;
+				if (!ReadKernelPointerSafe(Candidate, &LoadedCandidate))
+					continue;
+				Candidate = LoadedCandidate;
+			}
+			if (Candidate < NtosBase || Candidate >= NtosBase + NtosSize ||
+				(Candidate & (sizeof(PVOID) - 1)) != 0 ||
+				!AddressInImageSections(Candidate, WritableRanges, WritableCount))
 				continue;
 
 			*Result = Candidate;
+			*SearchOffset = Offset + 1;
 			return TRUE;
 		}
 	}
@@ -608,15 +645,12 @@ QueryPiDDBCache(
 		if (Addr == NULL)
 			continue;
 
+		SIZE_T SearchOffset = 0;
 		ULONG_PTR Candidate = 0;
-		if (ExtractAnyLeaRipCandidate(
-			reinterpret_cast<PUCHAR>(Addr),
-			MAX_SCAN_BYTES * 2,
-			NtosBase,
-			NtosSize,
-			WritableRanges,
-			WritableCount,
-			&Candidate))
+		while (ExtractAnyLeaRipCandidate(
+			reinterpret_cast<PUCHAR>(Addr), MAX_SCAN_BYTES * 2,
+			NtosBase, NtosSize, WritableRanges, WritableCount,
+			&SearchOffset, &Candidate))
 		{
 			const ULONG Score = ScorePiDdbCacheCandidate(
 				Candidate, NtosBase, NtosSize);
@@ -625,7 +659,13 @@ QueryPiDDBCache(
 				BestScore = Score;
 				BestCandidate = Candidate;
 			}
+
+			if (BestScore >= 12)
+				break;
 		}
+
+		if (BestScore >= 12)
+			break;
 	}
 
 	if (BestCandidate != 0 && BestScore >= 8)
@@ -839,13 +879,37 @@ EnumeratePiDDBCache(
 
 	auto* Table = reinterpret_cast<PRTL_AVL_TABLE>(Tables.PiDDBCacheTable);
 	auto* TableLocal = reinterpret_cast<PRTL_AVL_TABLE_LOCAL>(Tables.PiDDBCacheTable);
-	if (TableLocal != NULL)
+	if (Table == NULL || TableLocal == NULL)
+		return STATUS_NOT_FOUND;
+
+	__try
+	{
+		if (TableLocal->CompareRoutine == NULL ||
+			TableLocal->AllocateRoutine == NULL ||
+			TableLocal->FreeRoutine == NULL ||
+			TableLocal->NumberGenericTableElements > 0x100000 ||
+			TableLocal->DepthOfTree > 0x1000)
+			return STATUS_NOT_FOUND;
+
 		Output->TotalCount = TableLocal->NumberGenericTableElements;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return STATUS_ACCESS_VIOLATION;
+	}
 
 	PVOID RestartKey = NULL;
 	for (ULONG Index = 0; Index < PIDDB_CACHE_MAX_ENTRIES; ++Index)
 	{
-		PVOID Element = RtlEnumerateGenericTableWithoutSplayingAvl(Table, &RestartKey);
+		PVOID Element = NULL;
+		__try
+		{
+			Element = RtlEnumerateGenericTableWithoutSplayingAvl(Table, &RestartKey);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			break;
+		}
 		if (Element == NULL)
 			break;
 
@@ -858,11 +922,21 @@ EnumeratePiDDBCache(
 		{
 			OutEntry->TimeDateStamp = Entry->TimeDateStamp;
 			OutEntry->LoadStatus = Entry->LoadStatus;
-			if (Entry->DriverName.Buffer != NULL && Entry->DriverName.Length != 0)
+			if (Entry->DriverName.Buffer != NULL &&
+				Entry->DriverName.Length != 0 &&
+				Entry->DriverName.Length <= Entry->DriverName.MaximumLength &&
+				Entry->DriverName.Length <= sizeof(OutEntry->DriverName) - sizeof(WCHAR))
 			{
-				RtlStringCbCopyNW(OutEntry->DriverName, sizeof(OutEntry->DriverName),
-					Entry->DriverName.Buffer, Entry->DriverName.Length);
+				const SIZE_T CopyBytes = min(
+					static_cast<SIZE_T>(Entry->DriverName.Length),
+					sizeof(OutEntry->DriverName) - sizeof(WCHAR));
+				RtlCopyMemory(OutEntry->DriverName,
+					Entry->DriverName.Buffer, CopyBytes);
+				OutEntry->DriverName[CopyBytes / sizeof(WCHAR)] = L'\0';
 			}
+			else if (Entry->DriverName.Buffer != NULL && Entry->DriverName.Length != 0)
+				RtlStringCchCopyW(OutEntry->DriverName,
+					RTL_NUMBER_OF(OutEntry->DriverName), L"<invalid>");
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{

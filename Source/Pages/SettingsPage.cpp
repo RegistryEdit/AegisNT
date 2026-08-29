@@ -720,12 +720,315 @@ QWidget *CreateSettingsPage() {
                    });
 
   AddSection("About");
-  AddSetting(
-      "Version", "Current AegisNT release.",
-      new StrongBodyLabel(
-          ConfigurationValue("Application", "Version", "1.0.0").toString()));
+  AddSetting("Version", "Current AegisNT release.",
+             new StrongBodyLabel(KApplicationVersion));
   AddSetting("Author", "Application author.",
              new StrongBodyLabel("RegistryEdit"));
+
+  const auto ResolveUpdateServerAddress = []() -> QString {
+    QString Address =
+        ConfigurationValue("LicenseServer", "Address", "http://localhost:8888")
+            .toString()
+            .trimmed();
+    while (Address.endsWith('/'))
+      Address.chop(1);
+    if (Address.isEmpty())
+      Address = "http://localhost:8888";
+    return Address;
+  };
+  const auto LocalVersion = []() -> QString {
+    return KApplicationVersion;
+  };
+  struct UpdateCheckState {
+    QString CloudVersion;
+    QUrl DownloadUrl;
+    bool CheckSucceeded = false;
+    bool HasUpdate = false;
+  };
+  const auto UpdateState = std::make_shared<UpdateCheckState>();
+
+  auto *CloudVersionLabel = new StrongBodyLabel("-");
+  CloudVersionLabel->setMinimumWidth(154);
+  AddSetting("Cloud version",
+             "Latest release available on the update server.",
+             CloudVersionLabel);
+
+  auto *CheckUpdateButton = MakeButton("CheckUpdate");
+  auto *UpdateButton = MakeButton("Update", true);
+  UpdateButton->setEnabled(false);
+  auto *UpdateControl = new QWidget;
+  auto *UpdateControlLayout = new QHBoxLayout(UpdateControl);
+  UpdateControlLayout->setContentsMargins(0, 0, 0, 0);
+  UpdateControlLayout->setSpacing(8);
+  UpdateControlLayout->addWidget(CheckUpdateButton);
+  UpdateControlLayout->addWidget(UpdateButton);
+  AddSetting("Software update",
+             "Check for and install the newest release.", UpdateControl);
+
+  const auto ShowVersionNotice =
+      [Content](const QString &CloudVersion, bool HasUpdate) {
+        if (HasUpdate)
+          ShowWarningNotice(Content, TranslateText("Update"),
+                            TranslateText("A new version %1 is available.")
+                                .arg(CloudVersion));
+        else
+          ShowSuccessNotice(Content, TranslateText("Update"),
+                            TranslateText("You are running the latest version."));
+      };
+
+  QObject::connect(
+      CheckUpdateButton, &QPushButton::clicked, Content,
+      [Content, CloudVersionLabel, UpdateButton, CheckUpdateButton,
+       ShowVersionNotice, ResolveUpdateServerAddress, LocalVersion,
+       UpdateState] {
+        *UpdateState = {};
+        CloudVersionLabel->setText("-");
+        UpdateButton->setEnabled(false);
+        CheckUpdateButton->setEnabled(false);
+        QNetworkAccessManager *Manager = new QNetworkAccessManager(Content);
+        QNetworkRequest VersionRequest{
+            QUrl(ResolveUpdateServerAddress() + "/GetLatestVersion")};
+        VersionRequest.setTransferTimeout(15000);
+        QNetworkReply *Reply = Manager->get(VersionRequest);
+        QObject::connect(
+            Reply, &QNetworkReply::finished, Content,
+            [Content, CloudVersionLabel, UpdateButton, Manager, Reply,
+             ShowVersionNotice, CheckUpdateButton, LocalVersion,
+             ResolveUpdateServerAddress, UpdateState] {
+              Reply->deleteLater();
+              Manager->deleteLater();
+              CheckUpdateButton->setEnabled(true);
+              if (Reply->error() != QNetworkReply::NoError) {
+                CloudVersionLabel->setText("-");
+                UpdateButton->setEnabled(false);
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText("Failed to query the update "
+                                              "server: %1")
+                                    .arg(Reply->errorString()));
+                return;
+              }
+              const QJsonDocument Doc =
+                  QJsonDocument::fromJson(Reply->readAll());
+              const QJsonObject Obj = Doc.object();
+              if (!Obj["success"].toBool() || !Obj["data"].isObject()) {
+                CloudVersionLabel->setText("-");
+                UpdateButton->setEnabled(false);
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText(Obj["message"]
+                                                  .toString("Invalid response.")));
+                return;
+              }
+              const QJsonObject UpdateData = Obj["data"].toObject();
+              const QString CloudVersion =
+                  UpdateData["version"].toString().trimmed();
+              QString DownloadUrlText =
+                  UpdateData["DownloadURL"].toString().trimmed();
+              if (DownloadUrlText.isEmpty())
+                DownloadUrlText =
+                    UpdateData["downloadUrl"].toString().trimmed();
+              if (CloudVersion.isEmpty()) {
+                CloudVersionLabel->setText("-");
+                UpdateButton->setEnabled(false);
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText("The update server returned an "
+                                              "empty version."));
+                return;
+              }
+              if (DownloadUrlText.isEmpty()) {
+                CloudVersionLabel->setText("-");
+                UpdateButton->setEnabled(false);
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText("The update server returned no "
+                                              "download address."));
+                return;
+              }
+              QUrl DownloadUrl(DownloadUrlText);
+              if (DownloadUrl.isRelative())
+                DownloadUrl = QUrl(ResolveUpdateServerAddress()).resolved(
+                    DownloadUrl);
+              const QString Scheme = DownloadUrl.scheme().toLower();
+              if (!DownloadUrl.isValid() || DownloadUrl.host().isEmpty() ||
+                  (Scheme != "http" && Scheme != "https")) {
+                CloudVersionLabel->setText("-");
+                UpdateButton->setEnabled(false);
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText("The update server returned an "
+                                              "invalid download address."));
+                return;
+              }
+              CloudVersionLabel->setText(CloudVersion);
+              int LocalSuffix = 0;
+              int CloudSuffix = 0;
+              const QVersionNumber Local = QVersionNumber::fromString(
+                  LocalVersion(), &LocalSuffix);
+              const QVersionNumber Cloud =
+                  QVersionNumber::fromString(CloudVersion, &CloudSuffix);
+              const bool HasUpdate = Cloud > Local && Cloud > QVersionNumber{};
+              UpdateState->CloudVersion = CloudVersion;
+              UpdateState->DownloadUrl = DownloadUrl;
+              UpdateState->CheckSucceeded = true;
+              UpdateState->HasUpdate = HasUpdate;
+              UpdateButton->setEnabled(HasUpdate);
+              ShowVersionNotice(CloudVersion, HasUpdate);
+            });
+      });
+
+  QObject::connect(
+      UpdateButton, &QPushButton::clicked, Content,
+      [Content, UpdateButton, CheckUpdateButton, UpdateState] {
+        if (!UpdateState->CheckSucceeded) {
+          ShowWarningNotice(Content, TranslateText("Update"),
+                            TranslateText("Check for updates first."));
+          return;
+        }
+        if (!UpdateState->HasUpdate) {
+          ShowSuccessNotice(Content, TranslateText("Update"),
+                            TranslateText("You are running the latest version."));
+          return;
+        }
+        if (QMessageBox::question(
+                Content->window(), TranslateText("Update"),
+                TranslateText("Version %1 is available. Download and restart "
+                              "AegisNT now?")
+                    .arg(UpdateState->CloudVersion)) != QMessageBox::Yes)
+          return;
+        UpdateButton->setEnabled(false);
+        CheckUpdateButton->setEnabled(false);
+        if (!UpdateState->DownloadUrl.isValid()) {
+          UpdateButton->setEnabled(UpdateState->HasUpdate);
+          CheckUpdateButton->setEnabled(true);
+          ShowErrorNotice(Content, TranslateText("Update"),
+                          TranslateText("No valid download address is "
+                                        "available. Check for updates again."));
+          return;
+        }
+        const QString UpdateArchive =
+            QDir(QStandardPaths::writableLocation(
+                     QStandardPaths::TempLocation))
+                .filePath("AegisNT.update.zip");
+        QFile::remove(UpdateArchive);
+        QNetworkAccessManager *Manager = new QNetworkAccessManager(Content);
+        QNetworkRequest DownloadRequest{UpdateState->DownloadUrl};
+        DownloadRequest.setTransferTimeout(120000);
+        QNetworkReply *Reply = Manager->get(DownloadRequest);
+        QObject::connect(
+            Reply, &QNetworkReply::finished, Content,
+            [Content, Reply, Manager, UpdateArchive, UpdateButton,
+             CheckUpdateButton, UpdateState] {
+              Reply->deleteLater();
+              Manager->deleteLater();
+              UpdateButton->setEnabled(UpdateState->HasUpdate);
+              CheckUpdateButton->setEnabled(true);
+              if (Reply->error() != QNetworkReply::NoError) {
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText("Download failed: %1")
+                                    .arg(Reply->errorString()));
+                return;
+              }
+              QSaveFile File(UpdateArchive);
+              const QByteArray ArchiveData = Reply->readAll();
+              if (!File.open(QIODevice::WriteOnly) ||
+                  File.write(ArchiveData) != ArchiveData.size() ||
+                  !File.commit()) {
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText("Failed to save the downloaded "
+                                              "package."));
+                return;
+              }
+              const QString Executable =
+                  QCoreApplication::applicationFilePath();
+              const QString ExecutableName =
+                  QFileInfo(Executable).fileName();
+              const QString BatchPath =
+                  QDir(QStandardPaths::writableLocation(
+                           QStandardPaths::TempLocation))
+                      .filePath("AegisNT_updater.bat");
+              const QString ExtractDirectory =
+                  QDir(QStandardPaths::writableLocation(
+                           QStandardPaths::TempLocation))
+                      .filePath("AegisNT_update");
+              const QString DriverDirectory =
+                  QFileInfo(Executable).dir().filePath("Drivers");
+              QString Batch;
+              QTextStream Stream(&Batch);
+              Stream << "@echo off\r\n";
+              Stream << "setlocal\r\n";
+              Stream << "set \"ARCHIVE=" << UpdateArchive << "\"\r\n";
+              Stream << "set \"EXTRACT_DIR=" << ExtractDirectory
+                     << "\"\r\n";
+              Stream << "set \"EXECUTABLE=" << Executable << "\"\r\n";
+              Stream << "set \"EXECUTABLE_NAME=" << ExecutableName
+                     << "\"\r\n";
+              Stream << "set \"DRIVER_DIR=" << DriverDirectory << "\"\r\n";
+              Stream << "set \"APP_STOPPED=0\"\r\n";
+              Stream << "ping 127.0.0.1 -n 4 > nul\r\n";
+              Stream << "powershell.exe -NoProfile -NonInteractive "
+                        "-ExecutionPolicy Bypass -Command \""
+                        "$ErrorActionPreference='Stop'; "
+                        "if (Test-Path -LiteralPath $env:EXTRACT_DIR) "
+                        "{ Remove-Item -LiteralPath $env:EXTRACT_DIR -Recurse -Force }; "
+                        "Expand-Archive -LiteralPath $env:ARCHIVE "
+                        "-DestinationPath $env:EXTRACT_DIR -Force\"\r\n";
+              Stream << "if errorlevel 1 goto :update_failed\r\n";
+              Stream << "if not exist \"%EXTRACT_DIR%\\AegisNT.exe\" "
+                        "goto :update_failed\r\n";
+              Stream << "if not exist \"%EXTRACT_DIR%\\*.sys\" "
+                        "if not exist \"%EXTRACT_DIR%\\Drivers\\*.sys\" "
+                        "goto :update_failed\r\n";
+              Stream << "taskkill /f /im \"%EXECUTABLE_NAME%\" > nul 2>&1\r\n";
+              Stream << "set \"APP_STOPPED=1\"\r\n";
+              Stream << "for %%D in (\"%EXTRACT_DIR%\\*.sys\") "
+                        "do sc.exe stop \"%%~nD\" > nul 2>&1\r\n";
+              Stream << "for %%D in (\"%EXTRACT_DIR%\\Drivers\\*.sys\") "
+                        "do sc.exe stop \"%%~nD\" > nul 2>&1\r\n";
+              Stream << "ping 127.0.0.1 -n 3 > nul\r\n";
+              Stream << "copy /Y \"%EXTRACT_DIR%\\AegisNT.exe\" "
+                        "\"%EXECUTABLE%\" > nul\r\n";
+              Stream << "if errorlevel 1 goto :update_failed\r\n";
+              Stream << "if not exist \"%DRIVER_DIR%\" mkdir \"%DRIVER_DIR%\"\r\n";
+              Stream << "powershell.exe -NoProfile -NonInteractive "
+                        "-ExecutionPolicy Bypass -Command \""
+                        "$ErrorActionPreference='Stop'; "
+                        "$drivers=@(Get-ChildItem -LiteralPath "
+                        "$env:EXTRACT_DIR -Filter '*.sys' -File); "
+                        "$nested=Join-Path $env:EXTRACT_DIR 'Drivers'; "
+                        "if (Test-Path -LiteralPath $nested) "
+                        "{ $drivers += @(Get-ChildItem -LiteralPath $nested "
+                        "-Filter '*.sys' -File) }; "
+                        "if ($drivers.Count -eq 0) { throw 'No drivers' }; "
+                        "foreach ($driver in $drivers) "
+                        "{ Copy-Item -LiteralPath $driver.FullName "
+                        "-Destination $env:DRIVER_DIR -Force }\"\r\n";
+              Stream << "if errorlevel 1 goto :update_failed\r\n";
+              Stream << "rmdir /s /q \"%EXTRACT_DIR%\" > nul 2>&1\r\n";
+              Stream << "del /q \"%ARCHIVE%\" > nul 2>&1\r\n";
+              Stream << "start \"\" \"%EXECUTABLE%\"\r\n";
+              Stream << "goto :cleanup\r\n";
+              Stream << ":update_failed\r\n";
+              Stream << "rmdir /s /q \"%EXTRACT_DIR%\" > nul 2>&1\r\n";
+              Stream << "del /q \"%ARCHIVE%\" > nul 2>&1\r\n";
+              Stream << "if \"%APP_STOPPED%\"==\"1\" start \"\" "
+                        "\"%EXECUTABLE%\"\r\n";
+              Stream << ":cleanup\r\n";
+              Stream << "del \"%~f0\"\r\n";
+              QFile BatchFile(BatchPath);
+              const QByteArray BatchData = Batch.toLocal8Bit();
+              if (!BatchFile.open(QIODevice::WriteOnly) ||
+                  BatchFile.write(BatchData) != BatchData.size()) {
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText("Failed to prepare the updater "
+                                              "script."));
+                return;
+              }
+              BatchFile.close();
+              if (!QProcess::startDetached(BatchPath)) {
+                ShowErrorNotice(Content, TranslateText("Update"),
+                                TranslateText("Failed to launch the updater."));
+                return;
+              }
+              qApp->quit();
+            });
+      });
 
   Layout->addStretch();
   auto *Scroll = new ScrollArea;

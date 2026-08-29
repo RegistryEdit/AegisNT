@@ -65,6 +65,7 @@
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QTextEdit>
+#include <QTextStream>
 #include <QThread>
 #include <QTimer>
 #include <QTreeView>
@@ -72,6 +73,7 @@
 #include <QUrl>
 #include <QMenu>
 #include <QVBoxLayout>
+#include <QVersionNumber>
 
 #include <QFluent/CardWidget.h>
 #include <QFluent/CheckBox.h>
@@ -151,6 +153,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -162,6 +166,9 @@
 #include <set>
 #include <thread>
 #include <vector>
+
+#include <fcntl.h>
+#include <io.h>
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -923,6 +930,7 @@ const QColor KAppBackground("#F5F5F9");
 const QColor KSurfaceSoft("#EFEFF5");
 const QColor KTextPrimary("#17171B");
 const QColor KTextMuted("#626269");
+const QString KApplicationVersion = "3.6.2";
 auto &ApplicationState = AegisNT::ApplicationContext();
 auto &Configuration = ApplicationState.Configuration;
 auto &ChineseTranslations = ApplicationState.ChineseTranslations;
@@ -940,6 +948,8 @@ QString MonitorTimestamp(const LARGE_INTEGER &Timestamp);
 QString ConfigurationPath() {
   return QCoreApplication::applicationDirPath() + "/Data/Config.json";
 }
+
+void AppendConsoleOutput(const QString &Text);
 
 #include "Source/Core/Configuration.inc"
 
@@ -1930,7 +1940,14 @@ void ReleaseMenuAfterClose(RoundMenu *Menu) {
 }
 
 void ShowNotice(QWidget *Parent, InfoBar::Type Type, const QString &Title,
-                const QString &Content) {
+                const QString &Content, bool WriteToConsole = true) {
+  if (WriteToConsole &&
+      (Type == InfoBar::Type::ERROR || Type == InfoBar::Type::WARNING)) {
+    QString Detail = Content.trimmed();
+    Detail.replace('\n', "\n    ");
+    const QString Prefix = Type == InfoBar::Type::ERROR ? "[!]" : "[WARN]";
+    AppendConsoleOutput(QString("%1 %2: %3\n").arg(Prefix, Title, Detail));
+  }
   QWidget *Target = Parent ? Parent->window() : QApplication::activeWindow();
   InfoBar::newInfoBar(Type, Title, Content, Qt::Horizontal, true, 3500,
                       InfoBar::Position::TOP_RIGHT, Target);
@@ -1942,13 +1959,13 @@ void ShowSuccessNotice(QWidget *Parent, const QString &Title,
 }
 
 void ShowErrorNotice(QWidget *Parent, const QString &Title,
-                     const QString &Content) {
-  ShowNotice(Parent, InfoBar::Type::ERROR, Title, Content);
+                     const QString &Content, bool WriteToConsole = true) {
+  ShowNotice(Parent, InfoBar::Type::ERROR, Title, Content, WriteToConsole);
 }
 
 void ShowWarningNotice(QWidget *Parent, const QString &Title,
-                       const QString &Content) {
-  ShowNotice(Parent, InfoBar::Type::WARNING, Title, Content);
+                       const QString &Content, bool WriteToConsole = true) {
+  ShowNotice(Parent, InfoBar::Type::WARNING, Title, Content, WriteToConsole);
 }
 
 QString DescribeWin32ErrorMessage(DWORD ErrorCode) {
@@ -2265,10 +2282,8 @@ public:
                   12, KTextMuted);
     HeroDescription->setWordWrap(true);
     OverviewText->addWidget(HeroDescription);
-    const QString ApplicationVersion =
-        ConfigurationValue("Application", "Version", "1.0.0").toString();
     OverviewText->addWidget(MakeLabel(
-        QString("System management toolkit  |  v%1").arg(ApplicationVersion),
+        QString("System management toolkit  |  v%1").arg(KApplicationVersion),
         12, KTextMuted));
     OverviewText->addStretch();
     OverviewLayout->addLayout(OverviewText, 1);
@@ -2450,7 +2465,7 @@ public:
         new InformationItem(
             Fluent::IconType::TILES, "Runtime",
             "Application framework and release version.",
-            QString("Qt %1  |  v%2").arg(QT_VERSION_STR, ApplicationVersion)),
+            QString("Qt %1  |  v%2").arg(QT_VERSION_STR, KApplicationVersion)),
         new InformationItem(
             Fluent::IconType::COMMAND_PROMPT, "Process",
             "Current process ID and executable name.",
@@ -3223,11 +3238,23 @@ int main(int Argc, char *Argv[]) {
   SetInjectLogSink([](const char *Data, size_t Len) {
     AppendConsoleOutput(QString::fromUtf8(Data, static_cast<int>(Len)));
   });
+  StartStandardIoCapture();
+  InstallQtMessageCapture();
   LoadConfiguration();
   Account.IsLoggedIn = ConfigurationValue("Account", "IsLoggedIn", false).toBool();
-  Account.UserName = ConfigurationValue("Account", "UserName", "").toString();
-  Account.UserType = ConfigurationValue("Account", "UserType", 0).toInt();
-  Account.Token = ConfigurationValue("Account", "Token", "").toString();
+  Account.UserName = ConfigurationValue("Account", "UserName", "").toString().trimmed();
+  Account.Title = ConfigurationValue("Account", "Title", "").toString();
+  Account.UserType = ConfigurationValue("Account", "UserType", -1).toInt();
+  Account.Token = ConfigurationValue("Account", "Token", "").toString().trimmed();
+  if (Account.IsLoggedIn &&
+      (Account.UserName.isEmpty() || Account.Token.isEmpty() ||
+       (Account.UserType != 0 && Account.UserType != 1))) {
+    Account = {};
+    SetConfigurationValue("Account", "IsLoggedIn", false);
+    SetConfigurationValue("Account", "UserType", 0);
+    SetConfigurationValue("Account", "Token", "");
+    SetConfigurationValue("Account", "Title", "");
+  }
   LoadLanguageResources();
   ActiveLanguage =
       ConfigurationValue("Application", "Language", "en_US").toString() ==
@@ -3278,6 +3305,7 @@ EnsureThemeConfiguration();
     for (ModuleEntry &Module : DllModules)
       DestroyModuleInstance(Module);
   }
+  StopStandardIoCapture();
   if (SingleInstanceMutex)
     CloseHandle(SingleInstanceMutex);
   return Result;

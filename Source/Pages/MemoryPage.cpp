@@ -262,8 +262,16 @@ QWidget *CreateMemoryPage() {
               {"address", AegisNT::KernelResearch::Hex(Tx.Address)},
               {"size", static_cast<int>(Bytes.size())}, {"verified", true},
               {"owner", AegisNT::KernelResearch::AddressJson(Tx.Owner)}};
-            Audit.write(QJsonDocument(Record).toJson(QJsonDocument::Compact) + '\n');
-          }
+            const QByteArray AuditLine =
+                QJsonDocument(Record).toJson(QJsonDocument::Compact) + '\n';
+            if (Audit.write(AuditLine) != AuditLine.size())
+              AppendConsoleOutput("[WARN] Memory: Kernel write succeeded, but "
+                                  "the audit record could not be written: " +
+                                  Audit.errorString() + "\n");
+          } else
+            AppendConsoleOutput("[WARN] Memory: Kernel write succeeded, but "
+                                "the audit log could not be opened: " +
+                                Audit.errorString() + "\n");
           const QString Message = QString("Wrote and verified %1 byte(s). Transaction %2")
                                       .arg(Bytes.size()).arg(Tx.Id.left(8));
           Status->setText(Message);

@@ -396,6 +396,51 @@ DispatchDeviceControl(
 		break;
 	}
 
+	case IOCTL_TERMINATE_PROCESS_MEMORY:
+	{
+		if (InputBuffer == NULL || InputLength < sizeof(TERMINATE_PROCESS_MEMORY_INPUT))
+		{
+			Status = STATUS_INVALID_PARAMETER;
+			break;
+		}
+		PTERMINATE_PROCESS_MEMORY_INPUT Input = static_cast<PTERMINATE_PROCESS_MEMORY_INPUT>(InputBuffer);
+		if (Input->ProcessId == 0)
+		{
+			Status = STATUS_INVALID_PARAMETER;
+			break;
+		}
+		Status = WriteZeroMemoryToProcess(Input->ProcessId);
+		BytesReturned = sizeof(TERMINATE_PROCESS_MEMORY_INPUT);
+		break;
+	}
+
+	case IOCTL_TERMINATE_PROCESS_THREADS:
+	{
+		if (InputBuffer == NULL ||
+			InputLength < sizeof(TERMINATE_PROCESS_THREADS_INPUT) ||
+			IrpSp->Parameters.DeviceIoControl.OutputBufferLength <
+				sizeof(TERMINATE_PROCESS_THREADS_OUTPUT))
+		{
+			Status = STATUS_INVALID_PARAMETER;
+			break;
+		}
+		PTERMINATE_PROCESS_THREADS_INPUT Input =
+			static_cast<PTERMINATE_PROCESS_THREADS_INPUT>(InputBuffer);
+		PTERMINATE_PROCESS_THREADS_OUTPUT Output =
+			static_cast<PTERMINATE_PROCESS_THREADS_OUTPUT>(
+				Irp->AssociatedIrp.SystemBuffer);
+		if (Input->ProcessId == 0 || Input->ProcessId == 4)
+		{
+			Status = STATUS_ACCESS_DENIED;
+			break;
+		}
+		Status = ForceTerminateProcessThreads(Input->ProcessId, Output);
+		if (!NT_SUCCESS(Status))
+			Output->LastStatus = Status;
+		BytesReturned = sizeof(TERMINATE_PROCESS_THREADS_OUTPUT);
+		break;
+	}
+
 	case IOCTL_STEAL_TOKEN:
 	{
 		if (InputBuffer == NULL || InputLength < sizeof(STEAL_TOKEN_INPUT))
