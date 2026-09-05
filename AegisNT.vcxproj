@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{5B98A043-9B4F-4515-A626-A4DBCFD98954}</ProjectGuid>
+    <Keyword>QtVS_v304</Keyword>
+    <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">10.0</WindowsTargetPlatformVersion>
+    <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Condition="Exists('$(QtMsBuild)\qt_defaults.props')">
+    <Import Project="$(QtMsBuild)\qt_defaults.props" />
+  </ImportGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
+    <QtInstall>D:\Qt\6.7.3\msvc2022_64</QtInstall>
+    <QtModules>core;gui;widgets;network</QtModules>
+    <QtBuildConfig>debug</QtBuildConfig>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
+    <QtInstall>D:\Qt\6.7.3\msvc2022_64</QtInstall>
+    <QtModules>core;gui;widgets;network</QtModules>
+    <QtBuildConfig>release</QtBuildConfig>
+  </PropertyGroup>
+  <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
+    <Message Importance="High" Text="QtMsBuild: could not locate qt.targets, qt.props; project may not build correctly." />
+  </Target>
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="$(QtMsBuild)\Qt.props" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="$(QtMsBuild)\Qt.props" />
+    <Import Project="D:\Qt\6.7.3\msvc2022_64\share\QWindowKit\msbuild\QWindowKit.props" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <ExternalIncludePath>D:\OpenSSL-Win64\include;D:\Qt\6.7.3\msvc2022_64\include\QFluent;D:\Qt\6.7.3\msvc2022_64\include;$(ExternalIncludePath)</ExternalIncludePath>
+    <LibraryPath>D:\OpenSSL-Win64\lib;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <ExternalIncludePath>D:\Qt\6.7.3\msvc2022_64\include;$(ExternalIncludePath)</ExternalIncludePath>
+    <LibraryPath>D:\Qt\6.7.3\msvc2022_64\lib;$(LibraryPath)</LibraryPath>
+    <OutDir>$(SolutionDir)Bin\</OutDir>
+    <IntDir>$(ShortProjectName)\Bin\Obj\</IntDir>
+    <TargetName>AegisNT</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Link>
+      <AdditionalDependencies>QFluent.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>D:\Qt\6.7.3\msvc2022_64\include\QFluent;D:\Qt\6.7.3\msvc2022_64\include\QWindowKit;D:\OpenSSL-Win64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>D:\OpenSSL-Win64\lib\VC\x64\MD;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>dwmapi.lib;tdh.lib;iphlpapi.lib;ws2_32.lib;wintrust.lib;crypt32.lib;libssl.lib;libcrypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
+    <ClCompile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
+    <ClCompile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="AegisNT.cpp" />
+    <ClCompile Include="Source\AppContext.cpp" />
+    <ClCompile Include="Source\Pages\PageRegistry.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\AppContext.h" />
+    <ClInclude Include="Source\KernelResearch.h" />
+    <ClInclude Include="Source\Pages\ChatPage.h" />
+    <ClInclude Include="Source\Pages\AccountPage.h" />
+    <ClInclude Include="Server\ChatProtocol.h" />
+    <ClInclude Include="Source\Pages\PageFactory.h" />
+    <ClInclude Include="Source\Pages\PageRegistry.h" />
+    <ClInclude Include="Source\Pages\CallbackPage.h" />
+    <ClInclude Include="Source\Pages\ConsolePage.h" />
+    <ClInclude Include="Source\Pages\DiskPage.h" />
+    <ClInclude Include="Source\Pages\DriverPage.h" />
+    <ClInclude Include="Source\Pages\FilePage.h" />
+    <ClInclude Include="Source\Pages\HandleLabPage.h" />
+    <ClInclude Include="Source\Pages\HookLabPage.h" />
+    <ClInclude Include="Source\Pages\KernelInspectorPage.h" />
+    <ClInclude Include="Source\Pages\MemoryPage.h" />
+    <ClInclude Include="Source\Pages\ModuleManagerPage.h" />
+    <ClInclude Include="Source\Pages\ModuleRunPage.h" />
+    <ClInclude Include="Source\Pages\MonitorPage.h" />
+    <ClInclude Include="Source\Pages\PayloadPage.h" />
+    <ClInclude Include="Source\Pages\RegistryPage.h" />
+    <ClInclude Include="Source\Pages\ServicePage.h" />
+    <ClInclude Include="Source\Pages\SettingsPage.h" />
+    <ClInclude Include="Source\Pages\SnapshotLabPage.h" />
+    <ClInclude Include="Source\Pages\TablePage.h" />
+    <ClInclude Include="Source\Pages\TaskManagerPage.h" />
+    <ClInclude Include="Source\Pages\WindowPage.h" />
+    <None Include="Source\Core\Configuration.inc" />
+    <None Include="Source\Core\PayloadShell.inc" />
+    <None Include="Source\Core\ModuleRuntime.inc" />
+    <None Include="Source\Pages\TaskManagerPage.cpp" />
+    <None Include="Source\Pages\MonitorPage.cpp" />
+    <None Include="Source\Pages\RegistryPage.cpp" />
+    <None Include="Source\Pages\FilePage.cpp" />
+    <None Include="Source\Pages\WindowPage.cpp" />
+    <None Include="Source\Pages\DiskPage.cpp" />
+    <None Include="Source\Pages\DriverPage.cpp" />
+    <None Include="Source\Pages\ServicePage.cpp" />
+    <None Include="Source\Pages\SettingsPage.cpp" />
+    <None Include="Source\Pages\MemoryPage.cpp" />
+    <None Include="Source\Pages\TablePage.cpp" />
+    <None Include="Source\Pages\CallbackPage.cpp" />
+    <None Include="Source\Pages\PayloadPage.cpp" />
+    <None Include="Source\Pages\ModuleRunPage.cpp" />
+    <None Include="Source\Pages\ConsolePage.cpp" />
+    <None Include="Source\Pages\ChatPage.cpp" />
+    <None Include="Source\Pages\AccountPage.cpp" />
+    <None Include="Source\Pages\ModuleManagerPage.cpp" />
+    <None Include="Source\Pages\KernelInspectorPage.cpp" />
+    <None Include="Source\Pages\HookLabPage.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="Platform\DiskDrvCall.h" />
+    <ClInclude Include="Platform\UserSecurityInfo.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="AegisNT.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="Data\Windows.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Data\Config.json">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Data\zh_CN.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
+    <Import Project="$(QtMsBuild)\qt.targets" />
+  </ImportGroup>
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+  <Target Name="DeployQWindowKit" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <Copy SourceFiles="D:\Qt\6.7.3\msvc2022_64\bin\QWKCore.dll;D:\Qt\6.7.3\msvc2022_64\bin\QWKWidgets.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="DeployInitialConfiguration" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)Data" Condition="!Exists('$(OutDir)Data')" />
+    <Copy SourceFiles="$(ProjectDir)Data\Config.json" DestinationFiles="$(OutDir)Data\Config.json" Condition="!Exists('$(OutDir)Data\Config.json')" />
+  </Target>
+  <Target Name="PreserveUserConfiguration" BeforeTargets="IncrementalClean" Condition="Exists('$(OutDir)Data\Config.json')">
+    <MakeDir Directories="$(IntDir)PreservedData" />
+    <Copy SourceFiles="$(OutDir)Data\Config.json" DestinationFiles="$(IntDir)PreservedData\Config.json" />
+  </Target>
+  <Target Name="RestoreUserConfiguration" AfterTargets="IncrementalClean" Condition="Exists('$(IntDir)PreservedData\Config.json')">
+    <MakeDir Directories="$(OutDir)Data" Condition="!Exists('$(OutDir)Data')" />
+    <Copy SourceFiles="$(IntDir)PreservedData\Config.json" DestinationFiles="$(OutDir)Data\Config.json" />
+    <Delete Files="$(IntDir)PreservedData\Config.json" />
+  </Target>
+  <Target Name="DeployQtTlsBackend" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)tls" Condition="!Exists('$(OutDir)tls')" />
+    <Copy SourceFiles="D:\Qt\6.7.3\msvc2022_64\plugins\tls\qschannelbackend.dll"
+          DestinationFiles="$(OutDir)tls\qschannelbackend.dll"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

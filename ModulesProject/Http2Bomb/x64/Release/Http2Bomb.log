@@ -1,0 +1,6 @@
+﻿  Http2Bomb.cpp
+    正在创建库 D:\C++\Tools\WRALClient\Bin\Release\Modules\Http2Bomb.lib 和对象 D:\C++\Tools\WRALClient\Bin\Release\Modules\Http2Bomb.exp
+  正在生成代码
+  Not all modules are compiled with -Gy (function comdat), build without incremental LTCG.
+  已完成代码的生成
+  Http2Bomb.vcxproj -> D:\C++\Tools\WRALClient\Bin\Release\Modules\Http2Bomb.dll

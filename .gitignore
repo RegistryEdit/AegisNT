@@ -1,0 +1,13 @@
+
+/.vs/
+/Bin/
+/x64/
+/AegisNT/
+/Drivers/
+*.ps1
+/.agents/
+.idea/modules.xml
+.idea/vcs.xml
+.idea/workspace.xml
+.idea/AegisNT.iml
+AGENTS.md

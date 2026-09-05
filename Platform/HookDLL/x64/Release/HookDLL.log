@@ -1,0 +1,8 @@
+﻿  The vcpkg manifest was disabled, but we found a manifest file in D:\C++\Tools\Windows Tool\. You may want to enable vcpkg manifests in your properties page or pass /p:VcpkgEnableManifest=true to the msbuild invocation.
+  HookDLL.cpp
+  正在生成代码
+  Previous IPDB not found, fall back to full compilation.
+  All 230 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  已完成代码的生成
+  HookDLL.vcxproj -> D:\C++\Tools\Windows Tool\Bin\ExtraDLL\MonitorHook.dll
+  D:\C++\Tools\Windows Tool\Bin\ExtraDLL\MonitorHook.dll: message: 正在部署依赖项
