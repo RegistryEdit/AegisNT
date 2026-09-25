@@ -1,0 +1,2 @@
+﻿
+C:\Program Files (x86)\Windows Kits\10\build\10.0.28000.0\WindowsDriver.common.targets(185,26): error MSB4086: 灏濊瘯鍦ㄦ潯浠垛€?$(WindowsTargetPlatformVersion)' > '$(TargetPlatformVersion_CO)' and '$(DriverCFlagAddOn)' != ''鈥濅腑瀵硅绠楃粨鏋滀负鈥?0.0.28000.0鈥濊€屼笉鏄暟瀛楃殑鈥?(WindowsTargetPlatformVersion)鈥濊繘琛屾暟鍊兼瘮杈冦€?[D:\C++\Tools\AegisNT\Drivers\Ring0Core\Ring0Core.vcxproj]

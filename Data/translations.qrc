@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/translations">
+    <file alias="en_US.json">en_US.json</file>
+    <file alias="zh_CN.json">zh_CN.json</file>
+  </qresource>
+</RCC>
