@@ -65,6 +65,9 @@ public:
     Toolbar->addStretch();
     Toolbar->addWidget(RefreshIndicator);
     Toolbar->addWidget(RefreshButton);
+    KernelModeCheck = new CheckBox("KernelMode");
+    KernelModeCheck->setChecked(true);
+    Toolbar->addWidget(KernelModeCheck);
     WinLayout->addLayout(Toolbar);
     WindowTable = MakeTable({"HWND", "Title", "Class", "Process", "PID",
                              "Style", "State", "Rect", "Dpi"});
@@ -310,18 +313,29 @@ private:
     const bool IsProtected =
         IsTrackedProtectedWindow((ULONG64)(ULONG_PTR)Handle);
     auto *Menu = new RoundMenu(QString(), this);
-    const auto AddAction = [this, Menu, Handle, IsProtected](
+    const auto AddAction = [this, Menu, Handle, TargetPid, IsProtected](
                                const QString &Text,
-                               const std::function<bool(HWND)> &Action) {
+                               const std::function<bool(HWND)> &Action,
+                               const std::function<BOOL()> &KernelAction = {}) {
       auto *Item = new QAction(Text, Menu);
       Menu->addAction(Item);
-      ConnectMenuAction(Item, this, [this, Handle, Text, Action] {
+      ConnectMenuAction(Item, this,
+                        [this, Handle, TargetPid, Text, Action, KernelAction] {
         if (IsTrackedProtectedWindow((ULONG64)(ULONG_PTR)Handle)) {
           ShowWarningNotice(this, "Window",
                             "This window is protected. Unprotect it first.");
           return;
         }
-        if (Action(Handle))
+        BOOL Result = FALSE;
+        if (KernelModeCheck->isChecked() && KernelAction) {
+          if (G_DeviceHandle == INVALID_HANDLE_VALUE)
+            OpenDeviceSilent();
+          if (G_DeviceHandle != INVALID_HANDLE_VALUE)
+            Result = KernelAction();
+        } else {
+          Result = Action(Handle) ? TRUE : FALSE;
+        }
+        if (Result)
           ShowSuccessNotice(this, "Window", Text + " completed.");
         else
           ShowErrorNotice(this, "Window", Text + " failed.");
@@ -333,60 +347,87 @@ private:
     AddAction("Show / Activate", [](HWND H) {
       ShowWindow(H, SW_SHOW);
       return SetForegroundWindow(H) != FALSE;
-    });
+    }, [TargetPid, Handle] { return WindowShow(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     if (!IsOwnWindow)
       AddAction("Hide", [](HWND H) {
         ShowWindow(H, SW_HIDE);
         return IsWindow(H) != FALSE;
-      });
+      }, [TargetPid, Handle] { return WindowHide(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     AddAction("Minimize", [](HWND H) {
       ShowWindow(H, SW_MINIMIZE);
       return IsWindow(H) != FALSE;
-    });
+    }, [TargetPid, Handle] { return WindowMinimize(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     AddAction("Maximize", [](HWND H) {
       ShowWindow(H, SW_MAXIMIZE);
       return IsWindow(H) != FALSE;
-    });
+    }, [TargetPid, Handle] { return WindowMaximize(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     AddAction("Restore", [](HWND H) {
       ShowWindow(H, SW_RESTORE);
       SetForegroundWindow(H);
       return IsWindow(H) != FALSE;
-    });
+    }, [TargetPid, Handle] { return WindowRestore(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     Menu->addSeparator();
     AddAction("Enable", [](HWND H) {
       return EnableWindow(H, TRUE) != FALSE || GetLastError() == ERROR_SUCCESS;
-    });
+    }, [TargetPid, Handle] { return WindowEnable(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     if (!IsOwnWindow)
       AddAction("Disable", [](HWND H) {
         return EnableWindow(H, FALSE) != FALSE ||
                GetLastError() == ERROR_SUCCESS;
-      });
+      }, [TargetPid, Handle] { return WindowDisable(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     AddAction("Topmost", [](HWND H) {
       return SetWindowPos(H, HWND_TOPMOST, 0, 0, 0, 0,
                           SWP_NOMOVE | SWP_NOSIZE) != FALSE;
-    });
+    }, [TargetPid, Handle] { return WindowSetTopmost(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     AddAction("Remove topmost", [](HWND H) {
       return SetWindowPos(H, HWND_NOTOPMOST, 0, 0, 0, 0,
                           SWP_NOMOVE | SWP_NOSIZE) != FALSE;
-    });
+    }, [TargetPid, Handle] { return WindowRemoveTopmost(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
+    AddAction(
+        "Set Title...",
+        [this](HWND H) {
+          bool Ok = false;
+          const QString NewTitle = QInputDialog::getText(
+              WindowTable, "Set Window Title", "New title:",
+              QLineEdit::Normal, QString(), &Ok);
+          if (!Ok || NewTitle.isEmpty())
+            return true;
+          const std::wstring WideTitle(
+              reinterpret_cast<const wchar_t *>(NewTitle.utf16()));
+          return SetWindowTextW(H, WideTitle.c_str()) != FALSE;
+        },
+        [this, TargetPid, Handle] {
+          bool Ok = false;
+          const QString NewTitle = QInputDialog::getText(
+              WindowTable, "Set Window Title", "New title:",
+              QLineEdit::Normal, QString(), &Ok);
+          if (!Ok || NewTitle.isEmpty())
+            return TRUE;
+          const std::wstring WideTitle(
+              reinterpret_cast<const wchar_t *>(NewTitle.utf16()));
+          return WindowSetTitle(TargetPid, (ULONG64)(ULONG_PTR)Handle,
+                                WideTitle.c_str());
+        });
     AddAction("Ping", [this](HWND H) {
       DWORD_PTR Result = 0;
       return SendMessageTimeoutW(H, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 1000,
                                  &Result) != 0;
+    }, [TargetPid, Handle] {
+      return WindowPing(TargetPid, (ULONG64)(ULONG_PTR)Handle);
     });
     Menu->addSeparator();
     if (!IsOwnWindow) {
       AddAction("Post WM_CLOSE", [](HWND H) {
         return PostMessageW(H, WM_CLOSE, 0, 0) != FALSE;
-      });
+      }, [TargetPid, Handle] { return WindowKill(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
       AddAction("Send SC_CLOSE", [](HWND H) {
         DWORD_PTR Result = 0;
         return SendMessageTimeoutW(H, WM_SYSCOMMAND, SC_CLOSE, 0,
                                    SMTO_ABORTIFHUNG, 1000, &Result) != 0;
-      });
+      }, [TargetPid, Handle] { return WindowKill(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     }
 
-    if (!IsOwnWindow && G_DeviceHandle != INVALID_HANDLE_VALUE) {
+    if (!IsOwnWindow && KernelModeCheck->isChecked()) {
       Menu->addSeparator();
       auto *KernelMenu = new RoundMenu("Kernel Operations", Menu);
 
@@ -396,12 +437,13 @@ private:
                                  const std::function<BOOL(HWND)> &UserOp) {
         auto *Item = new QAction(Text, KernelMenu);
         KernelMenu->addAction(Item);
-        ConnectMenuAction(Item, this, [this, Text, Handle, KernelOp, UserOp] {
+        ConnectMenuAction(Item, this, [this, Text, KernelOp, UserOp] {
+          Q_UNUSED(UserOp);
           BOOL Result = FALSE;
+          if (G_DeviceHandle == INVALID_HANDLE_VALUE)
+            OpenDeviceSilent();
           if (G_DeviceHandle != INVALID_HANDLE_VALUE)
             Result = KernelOp();
-          else if (UserOp)
-            Result = UserOp(Handle);
           if (Result)
             ShowSuccessNotice(this, "Window", Text + " completed.");
           else
@@ -469,32 +511,6 @@ private:
                                 SWP_NOMOVE | SWP_NOSIZE);
           });
 
-      AddKernelAction(
-          "Set Title...",
-          [TargetPid, Handle, this]() -> BOOL {
-            bool Ok = false;
-            QString NewTitle = QInputDialog::getText(
-                WindowTable, "Set Window Title",
-                "New title:", QLineEdit::Normal, QString(), &Ok);
-            if (!Ok || NewTitle.isEmpty())
-              return TRUE;
-            std::wstring WideTitle(
-                reinterpret_cast<const wchar_t *>(NewTitle.utf16()));
-            return WindowSetTitle(TargetPid, (ULONG64)(ULONG_PTR)Handle,
-                                  WideTitle.c_str());
-          },
-          [this](HWND H) -> BOOL {
-            bool Ok = false;
-            QString NewTitle = QInputDialog::getText(
-                WindowTable, "Set Window Title (User)",
-                "New title:", QLineEdit::Normal, QString(), &Ok);
-            if (!Ok || NewTitle.isEmpty())
-              return TRUE;
-            std::wstring WideTitle(
-                reinterpret_cast<const wchar_t *>(NewTitle.utf16()));
-            return SetWindowTextW(H, WideTitle.c_str());
-          });
-
       KernelMenu->addSeparator();
       AddKernelAction(
           "Kill (Direct)",
@@ -513,44 +529,6 @@ private:
             return ShowWindow(H, SW_HIDE) != FALSE || TRUE;
           });
       Menu->addMenu(KernelMenu);
-    } else if (!IsOwnWindow) {
-      Menu->addSeparator();
-      const auto AddActionWithCheck =
-          [this, Menu](const QString &Text,
-                       const std::function<bool()> &Action) {
-            auto *Item = new QAction(Text, Menu);
-            Menu->addAction(Item);
-            ConnectMenuAction(Item, this, [this, Text, Action] {
-              const QModelIndex Current = WindowTable->currentIndex();
-              if (Current.isValid()) {
-                const auto Hwnd = WindowTable->item(Current.row(), 0)
-                                      ->data(Qt::UserRole)
-                                      .toULongLong();
-                if (IsTrackedProtectedWindow(Hwnd)) {
-                  ShowWarningNotice(
-                      this, "Window",
-                      "This window is protected. Unprotect it first.");
-                  return;
-                }
-              }
-              if (Action())
-                ShowSuccessNotice(this, "Window", Text + " completed.");
-              else
-                ShowErrorNotice(this, "Window", Text + " failed.");
-              QTimer::singleShot(150, this, [this] { Refresh(); });
-            });
-          };
-      AddActionWithCheck("Change Title...", [this, Handle]() -> bool {
-        bool Ok = false;
-        QString NewTitle = QInputDialog::getText(
-            WindowTable, "Set Window Title", "New title:", QLineEdit::Normal,
-            QString(), &Ok);
-        if (!Ok || NewTitle.isEmpty())
-          return true;
-        std::wstring WideTitle(
-            reinterpret_cast<const wchar_t *>(NewTitle.utf16()));
-        return SetWindowTextW(Handle, WideTitle.c_str()) != FALSE;
-      });
     }
 
     if (!IsOwnWindow && TargetPid != 0) {
@@ -569,6 +547,7 @@ private:
   }
 
   SearchLineEdit *SearchEdit = nullptr;
+  CheckBox *KernelModeCheck = nullptr;
   QTimer *SearchDebounceTimer = nullptr;
   IndeterminateProgressRing *RefreshIndicator = nullptr;
   PushButton *RefreshButton = nullptr;

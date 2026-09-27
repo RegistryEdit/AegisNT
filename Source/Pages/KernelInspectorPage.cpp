@@ -2,6 +2,8 @@
 // 内核检视页：以多标签页查询内核内存/对象/过滤器/网络/安全
 // 状态（含驱动调试状态），支持模糊过滤与详情查看。
 // ============================================================
+#include "KernelInspectorRefresh.h"
+
 QWidget *CreateKernelInspectorPage() {
   struct InspectorTab {
     DWORD Ioctl;
@@ -19,8 +21,10 @@ QWidget *CreateKernelInspectorPage() {
     PushButton *RestoreDse = nullptr;
     PushButton *DisablePatchGuard = nullptr;
     PushButton *TriggerPatchGuard = nullptr;
+    PushButton *EnablePpn = nullptr;
   };
   struct KernelControlState {
+    bool Queried = false;
     bool DebugOk = false;
     DWORD DebugError = ERROR_SUCCESS;
     DEBUG_STATE_OUTPUT Debug{};
@@ -128,6 +132,7 @@ QWidget *CreateKernelInspectorPage() {
   LoadStatus->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
   auto *Refresh = new PushButton("Refresh", Fluent::IconType::SYNC);
   ConfigureActionButton(Refresh, 110, KStandardButtonHeight);
+  auto *RefreshController = new KernelInspectorRefresh(Page, Refresh);
   ToolbarLayout->addWidget(Status, 0, Qt::AlignVCenter);
   ToolbarLayout->addWidget(Loading, 0, Qt::AlignVCenter);
   ToolbarLayout->addWidget(LoadStatus, 0, Qt::AlignVCenter);
@@ -197,6 +202,7 @@ QWidget *CreateKernelInspectorPage() {
     KernelControlsUi->RestoreDse = new PushButton("RestoreDse");
     KernelControlsUi->DisablePatchGuard = new PushButton("DisablePatchGuard");
     KernelControlsUi->TriggerPatchGuard = new PushButton("TriggerPatchGuard");
+    KernelControlsUi->EnablePpn = new PushButton("EnablePPN");
 
     auto *ActionRow = new QHBoxLayout;
     ActionRow->setContentsMargins(0, 0, 0, 0);
@@ -215,7 +221,8 @@ QWidget *CreateKernelInspectorPage() {
         CreateActionGroup("PatchGuard",
                           "High-risk controls. Use only when necessary.",
                           {KernelControlsUi->DisablePatchGuard,
-                           KernelControlsUi->TriggerPatchGuard}),
+                           KernelControlsUi->TriggerPatchGuard,
+                           KernelControlsUi->EnablePpn}),
         1);
     ControlLayout->addLayout(ActionRow);
     TabLayout->addWidget(ControlCard, 1);
@@ -345,9 +352,8 @@ QWidget *CreateKernelInspectorPage() {
                    &ComboBox::setCurrentIndex);
   TabSelector->setCurrentIndex(0);
   Pages->setCurrentIndex(0);
-  const auto TriggerRefresh = [Refresh] {
-    QTimer::singleShot(0, Refresh, &QPushButton::click);
-  };
+  QObject::connect(Pages, &QStackedWidget::currentChanged, RefreshController,
+                   [RefreshController] { RefreshController->RequestRefresh(); });
   const auto ResetDataTable = [](QTableWidget *Table) {
     Table->setSortingEnabled(false);
     Table->clearContents();
@@ -371,6 +377,14 @@ QWidget *CreateKernelInspectorPage() {
     KernelControlsUi->Table->clearContents();
     KernelControlsUi->Table->setRowCount(0);
     KernelControlsUi->Summary->setText("Kernel control overview");
+
+    if (!KernelControlCache->Queried) {
+      KernelControlsUi->Table->insertRow(0);
+      SetRow(0, "Kernel state", "Loading...", "Reading kernel control state.");
+      KernelControlsUi->Detail->setText("Loading kernel state...");
+      KernelControlsUi->Table->setUpdatesEnabled(true);
+      return;
+    }
 
     if (KernelControlCache->DebugOk) {
       {
@@ -504,7 +518,7 @@ QWidget *CreateKernelInspectorPage() {
           Parts << "ntbase";
         return QString("stage %1 [%2]")
             .arg(Hex(Stage))
-            .arg(Parts.isEmpty() ? QString("?") : Parts.join('+'));
+            .arg(Parts.isEmpty() ? QString("unknown") : Parts.join('+'));
       };
       const int Row4 = KernelControlsUi->Table->rowCount();
       KernelControlsUi->Table->insertRow(Row4);
@@ -579,6 +593,57 @@ QWidget *CreateKernelInspectorPage() {
                            KernelControlCache->PatchGuard.KiFreezeLockResolved !=
                                FALSE))
                  : QString());
+
+      /* ---- 辅路径审计：实际清零用的偏移与来源 ----
+         清零偏移若走了启发式（OffsetSource == Heuristic），可能与上面的
+         KprcbContextOffset（确定性解析）不一致——这正是历史上误清零、破坏
+         内核结构的根因。两个值并排显示，一眼看出是否偏航。 */
+      const auto DescribeOffsetSource = [](ULONG Source) {
+        switch (Source) {
+        case PG_OFFSET_SOURCE_DETERMINISTIC:
+          return QString("deterministic");
+        case PG_OFFSET_SOURCE_HEURISTIC:
+          return QString("heuristic (!)");
+        default:
+          return QString("none");
+        }
+      };
+      const int Row7 = KernelControlsUi->Table->rowCount();
+      KernelControlsUi->Table->insertRow(Row7);
+      SetRow(Row7, "PatchGuard.ClearOffset",
+             KernelControlCache->PatchGuardOk
+                 ? Hex(KernelControlCache->PatchGuard.ClearOffset)
+                 : "-",
+             KernelControlCache->PatchGuardOk
+                 ? QString("source %1; ctx offset %2")
+                       .arg(DescribeOffsetSource(
+                           KernelControlCache->PatchGuard.OffsetSource))
+                       .arg(Hex(
+                           KernelControlCache->PatchGuard.KprcbContextOffset))
+                 : QString());
+
+      /* ---- PPN 路径（第三路径）：PG 代码页 NX 化 + #PF 拦截 ----
+         该路径把 PG 校验例程所在可执行页置 NX，并 Hook #PF，PG 取指到这些页
+         时抛 #PF。TargetCount 为已 NX 页数，NxFaults 为命中并处理次数。 */
+      const int Row8 = KernelControlsUi->Table->rowCount();
+      KernelControlsUi->Table->insertRow(Row8);
+      SetRow(Row8, "PatchGuard.PpnPageGuard",
+             KernelControlCache->PatchGuardOk
+                 ? (KernelControlCache->PatchGuard.PpnActive ? "Active" : "Off")
+                 : "-",
+             KernelControlCache->PatchGuardOk
+                 ? QString("pages %1, nx-faults %2, passthrough %3, "
+                           "status 0x%4 | p0 %5 p1 %6 p2 %7 p3 %8")
+                       .arg(KernelControlCache->PatchGuard.PpnTargetCount)
+                       .arg(KernelControlCache->PatchGuard.PpnNxFaults)
+                       .arg(KernelControlCache->PatchGuard.PpnPassthrough)
+                       .arg(KernelControlCache->PatchGuard.PpnStatus, 8, 16,
+                            QLatin1Char('0'))
+                       .arg(Hex(KernelControlCache->PatchGuard.PpnTargetPages[0]))
+                       .arg(Hex(KernelControlCache->PatchGuard.PpnTargetPages[1]))
+                       .arg(Hex(KernelControlCache->PatchGuard.PpnTargetPages[2]))
+                       .arg(Hex(KernelControlCache->PatchGuard.PpnTargetPages[3]))
+                 : QString());
     }
 
     const QString DebugStateText =
@@ -586,10 +651,10 @@ QWidget *CreateKernelInspectorPage() {
             ? "Unavailable"
             : (KernelControlCache->Debug.HookInstalled ? "Blocked"
                                                        : "Pass-through");
-    // IsDebuggerEnabled 摘要：查询成功显示 0/1，失败显示 ?
+    // 查询成功显示 0/1；失败原因保留在明细中，不用问号掩盖错误。
     const QString DbgEnabledText =
         !KernelControlCache->DebugOk || KernelControlCache->Debug.Status != 0
-            ? "?"
+            ? "Unavailable"
             : (KernelControlCache->Debug.IsDebuggerEnabled ? "1" : "0");
     const QString DseStateText =
         !KernelControlCache->DseOk
@@ -607,25 +672,49 @@ QWidget *CreateKernelInspectorPage() {
     const QString PgDpcText =
         KernelControlCache->PatchGuardOk
             ? QString::number(KernelControlCache->PatchGuard.DpcFound)
-            : QString("?");
+            : QString("Unavailable");
     /* 拦截摘要：区分"仅清零上下文"与"已建立 bugcheck 拦截"——
        后者才是 PG 触发时不再蓝屏的关键。 */
     const QString PgInterceptText =
         !KernelControlCache->PatchGuardOk
-            ? QString("?")
+            ? QString("Unavailable")
             : (KernelControlCache->PatchGuard.InterceptEnabled
                    ? QString("on (%1 suppressed)")
                          .arg(KernelControlCache->PatchGuard.SuppressedCount)
                    : QString("off"));
+    /* 清零来源摘要：避免误清零，把来源直接标在总览里。 */
+    const QString PgClearText =
+        !KernelControlCache->PatchGuardOk
+            ? QString("Unavailable")
+            : QString("%1 (%2)")
+                  .arg(Hex(KernelControlCache->PatchGuard.ClearOffset))
+                  .arg(KernelControlCache->PatchGuard.OffsetSource ==
+                               PG_OFFSET_SOURCE_DETERMINISTIC
+                           ? "det"
+                           : (KernelControlCache->PatchGuard.OffsetSource ==
+                                      PG_OFFSET_SOURCE_HEURISTIC
+                                  ? "heur!"
+                                  : "none"));
+    /* PPN 摘要：页数 + 命中次数。 */
+    const QString PgPpnText =
+        !KernelControlCache->PatchGuardOk
+            ? QString("Unavailable")
+            : (KernelControlCache->PatchGuard.PpnActive
+                   ? QString("on (%1 pg, %2 nx)")
+                         .arg(KernelControlCache->PatchGuard.PpnTargetCount)
+                         .arg(KernelControlCache->PatchGuard.PpnNxFaults)
+                   : QString("off"));
     KernelControlsUi->Detail->setText(
         QString("Debug %1 | IsDebuggerEnabled %2 | DSE %3 | PatchGuard %4 | "
-                "PG DPCs %5 | PG Intercept %6")
+                "PG DPCs %5 | PG Intercept %6 | Clear %7 | PPN %8")
             .arg(DebugStateText)
             .arg(DbgEnabledText)
             .arg(DseStateText)
             .arg(PgStateText)
             .arg(PgDpcText)
-            .arg(PgInterceptText));
+            .arg(PgInterceptText)
+            .arg(PgClearText)
+            .arg(PgPpnText));
     KernelControlsUi->Table->setUpdatesEnabled(true);
   };
   const auto ApplyFilter = [Search, State, KernelControlsUi, SyncTable,
@@ -697,7 +786,9 @@ QWidget *CreateKernelInspectorPage() {
       [Page, Refresh, Status, LoadStatus, Loading, State, KernelControlsUi,
        KernelControlCache, ApplyKernelControlView, ApplyFilter, SyncTable,
        SyncCount, SessTable, SessCount, SessLogoffBtn, SessDisconnectBtn,
-       SessMessageBtn, SessRunBtn] {
+       SessMessageBtn, SessRunBtn, RefreshController] {
+        if (!Refresh->isEnabled())
+          return;
         Refresh->setEnabled(false);
         KernelControlsUi->EnableDebug->setEnabled(false);
         KernelControlsUi->DisableDebug->setEnabled(false);
@@ -705,6 +796,7 @@ QWidget *CreateKernelInspectorPage() {
         KernelControlsUi->RestoreDse->setEnabled(false);
         KernelControlsUi->DisablePatchGuard->setEnabled(false);
         KernelControlsUi->TriggerPatchGuard->setEnabled(false);
+        KernelControlsUi->EnablePpn->setEnabled(false);
         SessLogoffBtn->setEnabled(false);
         SessDisconnectBtn->setEnabled(false);
         SessMessageBtn->setEnabled(false);
@@ -719,7 +811,7 @@ QWidget *CreateKernelInspectorPage() {
         std::thread([SafePage, Refresh, Status, LoadStatus, Loading, State,
                      KernelControlsUi, KernelControlCache,
                      ApplyKernelControlView, ApplyFilter, SyncTable, SyncCount,
-                     SessTable, SessCount] {
+                     SessTable, SessCount, RefreshController] {
           struct Result {
             INVENTORY_LIST_HEADER Header{};
             std::vector<INVENTORY_RECORD> Records;
@@ -732,6 +824,20 @@ QWidget *CreateKernelInspectorPage() {
           KernelState.DseError = G_LastAegisCoreError;
           KernelState.PatchGuardOk = QueryPatchGuard(&KernelState.PatchGuard);
           KernelState.PatchGuardError = G_LastAegisCoreError;
+          KernelState.Queried = true;
+
+          // 控制字段先显示，避免被后面的库存枚举和回退扫描拖住。
+          QMetaObject::invokeMethod(
+              qApp,
+              [SafePage, KernelControlCache, ApplyKernelControlView,
+               ApplyFilter, KernelState] {
+                if (!SafePage)
+                  return;
+                *KernelControlCache = KernelState;
+                ApplyKernelControlView();
+                ApplyFilter();
+              },
+              Qt::QueuedConnection);
 
           std::vector<Result> Results(State->size());
           for (size_t Index = 0; Index < State->size(); ++Index) {
@@ -805,7 +911,7 @@ QWidget *CreateKernelInspectorPage() {
           QMetaObject::invokeMethod(
               qApp,
               [SafePage, Refresh, Status, LoadStatus, Loading, State,
-               KernelControlsUi, KernelControlCache, ApplyKernelControlView,
+               KernelControlsUi, RefreshController,
                ApplyFilter, KernelState, Results = std::move(Results),
                SyncTable, SyncCount, SyncEntries = std::move(SyncEntries),
                SessTable, SessCount, SessEntries = std::move(SessEntries)]() mutable {
@@ -843,8 +949,6 @@ QWidget *CreateKernelInspectorPage() {
                              : QString("Level %1").arg(Confidence);
                 };
                 size_t TotalRecords = 0;
-                *KernelControlCache = KernelState;
-                ApplyKernelControlView();
                 for (size_t Index = 0; Index < State->size(); ++Index) {
                   QTableWidget *Table = (*State)[Index].Table;
                   Table->setSortingEnabled(false);
@@ -962,11 +1066,21 @@ QWidget *CreateKernelInspectorPage() {
                 KernelControlsUi->RestoreDse->setEnabled(true);
                 KernelControlsUi->DisablePatchGuard->setEnabled(true);
                 KernelControlsUi->TriggerPatchGuard->setEnabled(true);
+                KernelControlsUi->EnablePpn->setEnabled(true);
                 Refresh->setText("Refresh");
                 Status->setText(QString("%1 records").arg(TotalRecords));
+                const bool Incomplete = !KernelState.DebugOk ||
+                                        !KernelState.DseOk ||
+                                        !KernelState.PatchGuardOk;
+                const bool Retrying =
+                    RefreshController->RefreshCompleted(Incomplete);
                 LoadStatus->setText(
-                    "Kernel inventory is up to date. Search filters apply to "
-                    "the current results only.");
+                    Retrying
+                        ? "Some kernel fields are unavailable; retrying automatically..."
+                        : Incomplete
+                              ? "Some kernel fields are unavailable. See the reported errors."
+                              : "Kernel inventory is up to date. Search filters apply to "
+                                "the current results only.");
                 if (SessTable->rowCount() > 0 && SessTable->currentRow() < 0)
                   SessTable->selectRow(0);
               },
@@ -1251,6 +1365,7 @@ QWidget *CreateKernelInspectorPage() {
     KernelControlsUi->RestoreDse->setEnabled(Enabled);
     KernelControlsUi->DisablePatchGuard->setEnabled(Enabled);
     KernelControlsUi->TriggerPatchGuard->setEnabled(Enabled);
+    KernelControlsUi->EnablePpn->setEnabled(Enabled);
   };
   const auto RunKernelControlAction = [Page, Refresh, Status, LoadStatus,
                                        Loading, SetKernelControlButtonsEnabled](
@@ -1372,6 +1487,12 @@ QWidget *CreateKernelInspectorPage() {
                    });
   QObject::connect(KernelControlsUi->TriggerPatchGuard, &QPushButton::clicked,
                    Page, [RunPatchGuardTrigger] { RunPatchGuardTrigger(); });
+  QObject::connect(KernelControlsUi->EnablePpn, &QPushButton::clicked, Page,
+                   [RunKernelControlAction] {
+                     RunKernelControlAction("Enabling PPN page guard...",
+                                            "EnablePPN",
+                                            [] { return EnablePPN(); });
+                   });
   QObject::connect(
       SessTable, &QWidget::customContextMenuRequested, Page,
       [Page, SessTable, SessLogoffBtn, SessDisconnectBtn, SessMessageBtn,
@@ -1409,7 +1530,7 @@ QWidget *CreateKernelInspectorPage() {
         ReleaseMenuAfterClose(Menu);
         Menu->exec(SessTable->viewport()->mapToGlobal(Position));
       });
-  QTimer::singleShot(0, Refresh, &QPushButton::click);
+  // 首次进入及返回页面由 RefreshController 的 Show 事件统一调度。
 
   return Page;
 }

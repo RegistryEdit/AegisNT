@@ -211,6 +211,10 @@
    条目后将其从队列摘除。 */
 #define IOCTL_CANCEL_PATCHGUARD_DPC                                            \
   CTL_CODE(0x8000, 0x85B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* PPN 路径（第三路径）：把 PG 校验例程所在可执行页置 NX 并 Hook #PF。
+   Output 为 PG_CONTROL_OUTPUT。 */
+#define IOCTL_ENABLE_PPN                                                       \
+  CTL_CODE(0x8000, 0x860, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_QUERY_ADVANCED                                                \
   CTL_CODE(0x8000, 0x85C, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
 #define IOCTL_ADVANCED_OPERATION                                            \
@@ -881,7 +885,27 @@ typedef struct _PG_CONTROL_OUTPUT {
   ULONG LastBugCheckCode;        /* 最近一次处理的 bugcheck code */
   ULONG _Pad3;
   ULONG_PTR LastBugCheckRip;     /* 最近一次被打断的 RIP */
+
+  /* ---- 辅路径审计：清零实际使用的偏移与来源 ----
+     PG_OFFSET_SOURCE_DETERMINISTIC（反汇编精确解析）或
+     PG_OFFSET_SOURCE_HEURISTIC（跨核一致性兜底）。 */
+  ULONG ClearOffset;             /* 本次清零实际使用的 KPRCB 偏移 */
+  ULONG OffsetSource;            /* PG_OFFSET_SOURCE_* */
+
+  /* ---- PPN 路径（第三路径）：PG 代码页 NX 化 + #PF 拦截 ---- */
+  BOOLEAN PpnActive;             /* PPN 是否已启用 */
+  UCHAR _PadPpn[7];
+  ULONG PpnTargetCount;          /* 已 NX 化的 PG 代码页数量 */
+  ULONG PpnNxFaults;             /* 命中并处理的 NX 取指 #PF 次数 */
+  ULONG PpnPassthrough;          /* #PF 透传次数 */
+  ULONG PpnStatus;               /* NTSTATUS 摘要 */
+  ULONG64 PpnTargetPages[4];     /* 前 4 个目标页地址（诊断） */
 } PG_CONTROL_OUTPUT, *PPG_CONTROL_OUTPUT;
+
+/* ---- 辅路径偏移来源（PG_CONTROL_OUTPUT.OffsetSource）---- */
+#define PG_OFFSET_SOURCE_NONE 0u
+#define PG_OFFSET_SOURCE_DETERMINISTIC 1u
+#define PG_OFFSET_SOURCE_HEURISTIC 2u
 
 /* ---- 解析阶段位（PG_CONTROL_OUTPUT.ResolveStage）---- */
 #define PG_RESOLVE_STAGE_KPRCB_CONTEXT 0x01u
@@ -901,7 +925,7 @@ typedef struct _PG_CONTROL_OUTPUT {
 /* ABI 尺寸守卫：驱动与用户态各自维护一份 PG_CONTROL_OUTPUT 定义，
    任何一侧增删字段都会改变结构大小。此处用静态断言把期望大小钉死，
    让不一致在编译期暴露，而不是在运行时把缓冲区写坏。 */
-static_assert(sizeof(PG_CONTROL_OUTPUT) == 136,
+static_assert(sizeof(PG_CONTROL_OUTPUT) == 200,
               "PG_CONTROL_OUTPUT ABI mismatch: sync with "
               "Drivers/Ring0Core/Include/Protocol/Protect.h");
 
@@ -1014,7 +1038,7 @@ typedef struct _SYSTEM_TABLES_OUTPUT {
   ULONG     PiDdbLeaCandidates;
   ULONG     PiDdbSigCandidates;
   ULONG_PTR PiDdbSigBest;
-  /* Win11 链式表发现（PiDDBCacheTable 在 25H2 上是 LIST_ENTRY 而非 AVL） */
+  /* 链式表发现诊断；实际布局通过结构校验判定，不绑定系统版本。 */
   ULONG     PiDdbListScore;
   ULONG     PiDdbListCandidates;
 } SYSTEM_TABLES_OUTPUT, *PSYSTEM_TABLES_OUTPUT;
@@ -1434,6 +1458,8 @@ static_assert(sizeof(INVENTORY_CAPABILITIES_OUTPUT) == 80,
 #define WINDOW_OP_REMOVE_TOPMOST 11
 #define WINDOW_OP_FLASH 12
 #define WINDOW_OP_REDRAW 13
+#define WINDOW_OP_MAXIMIZE 14
+#define WINDOW_OP_PING 15
 
 #define WINDOW_FLAG_DIRECT 0x00000001
 #define WINDOW_FLAG_FORCE 0x00000002
@@ -3784,6 +3810,26 @@ BOOLEAN DisablePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
   return Success;
 }
 
+/* 启用 PPN 路径（第三路径）：把 PG 校验例程所在可执行页置 NX 并 Hook #PF。
+   与 DisablePatchGuard 的主/辅路径独立，可单独调用。 */
+BOOLEAN EnablePPN(PPG_CONTROL_OUTPUT Output = NULL) {
+  PG_CONTROL_OUTPUT Result = {};
+
+  DWORD BytesReturned = 0;
+  BOOLEAN Success = SendIoctlWithOutput(IOCTL_ENABLE_PPN, NULL, 0, &Result,
+                                        sizeof(Result), &BytesReturned);
+
+  if (Output != NULL)
+    *Output = Result;
+
+  if (Success && Result.Status != 0) {
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
+    return FALSE;
+  }
+
+  return Success;
+}
+
 BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -3893,6 +3939,16 @@ FORCEINLINE BOOL WindowMinimize(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0) {
 
 FORCEINLINE BOOL WindowRestore(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0) {
   return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_RESTORE, NULL, 0, 0, 0, 0,
+                               Flags);
+}
+
+FORCEINLINE BOOL WindowMaximize(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0) {
+  return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_MAXIMIZE, NULL, 0, 0, 0,
+                               0, Flags);
+}
+
+FORCEINLINE BOOL WindowPing(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0) {
+  return WindowOperationKernel(Pid, Hwnd, WINDOW_OP_PING, NULL, 0, 0, 0, 0,
                                Flags);
 }
 

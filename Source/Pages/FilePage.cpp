@@ -140,11 +140,12 @@ public:
 
     DirectoryModel = new QFileSystemModel(this);
     DirectoryModel->setFilter(QDir::AllDirs | QDir::NoDotAndDotDot |
-                              QDir::Drives);
+                              QDir::Drives | QDir::Hidden | QDir::System);
     DirectoryModel->setRootPath(QString());
 
     FileModel = new QFileSystemModel(this);
-    FileModel->setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
+    FileModel->setFilter(QDir::AllEntries | QDir::NoDotAndDotDot |
+                         QDir::Hidden | QDir::System);
     FileModel->setReadOnly(false);
     FileModel->setNameFilterDisables(false);
 
@@ -548,15 +549,8 @@ private:
     const QStringList Paths = SelectedPaths();
     if (Paths.isEmpty())
       return;
-    for (const QString &Path : Paths) {
-      if (QFileInfo(Path).isDir()) {
-        ShowWarningNotice(this, "Delete (R0)",
-                          "Delete (R0) only supports files.");
-        return;
-      }
-    }
     const QString Prompt =
-        QString("Force delete %1 selected file(s) through the kernel driver?")
+        QString("Force delete %1 selected item(s) through the kernel driver?")
             .arg(Paths.size());
     if (!ShowConfirmDialog(this, "Delete (R0)", Prompt, "Yes", "No"))
       return;
@@ -564,7 +558,7 @@ private:
     for (const QString &Path : Paths) {
       const std::wstring WidePath =
           QDir::toNativeSeparators(Path).toStdWString();
-      if (!ForceDeleteFile(WidePath.c_str()))
+      if (!DeletePathR0(Path))
         Failures.append(QString("%1 (error %2)")
                             .arg(QFileInfo(Path).fileName())
                             .arg(G_LastAegisCoreError));
@@ -574,22 +568,15 @@ private:
                       "Failed to force delete:\n" + Failures.join("\n"));
     else
       ShowSuccessNotice(this, "Delete (R0)",
-                        QString("Force deleted %1 file(s).").arg(Paths.size()));
+                        QString("Force deleted %1 item(s).").arg(Paths.size()));
   }
 
   void DeleteSelectionNtfs() {
     const QStringList Paths = SelectedPaths();
     if (Paths.isEmpty())
       return;
-    for (const QString &Path : Paths) {
-      if (QFileInfo(Path).isDir()) {
-        ShowWarningNotice(this, "Delete (NTFS)",
-                          "Delete (NTFS) only supports files.");
-        return;
-      }
-    }
     const QString Prompt =
-        QString("Permanently delete %1 selected file(s) via NTFS POSIX "
+        QString("Permanently delete %1 selected item(s) via NTFS POSIX "
                 "semantics?")
             .arg(Paths.size());
     if (!ShowConfirmDialog(this, "Delete (NTFS)", Prompt, "Yes", "No"))
@@ -598,7 +585,7 @@ private:
     for (const QString &Path : Paths) {
       const std::wstring WidePath =
           QDir::toNativeSeparators(Path).toStdWString();
-      if (!NtfsForceDeleteFile(WidePath))
+      if (!DeletePathNtfs(Path))
         Failures.append(QString("%1 (error %2)")
                             .arg(QFileInfo(Path).fileName())
                             .arg(GetLastError()));
@@ -608,7 +595,34 @@ private:
                       "Failed to delete:\n" + Failures.join("\n"));
     else
       ShowSuccessNotice(this, "Delete (NTFS)",
-                        QString("Deleted %1 file(s).").arg(Paths.size()));
+                        QString("Deleted %1 item(s).").arg(Paths.size()));
+  }
+
+  bool DeletePathR0(const QString &Path) {
+    const QFileInfo Info(Path);
+    if (Info.isDir()) {
+      for (const QFileInfo &Child : QDir(Path).entryInfoList(
+               QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden |
+                   QDir::System))
+        if (!DeletePathR0(Child.absoluteFilePath()))
+          return false;
+    }
+    const std::wstring WidePath =
+        QDir::toNativeSeparators(Path).toStdWString();
+    return ForceDeleteFile(WidePath.c_str()) == TRUE;
+  }
+
+  bool DeletePathNtfs(const QString &Path) {
+    const QFileInfo Info(Path);
+    if (Info.isDir()) {
+      for (const QFileInfo &Child : QDir(Path).entryInfoList(
+               QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden |
+                   QDir::System))
+        if (!DeletePathNtfs(Child.absoluteFilePath()))
+          return false;
+    }
+    return NtfsForceDeleteFile(
+        QDir::toNativeSeparators(Path).toStdWString());
   }
 
   bool CopyRecursively(const QString &SourcePath,
@@ -1086,13 +1100,8 @@ private:
     auto *MonitorAction = new QAction("Monitor directory", Menu);
     const QStringList Paths = SelectedPaths();
     DeleteNtfsAction->setEnabled(
-        std::all_of(Paths.begin(), Paths.end(), [](const QString &Path) {
-          return QFileInfo(Path).isFile();
-        }));
-    DeleteR0Action->setEnabled(
-        std::all_of(Paths.begin(), Paths.end(), [](const QString &Path) {
-          return QFileInfo(Path).isFile();
-        }));
+        !Paths.isEmpty());
+    DeleteR0Action->setEnabled(!Paths.isEmpty());
     RenameAction->setEnabled(Paths.size() == 1);
     MonitorAction->setEnabled(Paths.size() == 1);
     Menu->addAction(DeleteAction);

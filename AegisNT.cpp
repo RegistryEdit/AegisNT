@@ -177,7 +177,6 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <functional>
 #include <limits>
 #include <map>
 #include <memory>

@@ -151,11 +151,11 @@ QWidget *CreateTablePage() {
                  .arg(Result->PiDDB.SigScore)
                  .arg(Result->PiDDB.SigCandidates));
       if (Result->PiDDB.Count == 0) {
-        AddRow("-", "(no entries)", "-",
-               "PiDDB cache is present but returned 0 entries; check the "
-               "discovery scores above — if LIST >= 5 the Win11 list layout "
-               "was found, otherwise the table address is stale or the AVL "
-               "scan hit a false positive");
+        const bool Found = Result->PiDDB.TableAddress != 0;
+        AddRow("-", Found ? "(no entries)" : "(not found)", "-",
+               Found ? "No entries were returned; the cache may be empty or "
+                       "may have changed during enumeration."
+                     : "No validated AVL or LIST candidate was found.");
       }
       for (ULONG Index = 0; Index < Result->PiDDB.Count; ++Index) {
         const PIDDB_CACHE_ENTRY_INFO &Entry = Result->PiDDB.Entries[Index];

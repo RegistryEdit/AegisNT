@@ -11,7 +11,6 @@
 #include "DiskPage.h"
 #include "DriverPage.h"
 #include "FilePage.h"
-#include "HandleLabPage.h"
 #include "HookLabPage.h"
 #include "HotKeysPage.h"
 #include "KernelInspectorPage.h"
