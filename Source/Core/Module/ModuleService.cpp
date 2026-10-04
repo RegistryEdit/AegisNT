@@ -136,6 +136,7 @@ bool ModuleService::LoadModuleInstance(ModuleEntry &Module, QString *Error) {
     return true;
 }
 
+#if 0  // 暂时禁用 ProbeModuleFile - 需要 ModuleBase
 ModuleEntry ModuleService::ProbeModuleFile(const QString &Path) {
     ModuleEntry Module;
     Module.Path = Utf8Bytes(QFileInfo(Path).absoluteFilePath());
