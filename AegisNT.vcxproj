@@ -140,6 +140,7 @@
     <ClInclude Include="Source\Pages\HotKeysPage.h" />
     <ClInclude Include="Source\Pages\KernelInspectorPage.h" />
     <ClInclude Include="Source\Pages\KernelInspectorRefresh.h" />
+    <ClInclude Include="Source\Pages\KernelInspectorData.h" />
     <ClInclude Include="Source\Pages\MemoryPage.h" />
     <ClInclude Include="Source\Pages\ModuleManagerPage.h" />
     <ClInclude Include="Source\Pages\ModuleRunPage.h" />

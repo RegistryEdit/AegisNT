@@ -3,6 +3,7 @@
 // 状态（含驱动调试状态），支持模糊过滤与详情查看。
 // ============================================================
 #include "KernelInspectorRefresh.h"
+#include "KernelInspectorData.h"
 
 QWidget *CreateKernelInspectorPage() {
   struct InspectorTab {
@@ -180,6 +181,8 @@ QWidget *CreateKernelInspectorPage() {
     auto *ControlHeaderLayout =
         static_cast<QHBoxLayout *>(ControlHeader->layout());
     ControlHeaderLayout->addWidget(KernelControlsUi->Summary);
+    KernelControlsUi->Detail->setWordWrap(true);
+    KernelControlsUi->Detail->setMinimumWidth(260);
     ControlHeaderLayout->addWidget(KernelControlsUi->Detail);
     ControlLayout->addWidget(ControlHeader);
 
@@ -490,6 +493,21 @@ QWidget *CreateKernelInspectorPage() {
                  : QString("Win32 error %1")
                        .arg(KernelControlCache->PatchGuardError));
 
+      /* 找到的 PG 嫌疑 APC 数量（与 DPC 对称）：查询时驱动实时重跑一次
+         只分类的 APC 扫描，因此这里反映的是当前值。 */
+      const int RowApc = KernelControlsUi->Table->rowCount();
+      KernelControlsUi->Table->insertRow(RowApc);
+      SetRow(RowApc, "PatchGuard.ApcsFound",
+             KernelControlCache->PatchGuardOk
+                 ? QString::number(KernelControlCache->PatchGuard.ApcFound)
+                 : "-",
+             KernelControlCache->PatchGuardOk
+                 ? QString("scanned %1, cancelled %2")
+                       .arg(KernelControlCache->PatchGuard.ApcScanned)
+                       .arg(KernelControlCache->PatchGuard.ApcCancelled)
+                 : QString("Win32 error %1")
+                       .arg(KernelControlCache->PatchGuardError));
+
       /* ---- 早期 bugcheck 拦截（ByePg 式主路径）----
          该路径劫持 HAL 私有派发表，在 PG 校验失败触发 bugcheck 时恢复执行流，
          因此"是否启用"与"已吃掉多少次 bugcheck"是判断 PG 绕过是否真正生效的
@@ -644,6 +662,59 @@ QWidget *CreateKernelInspectorPage() {
                        .arg(Hex(KernelControlCache->PatchGuard.PpnTargetPages[2]))
                        .arg(Hex(KernelControlCache->PatchGuard.PpnTargetPages[3]))
                  : QString());
+
+      const int RowCpu = KernelControlsUi->Table->rowCount();
+      KernelControlsUi->Table->insertRow(RowCpu);
+      SetRow(RowCpu, "PatchGuard.CpuCoverage",
+             KernelControlCache->PatchGuardOk
+                 ? QString("%1/%2 cleared")
+                       .arg(KernelControlCache->PatchGuard.CpuCleared)
+                       .arg(KernelControlCache->PatchGuard.CpuTotal)
+                 : "-",
+             KernelControlCache->PatchGuardOk
+                 ? QString("attempted %1, failed %2, groups %3/%4")
+                       .arg(KernelControlCache->PatchGuard.CpuAttempted)
+                       .arg(KernelControlCache->PatchGuard.CpuFailed)
+                       .arg(KernelControlCache->PatchGuard.ProcessorGroupsCovered)
+                       .arg(KernelControlCache->PatchGuard.ProcessorGroupCount)
+                 : QString("Win32 error %1")
+                       .arg(KernelControlCache->PatchGuardError));
+
+      const int RowContext = KernelControlsUi->Table->rowCount();
+      KernelControlsUi->Table->insertRow(RowContext);
+      SetRow(RowContext, "PatchGuard.ContextConfidence",
+             KernelControlCache->PatchGuardOk
+                 ? QString("%1%%")
+                       .arg(KernelControlCache->PatchGuard.ContextConfidence)
+                 : "-",
+             KernelControlCache->PatchGuardOk
+                 ? QString("evidence %1")
+                       .arg(Hex(KernelControlCache->PatchGuard.ContextEvidence))
+                 : QString());
+
+      const int RowDpcConfidence = KernelControlsUi->Table->rowCount();
+      KernelControlsUi->Table->insertRow(RowDpcConfidence);
+      SetRow(RowDpcConfidence, "PatchGuard.DpcConfidence",
+             KernelControlCache->PatchGuardOk
+                 ? QString("%1 high / %2 low")
+                       .arg(KernelControlCache->PatchGuard.DpcHighConfidenceCount)
+                       .arg(KernelControlCache->PatchGuard.DpcLowConfidenceCount)
+                 : "-",
+             "Scores >= 70 are high confidence.");
+
+      const int RowApcConfidence = KernelControlsUi->Table->rowCount();
+      KernelControlsUi->Table->insertRow(RowApcConfidence);
+      SetRow(RowApcConfidence, "PatchGuard.ApcResolver",
+             KernelControlCache->PatchGuardOk
+                 ? QString("%1%% / %2 anchors")
+                       .arg(KernelControlCache->PatchGuard.ApcResolverConfidence)
+                       .arg(KernelControlCache->PatchGuard.ApcResolverAnchorCount)
+                 : "-",
+             KernelControlCache->PatchGuardOk
+                 ? QString("%1 high / %2 low")
+                       .arg(KernelControlCache->PatchGuard.ApcHighConfidenceCount)
+                       .arg(KernelControlCache->PatchGuard.ApcLowConfidenceCount)
+                 : QString());
     }
 
     const QString DebugStateText =
@@ -670,31 +741,14 @@ QWidget *CreateKernelInspectorPage() {
                                                         : "Active");
     /* PG DPC 摘要：未查询成功时不显示数量，避免把 0 误读成"没有 DPC"。 */
     const QString PgDpcText =
-        KernelControlCache->PatchGuardOk
-            ? QString::number(KernelControlCache->PatchGuard.DpcFound)
-            : QString("Unavailable");
+        !KernelControlCache->PatchGuardOk
+            ? QString("Unavailable")
+            : KernelControlCache->PatchGuard.DpcStatus != 0
+                  ? QString("Not scanned")
+                  : QString::number(KernelControlCache->PatchGuard.DpcFound);
     /* 拦截摘要：区分"仅清零上下文"与"已建立 bugcheck 拦截"——
        后者才是 PG 触发时不再蓝屏的关键。 */
-    const QString PgInterceptText =
-        !KernelControlCache->PatchGuardOk
-            ? QString("Unavailable")
-            : (KernelControlCache->PatchGuard.InterceptEnabled
-                   ? QString("on (%1 suppressed)")
-                         .arg(KernelControlCache->PatchGuard.SuppressedCount)
-                   : QString("off"));
     /* 清零来源摘要：避免误清零，把来源直接标在总览里。 */
-    const QString PgClearText =
-        !KernelControlCache->PatchGuardOk
-            ? QString("Unavailable")
-            : QString("%1 (%2)")
-                  .arg(Hex(KernelControlCache->PatchGuard.ClearOffset))
-                  .arg(KernelControlCache->PatchGuard.OffsetSource ==
-                               PG_OFFSET_SOURCE_DETERMINISTIC
-                           ? "det"
-                           : (KernelControlCache->PatchGuard.OffsetSource ==
-                                      PG_OFFSET_SOURCE_HEURISTIC
-                                  ? "heur!"
-                                  : "none"));
     /* PPN 摘要：页数 + 命中次数。 */
     const QString PgPpnText =
         !KernelControlCache->PatchGuardOk
@@ -703,17 +757,50 @@ QWidget *CreateKernelInspectorPage() {
                    ? QString("on (%1 pg, %2 nx)")
                          .arg(KernelControlCache->PatchGuard.PpnTargetCount)
                          .arg(KernelControlCache->PatchGuard.PpnNxFaults)
-                   : QString("off"));
+                    : QString("off"));
+    /* PG APC 摘要：与 DPC 对称，未查询成功时不显示数量。 */
+    const QString PgApcText =
+        !KernelControlCache->PatchGuardOk
+            ? QString("Unavailable")
+            : KernelControlCache->PatchGuard.ApcStatus != 0
+                  ? QString("Not scanned")
+                  : QString::number(KernelControlCache->PatchGuard.ApcFound);
+    const QString PgCpuText =
+        !KernelControlCache->PatchGuardOk
+            ? QString("Unavailable")
+            : QString("%1/%2")
+                  .arg(KernelControlCache->PatchGuard.CpuCleared)
+                  .arg(KernelControlCache->PatchGuard.CpuTotal);
+    const QString PgContextText =
+        !KernelControlCache->PatchGuardOk
+            ? QString("Unavailable")
+            : QString("%1%%")
+                  .arg(KernelControlCache->PatchGuard.ContextConfidence);
+    const QString PgDpcSummary =
+        !KernelControlCache->PatchGuardOk
+            ? QString("Unavailable")
+            : QString("%1 (%2H/%3L)")
+                  .arg(PgDpcText)
+                  .arg(KernelControlCache->PatchGuard.DpcHighConfidenceCount)
+                  .arg(KernelControlCache->PatchGuard.DpcLowConfidenceCount);
+    const QString PgApcSummary =
+        !KernelControlCache->PatchGuardOk
+            ? QString("Unavailable")
+            : QString("%1 (%2H/%3L)")
+                  .arg(PgApcText)
+                  .arg(KernelControlCache->PatchGuard.ApcHighConfidenceCount)
+                  .arg(KernelControlCache->PatchGuard.ApcLowConfidenceCount);
     KernelControlsUi->Detail->setText(
-        QString("Debug %1 | IsDebuggerEnabled %2 | DSE %3 | PatchGuard %4 | "
-                "PG DPCs %5 | PG Intercept %6 | Clear %7 | PPN %8")
+        QString("Dbg %1/%2 | DSE %3 | PG %4\n"
+                "CPU %5 | DPC %6 | APC %7 | Ctx %8 | PPN %9")
             .arg(DebugStateText)
             .arg(DbgEnabledText)
             .arg(DseStateText)
             .arg(PgStateText)
-            .arg(PgDpcText)
-            .arg(PgInterceptText)
-            .arg(PgClearText)
+            .arg(PgCpuText)
+            .arg(PgDpcSummary)
+            .arg(PgApcSummary)
+            .arg(PgContextText)
             .arg(PgPpnText));
     KernelControlsUi->Table->setUpdatesEnabled(true);
   };
@@ -852,61 +939,33 @@ QWidget *CreateKernelInspectorPage() {
           }
 
           std::vector<std::tuple<QString, QString, ULONG>> SyncEntries;
-          if (G_DeviceHandle != INVALID_HANDLE_VALUE) {
+          {
             BYTE SyncBuf[65536] = {};
             ULONG SyncReturned = 0;
             if (EnumSyncObjectsKernel(SyncBuf, sizeof(SyncBuf),
                                       &SyncReturned) &&
-                SyncReturned >= sizeof(ULONG)) {
-              PULONG Cnt = (PULONG)SyncBuf;
-              PUCHAR D = (PUCHAR)(Cnt + 1);
-              for (ULONG i = 0; i < *Cnt; i++) {
-                ULONG Dir = *(PULONG)D;
-                D += 4;
-                USHORT NLen = *(PUSHORT)D;
-                D += 2;
-                QString Name = NLen ? QString::fromWCharArray(
-                                          (PWCHAR)D, NLen / sizeof(WCHAR))
-                                    : QString();
-                D += NLen;
-                USHORT TLen = *(PUSHORT)D;
-                D += 2;
-                QString Type = TLen ? QString::fromWCharArray(
-                                          (PWCHAR)D, TLen / sizeof(WCHAR))
-                                    : QString();
-                D += TLen;
-                D = (PUCHAR)(((ULONG_PTR)D + 3) & ~3ULL);
-                SyncEntries.emplace_back(Name, Type, Dir);
-              }
+                SyncReturned <= sizeof(SyncBuf)) {
+              KernelInspectorData::ParseSyncObjects(SyncBuf, SyncReturned,
+                                                    SyncEntries);
             }
           }
 
           std::vector<std::tuple<ULONG, ULONG, ULONG, QString>> SessEntries;
-          if (G_DeviceHandle != INVALID_HANDLE_VALUE) {
-            BYTE SessBuf[4096] = {};
+          // WTS supplies the real station name and connection state on both
+          // Windows versions. The process snapshot is a fallback only.
+          if (!EnumerateSessionsFallback(SessEntries)) {
+            BYTE SessBuf[KernelInspectorData::SessionBufferBytes] = {};
             ULONG SessReturned = 0;
             if (EnumSessions(SessBuf, sizeof(SessBuf), &SessReturned) &&
-                SessReturned >= sizeof(ULONG)) {
-              PULONG Cnt = (PULONG)SessBuf;
-              PUCHAR D = (PUCHAR)(Cnt + 1);
-              for (ULONG i = 0; i < *Cnt; i++) {
-                ULONG Sid = *(PULONG)D;
-                D += 4;
-                ULONG St = *(PULONG)D;
-                D += 4;
-                ULONG Pc = *(PULONG)D;
-                D += 4;
-                QString Ws = QString::fromWCharArray((PWCHAR)D);
-                D += 64;
-                SessEntries.emplace_back(Sid, St, Pc, Ws);
-              }
+                SessReturned <= sizeof(SessBuf)) {
+              KernelInspectorData::ParseProcessSessions(SessBuf, SessReturned,
+                                                        SessEntries);
             }
           }
-          if (SessEntries.empty())
-            EnumerateSessionsFallback(SessEntries);
-
-          if (SyncEntries.empty())
-            EnumerateSyncObjectsFallback(SyncEntries);
+          // The kernel directory query covers global objects; include the
+          // current session's BaseNamedObjects even when it returned data.
+          EnumerateSyncObjectsFallback(SyncEntries);
+          KernelInspectorData::DeduplicateSyncObjects(SyncEntries);
 
           QMetaObject::invokeMethod(
               qApp,
@@ -1046,7 +1105,10 @@ QWidget *CreateKernelInspectorPage() {
                                        static_cast<qulonglong>(Sid));
                   SessTable->setItem(R, 0, SessionItem);
                   SessTable->setItem(
-                      R, 1, new QTableWidgetItem(SessionStateText(St)));
+                      R, 1, new QTableWidgetItem(
+                                St == (std::numeric_limits<ULONG>::max)()
+                                    ? QString("Unavailable")
+                                    : SessionStateText(St)));
                   SessTable->setItem(R, 2,
                                      new QTableWidgetItem(QString::number(Pc)));
                   SessTable->setItem(R, 3, new QTableWidgetItem(Ws));

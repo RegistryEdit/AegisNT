@@ -55,12 +55,51 @@ class TaskManagerPage final : public QWidget {
     DWORD ProcessId = 0;
     UCHAR PreviousMode = 0;
     UCHAR ApcQueueable = 0;
+    UCHAR PrevModeStatus = THREAD_FIELD_OK;
+    UCHAR ApcStatus = THREAD_FIELD_OK;
     quint64 Ethread = 0;
     quint64 StartAddress = 0;
     DWORD Priority = 0;
     DWORD State = 0;
     QString ProcessName;
   };
+
+  // 线程字段的统一显示语义：
+  //   OK        -> 0=KernelMode / 1=UserMode
+  //   LOOKUP    -> Exited（线程在快照与查找之间退出）
+  //   FAULT     -> Unavailable（受保护读取异常）
+  //   NOT_APPLIC-> N/A（PID 0 idle 线程不适用）
+  static QString FormatPreviousMode(const ThreadRow &Row) {
+    switch (Row.PrevModeStatus) {
+    case THREAD_FIELD_NOT_APPLIC:
+      return "N/A";
+    case THREAD_FIELD_LOOKUP:
+      return "Exited";
+    case THREAD_FIELD_FAULT:
+      return "Unavailable";
+    default:
+      break;
+    }
+    if (Row.PreviousMode == 1)
+      return "UserMode";
+    if (Row.PreviousMode == 0)
+      return "KernelMode";
+    return "Unavailable";
+  }
+
+  static QString FormatApcQueueable(const ThreadRow &Row) {
+    switch (Row.ApcStatus) {
+    case THREAD_FIELD_NOT_APPLIC:
+      return "N/A";
+    case THREAD_FIELD_LOOKUP:
+      return "Exited";
+    case THREAD_FIELD_FAULT:
+      return "Unavailable";
+    default:
+      break;
+    }
+    return Row.ApcQueueable ? "Yes" : "No";
+  }
 
   struct TableRenderState {
     struct Operation {
@@ -1422,6 +1461,8 @@ private:
           Row.ProcessId = Entry.ProcessId;
           Row.PreviousMode = static_cast<UCHAR>(Entry.PreviousMode);
           Row.ApcQueueable = Entry.ApcQueueable;
+          Row.PrevModeStatus = Entry.PrevModeStatus;
+          Row.ApcStatus = Entry.ApcStatus;
           Row.Ethread = Entry.Ethread;
           Row.StartAddress = Entry.StartAddress;
           Row.Priority = Entry.Priority;
@@ -1461,8 +1502,16 @@ private:
     for (const ProcessRow &Process : Rows)
       PidNames[Process.Pid] = Process.Name;
     for (ThreadRow &Row : ThreadRows) {
+      // PID 0（System Idle）的驱动 ImageName 为空、进程表会将其命名为
+      // "Unknown"；线程视图统一覆盖为 "System Idle"。
+      if (Row.ProcessId == 0) {
+        Row.ProcessName = "System Idle";
+        continue;
+      }
       const auto Match = PidNames.find(Row.ProcessId);
-      Row.ProcessName = Match != PidNames.end() ? Match->second : QString();
+      Row.ProcessName =
+          (Match != PidNames.end() && !Match->second.isEmpty()) ? Match->second
+                                                                : QString();
     }
     const QString Query = SearchEdit->text().trimmed();
     ThreadTable->setSortingEnabled(false);
@@ -1496,14 +1545,9 @@ private:
       ThreadTable->setItem(
           RowIndex, 4,
           CreateItem(QString("0x%1").arg(Row.StartAddress, 0, 16).toUpper()));
-      // PreviousMode：0=KernelMode, 1=UserMode, 其它=?
-      ThreadTable->setItem(
-          RowIndex, 5,
-          CreateItem(Row.PreviousMode == 1
-                         ? "UserMode"
-                         : (Row.PreviousMode == 0 ? "KernelMode" : "?")));
-      ThreadTable->setItem(RowIndex, 6,
-                           CreateItem(Row.ApcQueueable ? "Yes" : "No"));
+      // PreviousMode / ApcQueueable 的统一显示语义见 FormatPreviousMode。
+      ThreadTable->setItem(RowIndex, 5, CreateItem(FormatPreviousMode(Row)));
+      ThreadTable->setItem(RowIndex, 6, CreateItem(FormatApcQueueable(Row)));
       ThreadTable->setItem(
           RowIndex, 7, CreateItem(QString::number(Row.Priority)));
       ThreadTable->setItem(RowIndex, 8,
@@ -1638,11 +1682,8 @@ private:
         const ThreadRow *Tr = FindThread(SelectedTid);
         if (!Tr)
           continue;
-        const QString PrevMode =
-            Tr->PreviousMode == 1 ? "UserMode"
-                                  : (Tr->PreviousMode == 0 ? "KernelMode"
-                                                           : "?");
-        const QString Apc = Tr->ApcQueueable ? "Yes" : "No";
+        const QString PrevMode = FormatPreviousMode(*Tr);
+        const QString Apc = FormatApcQueueable(*Tr);
         Lines << QString("%1\t%2\t%3\t0x%4\t0x%5\t%6\t%7\t%8\t%9")
                      .arg(Tr->Tid)
                      .arg(Tr->ProcessId)
@@ -1718,11 +1759,8 @@ private:
       const ThreadRow *Tr = FindThread(Tid);
       if (!Tr)
         return;
-      const QString PrevMode =
-          Tr->PreviousMode == 1
-              ? "UserMode"
-              : (Tr->PreviousMode == 0 ? "KernelMode" : "?");
-      const QString Apc = Tr->ApcQueueable ? "Yes" : "No";
+      const QString PrevMode = FormatPreviousMode(*Tr);
+      const QString Apc = FormatApcQueueable(*Tr);
       const QString Line =
           QString("%1\t%2\t%3\t0x%4\t0x%5\t%6\t%7\t%8\t%9")
               .arg(Tr->Tid)
@@ -1877,7 +1915,7 @@ private:
     DialogLayout->setContentsMargins(20, 18, 20, 18);
     DialogLayout->setSpacing(12);
     auto *Description = MakeLabel(
-        "ApcQueueable (KTHREAD+0x90 bit 0) gates whether APCs can be "
+        "ApcQueueable (KTHREAD+0x74 bit 13) gates whether APCs can be "
         "queued to this thread.",
         11, KTextMuted);
     Description->setWordWrap(true);
@@ -1954,11 +1992,8 @@ private:
     AddField("TID", QString::number(Row.Tid));
     AddField("Parent Process ID", QString::number(Row.ProcessId));
     AddField("Process", Row.ProcessName);
-    AddField("PreviousMode",
-             Row.PreviousMode == 1
-                 ? "UserMode"
-                 : (Row.PreviousMode == 0 ? "KernelMode" : "Unknown"));
-    AddField("ApcQueueable", Row.ApcQueueable ? "Yes" : "No");
+    AddField("PreviousMode", FormatPreviousMode(Row));
+    AddField("ApcQueueable", FormatApcQueueable(Row));
     AddField("ETHREAD",
              QString("0x%1")
                  .arg(Row.Ethread, sizeof(quintptr) * 2, 16,
@@ -4059,16 +4094,11 @@ private:
                   if (It != ThreadCache.constEnd())
                     Tr = &(*It);
                 }
-                // Inspector 中："-" 表示全量线程缓存未命中；
-                // "?" 表示 PreviousMode 驱动侧读取失败。
-                const QString PrevMode =
-                    Tr ? (Tr->PreviousMode == 1 ? "UserMode"
-                                                : (Tr->PreviousMode == 0
-                                                       ? "KernelMode"
-                                                       : "?"))
-                       : "-";
-                const QString Apc =
-                    Tr ? (Tr->ApcQueueable ? "Yes" : "No") : "-";
+                // Inspector 中："-" 表示全量线程缓存未命中；其余语义
+                // （N/A / Exited / Unavailable / UserMode / KernelMode）由
+                // FormatPreviousMode / FormatApcQueueable 统一给出。
+                const QString PrevMode = Tr ? FormatPreviousMode(*Tr) : "-";
+                const QString Apc = Tr ? FormatApcQueueable(*Tr) : "-";
                 Add(Threads,
                     {QString::number(R.ThreadId),
                      QString("0x%1").arg(R.Address, 0, 16).toUpper(),

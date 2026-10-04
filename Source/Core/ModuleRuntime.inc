@@ -167,6 +167,24 @@ bool InvokeModuleWithSeh(ModuleBase *Instance, bool *Result,
   }
 }
 
+bool InvokeModuleCheckWithSeh(ModuleBase *Instance, bool *Result,
+                              DWORD *ExceptionCode) {
+  if (Result)
+    *Result = false;
+  if (ExceptionCode)
+    *ExceptionCode = ERROR_SUCCESS;
+
+  __try {
+    if (Result)
+      *Result = Instance->Check();
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    if (ExceptionCode)
+      *ExceptionCode = GetExceptionCode();
+    return false;
+  }
+}
+
 void ScanRuntimeModules() {
   // 全量扫描运行时模块（DLL 插件目录 + 驱动目录）：
   // 先卸载旧实例，再探测新文件，最后按配置决定是否自动加载。

@@ -1,8 +1,8 @@
 // ============================================================
 // AegisCore 驱动的用户态调用封装（全员 inline，并入主 TU）：
-// 进程/注册表/文件/回调保护、内核读写信道、句柄/线程注入、
-// 内存区域与页表操作、防火墙、持久化查询等全套 IOCTL 封装。
-// 每个函数成功返回 TRUE；失败时错误码写入 G_LastAegisCoreError。
+// 进程/注册�?文件/回调保护、内核读写信道、句�?线程注入�?
+// 内存区域与页表操作、防火墙、持久化查询等全�?IOCTL 封装�?
+// 每个函数成功返回 TRUE；失败时错误码写�?G_LastAegisCoreError�?
 // ============================================================
 #pragma once
 #include <cstdio>
@@ -176,7 +176,7 @@
 #define FIREWALL_DIRECTION_IN_V4   2u
 #define FIREWALL_DIRECTION_IN_V6   3u
 
-/* FIREWALL_OPERATION_INPUT 的方向/协议族掩码；0 表示"不限"(双向)。 */
+/* FIREWALL_OPERATION_INPUT 的方�?协议族掩码；0 表示"不限"(双向)�?*/
 #define FIREWALL_DIRBIT_OUT       1u
 #define FIREWALL_DIRBIT_IN        2u
 #define FIREWALL_FAMILYBIT_V4     1u
@@ -201,20 +201,34 @@
   CTL_CODE(0x8000, 0x856, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_QUERY_PATCHGUARD                                                 \
   CTL_CODE(0x8000, 0x858, METHOD_BUFFERED, FILE_ANY_ACCESS)
-/* 0x857 原为 IOCTL_RESTORE_PATCHGUARD，该功能已移除。编号不复用。 */
+/* 0x857 原为 IOCTL_RESTORE_PATCHGUARD，该功能已移除。编号不复用�?*/
 #define IOCTL_QUERY_DSE                                                        \
   CTL_CODE(0x8000, 0x859, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_SET_IDT_LIMIT                                                    \
   CTL_CODE(0x8000, 0x85A, METHOD_BUFFERED, FILE_ANY_ACCESS)
-/* 取消与 PatchGuard 相关的 DPC：枚举全部 DPC 队列并解码，找出
+/* 取消�?PatchGuard 相关�?DPC：枚举全�?DPC 队列并解码，找出
    DeferredContext 为非规范指针、且 DeferredRoutine 落在 ntoskrnl 内的
-   条目后将其从队列摘除。 */
+   条目后将其从队列摘除�?*/
 #define IOCTL_CANCEL_PATCHGUARD_DPC                                            \
-  CTL_CODE(0x8000, 0x85B, METHOD_BUFFERED, FILE_ANY_ACCESS)
-/* PPN 路径（第三路径）：把 PG 校验例程所在可执行页置 NX 并 Hook #PF。
-   Output 为 PG_CONTROL_OUTPUT。 */
+  CTL_CODE(0x8000, 0x88C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* PPN 路径（第三路径）：把 PG 校验例程所在可执行页置 NX �?Hook #PF�?
+   Output �?PG_CONTROL_OUTPUT�?*/
 #define IOCTL_ENABLE_PPN                                                       \
-  CTL_CODE(0x8000, 0x860, METHOD_BUFFERED, FILE_ANY_ACCESS)
+  CTL_CODE(0x8000, 0x88D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* 取消 PG 相关 APC：遍历所有内核线程的 KernelMode APC 队列，摘�?
+   KernelRoutine == ntoskrnl!KiDispatchCallout �?RundownRoutine == NULL
+   的条目。Output �?APC_CANCEL_OUTPUT�?*/
+#define IOCTL_CANCEL_PATCHGUARD_APC                                            \
+  CTL_CODE(0x8000, 0x88E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* 列出所有内核 APC（含普通条目）：只读查询，不摘链。Output 为 APC_CANCEL_OUTPUT。 */
+#define IOCTL_ENUM_APC                                                        \
+  CTL_CODE(0x8000, 0x88F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_APC_CAPTURE_CTL                                                 \
+  CTL_CODE(0x8000, 0x890, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_APC_CAPTURE_READ                                                \
+  CTL_CODE(0x8000, 0x891, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_INJECT_TEST_APC                                                 \
+  CTL_CODE(0x8000, 0x892, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_QUERY_ADVANCED                                                \
   CTL_CODE(0x8000, 0x85C, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
 #define IOCTL_ADVANCED_OPERATION                                            \
@@ -699,7 +713,7 @@ typedef struct _PPL_QUERY_OUTPUT {
 
 typedef struct _CRITICAL_PROCESS_INPUT {
   ULONG ProcessId;
-  UCHAR PreviousMode;   /* 0 = KernelMode, 1 = UserMode（与驱动 Protocol/Process.h 同步） */
+  UCHAR PreviousMode;   /* 0 = KernelMode, 1 = UserMode（与驱动 Protocol/Process.h 同步�?*/
   UCHAR _Pad[3];
 } CRITICAL_PROCESS_INPUT;
 
@@ -844,32 +858,32 @@ typedef struct _PG_CONTROL_OUTPUT {
   BOOLEAN IsPatched;
   UCHAR _Pad1[7];
   ULONG Status;
-  /* ---- DPC 状态 ----
-     PatchGuard 查询会实时重跑一次 DPC 扫描（只分类不摘除），因此查询返回
-     的 DpcFound 是"当前挂在队列上的 PG 嫌疑 DPC 数量"；
-     禁用操作则回填实际摘除结果。 */
-  ULONG DpcFound;     /* 当前找到的 PG 嫌疑 DPC 数量 */
-  ULONG DpcScanned;   /* 扫描/解码的 DPC 总数 */
-  ULONG DpcCancelled; /* 实际摘除数（仅禁用后有效） */
-  ULONG DpcStatus;    /* 0 = 成功；非 0 为 NTSTATUS 摘要 */
+  /* ---- DPC 状�?----
+     PatchGuard 查询会实时重跑一�?DPC 扫描（只分类不摘除），因此查询返�?
+     �?DpcFound �?当前挂在队列上的 PG 嫌疑 DPC 数量"�?
+     禁用操作则回填实际摘除结果�?*/
+  ULONG DpcFound;     /* 当前找到�?PG 嫌疑 DPC 数量 */
+  ULONG DpcScanned;   /* 扫描/解码�?DPC 总数 */
+  ULONG DpcCancelled; /* 实际摘除数（仅禁用后有效�?*/
+  ULONG DpcStatus;    /* 0 = 成功；非 0 �?NTSTATUS 摘要 */
 
-  /* ---- 早期 bugcheck 拦截状态（ByePg 式主路径）----
-     该路径反汇编 ntoskrnl!KeBugCheckEx 解析 PG 相关符号，劫持
+  /* ---- 早期 bugcheck 拦截状态（ByePg 式主路径�?---
+     该路径反汇编 ntoskrnl!KeBugCheckEx 解析 PG 相关符号，劫�?
      HalPrivateDispatchTable 建立早期 bugcheck 钩子，在 PG 校验失败触发
-     bugcheck 时恢复被打断的执行流从而"吃掉"蓝屏；不修改 PG 自身状态，
-     可与 KPRCB 上下文清零（辅路径）叠加。 */
+     bugcheck 时恢复被打断的执行流从�?吃掉"蓝屏；不修改 PG 自身状态，
+     可与 KPRCB 上下文清零（辅路径）叠加�?*/
   BOOLEAN InterceptEnabled;      /* 拦截层是否已启用 */
   UCHAR _Pad2[3];
   ULONG InterceptStatus;         /* 启用结果 NTSTATUS */
-  ULONG ResolveStage;            /* PG_RESOLVE_STAGE_* 位组合 */
-  ULONG HalHookMask;             /* PG_HAL_HOOK_* 位组合 */
+  ULONG ResolveStage;            /* PG_RESOLVE_STAGE_* 位组�?*/
+  ULONG HalHookMask;             /* PG_HAL_HOOK_* 位组�?*/
   ULONG HalVersion;              /* HalPrivateDispatchTable.Version */
 
-  /* _KPRCB.Context 在 KPRCB 内的**偏移**（不是地址）。 */
+  /* _KPRCB.Context �?KPRCB 内的**偏移**（不是地址）�?*/
   ULONG KprcbContextOffset;
 
   /* 解析出的关键符号**完整地址**；另配有效标志以区分"地址恰为 0"
-     与"未解析出来"（旧版只回填低 32 位，页对齐地址会被误读成失败）。 */
+     �?未解析出�?（旧版只回填�?32 位，页对齐地址会被误读成失败）�?*/
   ULONG64 KiHardwareTriggerAddr;
   ULONG64 KiBugCheckActiveAddr;
   ULONG64 KiFreezeExecutionLockAddr;
@@ -878,36 +892,57 @@ typedef struct _PG_CONTROL_OUTPUT {
   BOOLEAN KiFreezeLockResolved;
   BOOLEAN AllCriticalResolved;
 
-  /* ---- 拦截运行时计数 ---- */
+  /* ---- 拦截运行时计�?---- */
   ULONG SuppressedCount;         /* 已成功吃掉的 bugcheck 次数 */
-  ULONG FreezeNotifies;          /* 收到的 processor freeze 通知次数 */
-  ULONG BugCheckNotifies;        /* 收到的 bugcheck 通知次数 */
+  ULONG FreezeNotifies;          /* 收到�?processor freeze 通知次数 */
+  ULONG BugCheckNotifies;        /* 收到�?bugcheck 通知次数 */
   ULONG LastBugCheckCode;        /* 最近一次处理的 bugcheck code */
   ULONG _Pad3;
-  ULONG_PTR LastBugCheckRip;     /* 最近一次被打断的 RIP */
+  ULONG_PTR LastBugCheckRip;     /* 最近一次被打断�?RIP */
 
   /* ---- 辅路径审计：清零实际使用的偏移与来源 ----
      PG_OFFSET_SOURCE_DETERMINISTIC（反汇编精确解析）或
-     PG_OFFSET_SOURCE_HEURISTIC（跨核一致性兜底）。 */
-  ULONG ClearOffset;             /* 本次清零实际使用的 KPRCB 偏移 */
+     PG_OFFSET_SOURCE_HEURISTIC（跨核一致性兜底）�?*/
+  ULONG ClearOffset;             /* 本次清零实际使用�?KPRCB 偏移 */
   ULONG OffsetSource;            /* PG_OFFSET_SOURCE_* */
 
-  /* ---- PPN 路径（第三路径）：PG 代码页 NX 化 + #PF 拦截 ---- */
-  BOOLEAN PpnActive;             /* PPN 是否已启用 */
+  /* ---- PPN 路径（第三路径）：PG 代码�?NX �?+ #PF 拦截 ---- */
+  BOOLEAN PpnActive;             /* PPN 是否已启�?*/
   UCHAR _PadPpn[7];
-  ULONG PpnTargetCount;          /* 已 NX 化的 PG 代码页数量 */
+  ULONG PpnTargetCount;          /* �?NX 化的 PG 代码页数�?*/
   ULONG PpnNxFaults;             /* 命中并处理的 NX 取指 #PF 次数 */
   ULONG PpnPassthrough;          /* #PF 透传次数 */
   ULONG PpnStatus;               /* NTSTATUS 摘要 */
-  ULONG64 PpnTargetPages[4];     /* 前 4 个目标页地址（诊断） */
+  ULONG64 PpnTargetPages[4];     /* �?4 个目标页地址（诊断） */
+
+  /* ---- APC 摘除状态（�?DPC 路径对称�?--- */
+  ULONG ApcFound;                /* 当前找到�?PG 嫌疑 APC 数量 */
+  ULONG ApcScanned;              /* 扫描/解码�?APC 总数 */
+  ULONG ApcCancelled;            /* 实际摘除数（仅禁用后有效�?*/
+  ULONG ApcStatus;               /* 0 = 成功；非 0 �?NTSTATUS 摘要 */
+  ULONG CpuTotal;
+  ULONG CpuAttempted;
+  ULONG CpuCleared;
+  ULONG CpuFailed;
+  ULONG ProcessorGroupCount;
+  ULONG ProcessorGroupsCovered;
+  ULONG CompatibilityFlags;
+  ULONG ContextConfidence;
+  ULONG ContextEvidence;
+  ULONG DpcHighConfidenceCount;
+  ULONG DpcLowConfidenceCount;
+  ULONG ApcResolverConfidence;
+  ULONG ApcResolverAnchorCount;
+  ULONG ApcHighConfidenceCount;
+  ULONG ApcLowConfidenceCount;
 } PG_CONTROL_OUTPUT, *PPG_CONTROL_OUTPUT;
 
-/* ---- 辅路径偏移来源（PG_CONTROL_OUTPUT.OffsetSource）---- */
+/* ---- 辅路径偏移来源（PG_CONTROL_OUTPUT.OffsetSource�?--- */
 #define PG_OFFSET_SOURCE_NONE 0u
 #define PG_OFFSET_SOURCE_DETERMINISTIC 1u
 #define PG_OFFSET_SOURCE_HEURISTIC 2u
 
-/* ---- 解析阶段位（PG_CONTROL_OUTPUT.ResolveStage）---- */
+/* ---- 解析阶段位（PG_CONTROL_OUTPUT.ResolveStage�?--- */
 #define PG_RESOLVE_STAGE_KPRCB_CONTEXT 0x01u
 #define PG_RESOLVE_STAGE_DEBUG_IRQL 0x02u
 #define PG_RESOLVE_STAGE_HW_TRIGGER 0x04u
@@ -916,83 +951,160 @@ typedef struct _PG_CONTROL_OUTPUT {
 #define PG_RESOLVE_STAGE_FREEZE_LOCK 0x20u
 #define PG_RESOLVE_STAGE_NT_BASE 0x40u
 
-/* ---- HAL 钩子位（PG_CONTROL_OUTPUT.HalHookMask）---- */
+/* ---- HAL 钩子位（PG_CONTROL_OUTPUT.HalHookMask�?--- */
 #define PG_HAL_HOOK_PREPARE_BUGCHECK 0x1u
 #define PG_HAL_HOOK_NOTIFY_FREEZE 0x2u
 #define PG_HAL_HOOK_TIMER_WATCHDOG 0x4u
 #define PG_HAL_HOOK_RESTORE_HV 0x8u
 
-/* ABI 尺寸守卫：驱动与用户态各自维护一份 PG_CONTROL_OUTPUT 定义，
+/* ABI 尺寸守卫：驱动与用户态各自维护一�?PG_CONTROL_OUTPUT 定义�?
    任何一侧增删字段都会改变结构大小。此处用静态断言把期望大小钉死，
-   让不一致在编译期暴露，而不是在运行时把缓冲区写坏。 */
-static_assert(sizeof(PG_CONTROL_OUTPUT) == 200,
+   让不一致在编译期暴露，而不是在运行时把缓冲区写坏�?*/
+static_assert(sizeof(PG_CONTROL_OUTPUT) == 280,
               "PG_CONTROL_OUTPUT ABI mismatch: sync with "
               "Drivers/Ring0Core/Include/Protocol/Protect.h");
 
 /* ============================================================
    PatchGuard DPC 取消
    ============================================================
-   枚举所有 CPU 的 DPC 队列并解码每个 _KDPC，筛出
+   枚举所�?CPU �?DPC 队列并解码每�?_KDPC，筛�?
    DeferredContext 为非规范指针、且 DeferredRoutine 落在 ntoskrnl
-   映像内的条目（PG 校验 DPC 的典型形态）后从队列摘除。 */
+   映像内的条目（PG 校验 DPC 的典型形态）后从队列摘除�?*/
 
 #define DPC_CANCEL_MAX_ENTRIES 128
 
-#define DPC_CANCEL_FLAG_TRUNCATED 0x1u    /* 样本数组已截断 */
+#define DPC_CANCEL_FLAG_TRUNCATED 0x1u    /* 样本数组已截�?*/
 #define DPC_CANCEL_FLAG_DRY_RUN 0x2u      /* 只分类未摘除 */
 #define DPC_CANCEL_FLAG_SCAN_PARTIAL 0x4u /* 部分 CPU/队列未能扫描 */
-#define DPC_CANCEL_FLAG_SINGLY_LINKED 0x8u /* 观察到 24H2+ 单链表队列 */
-#define DPC_CANCEL_FLAG_DEQUEUE_UNSUPPORTED 0x10u /* 布局不支持摘除 */
+#define DPC_CANCEL_FLAG_SINGLY_LINKED 0x8u /* 观察�?24H2+ 单链表队�?*/
+#define DPC_CANCEL_FLAG_DEQUEUE_UNSUPPORTED 0x10u /* 布局不支持摘�?*/
 #define DPC_CANCEL_FLAG_LIMIT_REACHED 0x20u /* 达到 MaxCancel 上限 */
 
 /* 嫌疑判定依据的位组合 */
-#define DPC_CANCEL_REASON_NONCANONICAL_CONTEXT 0x1u /* Context 非规范 */
-#define DPC_CANCEL_REASON_ROUTINE_IN_NTOS 0x2u      /* Routine 在 ntoskrnl 内 */
-#define DPC_CANCEL_REASON_NULL_CONTEXT 0x4u         /* Context 为 NULL（合法，不作为嫌疑） */
-#define DPC_CANCEL_REASON_ROUTINE_OUTSIDE 0x8u      /* Routine 不在 ntoskrnl 内 */
+#define DPC_CANCEL_REASON_NONCANONICAL_CONTEXT 0x1u /* Context 非规�?*/
+#define DPC_CANCEL_REASON_ROUTINE_IN_NTOS 0x2u      /* Routine �?ntoskrnl �?*/
+#define DPC_CANCEL_REASON_NULL_CONTEXT 0x4u         /* Context �?NULL（合法，不作为嫌疑） */
+#define DPC_CANCEL_REASON_ROUTINE_OUTSIDE 0x8u      /* Routine 不在 ntoskrnl �?*/
 #define DPC_CANCEL_REASON_ROUTINE_INVALID 0x10u     /* Routine 不是内核地址 */
-#define DPC_CANCEL_REASON_CANCELLED 0x20u           /* 已成功摘除 */
+#define DPC_CANCEL_REASON_CANCELLED 0x20u           /* 已成功摘�?*/
 #define DPC_CANCEL_REASON_DEQUEUE_FAILED 0x40u      /* 判定为嫌疑但摘除失败 */
 
 typedef struct _DPC_CANCEL_ENTRY {
   ULONG Cpu;          /* 所属队列的 CPU */
-  ULONG Flags;        /* DPC_CANCEL_REASON_* 位组合 */
+  ULONG Flags;        /* DPC_CANCEL_REASON_* 位组�?*/
   ULONG_PTR DpcObject;
   ULONG_PTR Routine;
   ULONG_PTR Context;
   ULONG_PTR QueueHead; /* 所在队列头地址 */
+  ULONG Confidence;
+  ULONG Evidence;
 } DPC_CANCEL_ENTRY, *PDPC_CANCEL_ENTRY;
 
-static_assert(sizeof(DPC_CANCEL_ENTRY) == 40, "DPC_CANCEL_ENTRY ABI mismatch");
+static_assert(sizeof(DPC_CANCEL_ENTRY) == 48, "DPC_CANCEL_ENTRY ABI mismatch");
 
 typedef struct _DPC_CANCEL_INPUT {
-  ULONG DryRun;    /* 非 0：只枚举分类，不实际摘除 */
-  ULONG MaxCancel; /* 最多摘除多少个；0 视为 DPC_CANCEL_MAX_ENTRIES */
+  ULONG DryRun;    /* �?0：只枚举分类，不实际摘除 */
+  ULONG MaxCancel; /* 最多摘除多少个�? 视为 DPC_CANCEL_MAX_ENTRIES */
 } DPC_CANCEL_INPUT, *PDPC_CANCEL_INPUT;
 
 typedef struct _DPC_CANCEL_OUTPUT {
-  ULONG Scanned;      /* 成功解码并检查的 DPC 数 */
-  ULONG Suspects;     /* 同时满足两个条件的 DPC 数 */
-  ULONG Cancelled;    /* 实际摘除数 */
-  ULONG NonCanonical; /* Context 为非规范指针的数量 */
+  ULONG Scanned;      /* 成功解码并检查的 DPC �?*/
+  ULONG Suspects;     /* 同时满足两个条件�?DPC �?*/
+  ULONG Cancelled;    /* 实际摘除�?*/
+  ULONG NonCanonical; /* Context 为非规范指针的数�?*/
   ULONG RoutineInNtos;/* Routine 落在 ntoskrnl 内的数量 */
-  ULONG CpuCount;     /* 参与扫描的 CPU 数 */
-  ULONG TimerSource;  /* 1 = 走通 TimerTable；0 = 退回 PRCB 窗口扫描 */
-  ULONG Flags;        /* DPC_CANCEL_FLAG_* 位组合 */
+  ULONG CpuCount;     /* 参与扫描�?CPU �?*/
+  ULONG TimerSource;  /* 1 = 走�?TimerTable�? = 退�?PRCB 窗口扫描 */
+  ULONG Flags;        /* DPC_CANCEL_FLAG_* 位组�?*/
   ULONG NtoskrnlBaseLow; /* 诊断：ntoskrnl 基址（低 32 位） */
   ULONG NtoskrnlSize;
   ULONG EntryCount;
   ULONG _Pad0;
   DPC_CANCEL_ENTRY Entries[DPC_CANCEL_MAX_ENTRIES];
   ULONG Status;
+  ULONG HighConfidenceCount;
+  ULONG LowConfidenceCount;
 } DPC_CANCEL_OUTPUT, *PDPC_CANCEL_OUTPUT;
 
-/* 调试状态查询输出：仅包含钩子安装状态与 IsDebuggerEnabled 内核变量值 */
+/* ============================================================
+   PatchGuard APC 取消
+   ============================================================
+   遍历所有内核线程的 KernelMode APC 队列，筛�?
+   KernelRoutine == ntoskrnl!KiDispatchCallout �?RundownRoutine == NULL
+   的条目（PG 跨核投递的校验 APC）后从队列摘除�?*/
+
+#define APC_CANCEL_MAX_ENTRIES 128
+
+#define APC_CANCEL_FLAG_TRUNCATED 0x1u           /* 样本数组已截�?*/
+#define APC_CANCEL_FLAG_DRY_RUN 0x2u             /* 只分类未摘除 */
+#define APC_CANCEL_FLAG_SCAN_PARTIAL 0x4u        /* 部分线程/队列未能扫描 */
+#define APC_CANCEL_FLAG_DEQUEUE_UNSUPPORTED 0x8u /* 布局不支持摘�?*/
+#define APC_CANCEL_FLAG_LIMIT_REACHED 0x10u      /* 达到 MaxCancel 上限 */
+#define APC_CANCEL_FLAG_ROUTINE_UNRESOLVED 0x20u /* KiDispatchCallout 未解�?*/
+
+#define APC_CANCEL_REASON_KERNELROUTINE_MATCH 0x1u /* KernelRoutine == KiDispatchCallout */
+#define APC_CANCEL_REASON_RUNDOWN_NULL 0x2u        /* RundownRoutine == NULL */
+#define APC_CANCEL_REASON_ROUTINE_INVALID 0x4u     /* KernelRoutine 不是内核地址 */
+#define APC_CANCEL_REASON_ROUTINE_IN_NTOS 0x8u     /* KernelRoutine 在 ntoskrnl 内 */
+#define APC_CANCEL_REASON_CANCELLED 0x10u          /* 已成功摘链 */
+#define APC_CANCEL_REASON_DEQUEUE_FAILED 0x20u     /* 判定为嫌疑但摘除失败 */
+#define APC_CANCEL_REASON_NORMAL_APC 0x40u         /* 普通内核 APC（清单条目，非嫌疑） */
+#define APC_CANCEL_REASON_TEST_APC 0x80u           /* 本驱动注入的标记 APC */
+#define APC_CANCEL_REASON_CAPTURED 0x100u          /* 来自投递捕获（hook）的记录 */
+#define APC_CANCEL_REASON_BLOCKED 0x200u           /* 被阻断的 PG APC 投递 */
+
+typedef struct _APC_CANCEL_ENTRY {
+  ULONG ThreadId;      /* 所属线�?TID */
+  ULONG Cpu;           /* 保留：所属队�?CPU（当前恒 0�?*/
+  ULONG Flags;         /* APC_CANCEL_REASON_* 位组�?*/
+  ULONG _Pad0;
+  ULONG_PTR ApcObject; /* _KAPC 地址 */
+  ULONG_PTR KernelRoutine;
+  ULONG_PTR RundownRoutine;
+  ULONG_PTR Context;   /* _KAPC 携带的上下文 */
+  ULONG_PTR QueueHead; /* 所�?APC 队列头地址 */
+  ULONG Confidence;
+  ULONG Evidence;
+} APC_CANCEL_ENTRY, *PAPC_CANCEL_ENTRY;
+
+static_assert(sizeof(APC_CANCEL_ENTRY) == 64, "APC_CANCEL_ENTRY ABI mismatch");
+
+typedef struct _APC_CANCEL_INPUT {
+  ULONG DryRun;    /* 非 0：只枚举分类，不实际摘除 */
+  ULONG MaxCancel; /* 最多摘除多少个；0 视为 APC_CANCEL_MAX_ENTRIES */
+  ULONG_PTR TargetApcObject; /* non-zero: target a single APC */
+  ULONG     TargetThreadId;  /* optional thread filter */
+  ULONG     _Pad1;
+} APC_CANCEL_INPUT, *PAPC_CANCEL_INPUT;
+static_assert(sizeof(APC_CANCEL_INPUT) == 24, "APC_CANCEL_INPUT ABI mismatch");
+
+typedef struct _APC_CANCEL_OUTPUT {
+  ULONG Scanned;       /* 成功解码并检查的 APC �?*/
+  ULONG Suspects;      /* 同时满足两个条件�?APC �?*/
+  ULONG Cancelled;     /* 实际摘除�?*/
+  ULONG Matched;       /* KernelRoutine == KiDispatchCallout 的数�?*/
+  ULONG RundownNull;   /* RundownRoutine == NULL 的数�?*/
+  ULONG ThreadCount;   /* 参与扫描的线程数 */
+  ULONG Resolved;      /* 1 = KiDispatchCallout 已解�?*/
+  ULONG Flags;         /* APC_CANCEL_FLAG_* 位组�?*/
+  ULONG NtoskrnlBaseLow; /* 诊断：ntoskrnl 基址（低 32 位） */
+  ULONG NtoskrnlSize;
+  ULONG EntryCount;
+  ULONG ApcListHeadOffset; /* 诊断：_KTHREAD.ApcListHead[KernelMode] 偏移 */
+  APC_CANCEL_ENTRY Entries[APC_CANCEL_MAX_ENTRIES];
+  ULONG Status;
+  ULONG ResolverConfidence;
+  ULONG ResolverAnchorCount;
+  ULONG HighConfidenceCount;
+  ULONG LowConfidenceCount;
+} APC_CANCEL_OUTPUT, *PAPC_CANCEL_OUTPUT;
+
+/* 调试状态查询输出：仅包含钩子安装状态与 IsDebuggerEnabled 内核变量�?*/
 typedef struct _DEBUG_STATE_OUTPUT {
-  BOOLEAN HookInstalled;      /* KdSystemDebugControl 跳板是否已安装（1=拦截调试请求） */
-  BOOLEAN IsDebuggerEnabled;  /* ntoskrnl KdDebuggerEnabled 导出变量的当前值（1=已连接调试器） */
+  BOOLEAN HookInstalled;      /* KdSystemDebugControl 跳板是否已安装（1=拦截调试请求�?*/
+  BOOLEAN IsDebuggerEnabled;  /* ntoskrnl KdDebuggerEnabled 导出变量的当前值（1=已连接调试器�?*/
   UCHAR _Pad[6];
-  ULONG Status;               /* 0 = 查询成功；非 0 为 NTSTATUS */
+  ULONG Status;               /* 0 = 查询成功；非 0 �?NTSTATUS */
 } DEBUG_STATE_OUTPUT, *PDEBUG_STATE_OUTPUT;
 
 typedef struct _SYSTEM_TABLES_OUTPUT {
@@ -1032,13 +1144,13 @@ typedef struct _SYSTEM_TABLES_OUTPUT {
   ULONG64 MsrFmask;
   ULONG64 MsrEfer;
 
-  /* ---- 诊断（与驱动 SystemTable.h 同步追加） ---- */
+  /* ---- 诊断（与驱动 SystemTable.h 同步追加�?---- */
   ULONG     PiDdbLeaScore;
   ULONG     PiDdbSigScore;
   ULONG     PiDdbLeaCandidates;
   ULONG     PiDdbSigCandidates;
   ULONG_PTR PiDdbSigBest;
-  /* 链式表发现诊断；实际布局通过结构校验判定，不绑定系统版本。 */
+  /* 链式表发现诊断；实际布局通过结构校验判定，不绑定系统版本�?*/
   ULONG     PiDdbListScore;
   ULONG     PiDdbListCandidates;
 } SYSTEM_TABLES_OUTPUT, *PSYSTEM_TABLES_OUTPUT;
@@ -1078,6 +1190,11 @@ typedef struct _THREAD_ENUM_INPUT {
   ULONG Reserved;
 } THREAD_ENUM_INPUT, *PTHREAD_ENUM_INPUT;
 
+#define THREAD_FIELD_OK         0u
+#define THREAD_FIELD_LOOKUP     1u
+#define THREAD_FIELD_FAULT      2u
+#define THREAD_FIELD_NOT_APPLIC 3u
+
 typedef struct _THREAD_ENUM_ENTRY {
   ULONG Index;
   ULONG ThreadId;
@@ -1088,7 +1205,9 @@ typedef struct _THREAD_ENUM_ENTRY {
   ULONG_PTR UserTime;
   ULONG_PTR KernelTime;
   UCHAR ApcQueueable;
-  UCHAR _Pad[7];
+  UCHAR PrevModeStatus;
+  UCHAR ApcStatus;
+  UCHAR _Pad[5];
   ULONG Priority;
   ULONG State;
 } THREAD_ENUM_ENTRY, *PTHREAD_ENUM_ENTRY;
@@ -1147,7 +1266,7 @@ typedef struct _DPC_ENUM_OUTPUT {
   ULONG CpuCount;
   DPC_ENUM_ENTRY Entries[DPC_MAX_ENTRIES];
 
-  /* ---- 诊断（与驱动 SystemTable.h 同步追加） ---- */
+  /* ---- 诊断（与驱动 SystemTable.h 同步追加�?---- */
   ULONG DpcScanWindow;
   ULONG DpcPrcbCount;
   ULONG DpcCandidateCount;
@@ -1155,13 +1274,13 @@ typedef struct _DPC_ENUM_OUTPUT {
 
   /* ---- TimerTable 路径诊断 ---- */
   ULONG DpcSource;         /* DPC_SOURCE_* */
-  ULONG TimerTableOffset;  /* KPRCB 内偏移，0 表示未定位 */
-  ULONG TimerTableBuckets; /* 实际走到的桶数 */
-  ULONG TimerTableEntryOffset; /* 桶头在 KTIMER_TABLE_ENTRY 内的偏移 */
+  ULONG TimerTableOffset;  /* KPRCB 内偏移，0 表示未定�?*/
+  ULONG TimerTableBuckets; /* 实际走到的桶�?*/
+  ULONG TimerTableEntryOffset; /* 桶头�?KTIMER_TABLE_ENTRY 内的偏移 */
   ULONG TimerDecodedCount;
   ULONG TimerDecodeFailCount;
-  ULONG PrcbResolveSource; /* 1=导出数组，2=经当前 CPU 校验的访问器引用 */
-  ULONG KeyResolveSource;  /* 1=从已验证的编码指令提取，0=未取到 */
+  ULONG PrcbResolveSource; /* 1=导出数组�?=经当�?CPU 校验的访问器引用 */
+  ULONG KeyResolveSource;  /* 1=从已验证的编码指令提取，0=未取�?*/
   union { ULONG SnapshotFlags; ULONG _PadKeys; }; /* Reserved slot; ABI unchanged. */
   ULONG_PTR KiWaitNeverAddress;
   ULONG_PTR KiWaitAlwaysAddress;
@@ -1192,7 +1311,7 @@ typedef struct _PIDDB_CACHE_ENUM_OUTPUT {
   ULONG_PTR TableAddress;
   PIDDB_CACHE_ENTRY_INFO Entries[PIDDB_CACHE_MAX_ENTRIES];
 
-  /* ---- 诊断（发现路径得分，与驱动 SystemTable.h 同步追加） ---- */
+  /* ---- 诊断（发现路径得分，与驱�?SystemTable.h 同步追加�?---- */
   ULONG LeaScore;
   ULONG ListScore;
   ULONG SigScore;
@@ -1202,7 +1321,7 @@ typedef struct _PIDDB_CACHE_ENUM_OUTPUT {
   ULONG_PTR SigBest;
 } PIDDB_CACHE_ENUM_OUTPUT, *PPIDDB_CACHE_ENUM_OUTPUT;
 
-/* ---- 全局热键枚举（IOCTL 0x86D，与驱动 SystemTable.h 同步） ---- */
+/* ---- 全局热键枚举（IOCTL 0x86D，与驱动 SystemTable.h 同步�?---- */
 #define HOTKEY_MAX_ENTRIES 256
 #define IOCTL_REMOVE_HOTKEY CTL_CODE(0x8000, 0x88B, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
@@ -1240,7 +1359,7 @@ typedef struct _HOTKEY_ENUM_OUTPUT {
   ULONG_PTR TableAddress;
   HOTKEY_ENUM_ENTRY Entries[HOTKEY_MAX_ENTRIES];
 
-  /* ---- 诊断（与驱动 SystemTable.h 同步追加） ---- */
+  /* ---- 诊断（与驱动 SystemTable.h 同步追加�?---- */
   ULONG_PTR Win32kBase;
   ULONG CandidateCount;
   ULONG AcceptedCount;
@@ -1478,6 +1597,12 @@ static_assert(sizeof(INVENTORY_CAPABILITIES_OUTPUT) == 80,
 #define WINDOW_FLAG_MDI (1ul << 11)
 #define WINDOW_FLAG_APPWINDOW (1ul << 12)
 #define WINDOW_FLAG_ACTIVE (1ul << 13)
+#define WINDOW_FLAG_NOACTIVATE (1ul << 14)
+#define WINDOW_FLAG_DISABLED_CLOSE (1ul << 15)
+#define WINDOW_FLAG_CLOAKED (1ul << 16)
+#define WINDOW_FLAG_SKIPANIMATION (1ul << 17)
+#define WINDOW_FLAG_SKIPTHEME (1ul << 18)
+#define WINDOW_FLAG_DESTROYED (1ul << 19)
 
 typedef struct _KERNEL_WINDOW_ENUM_ENTRY {
   UINT64 Hwnd;
@@ -1594,7 +1719,7 @@ static_assert(sizeof(FIREWALL_RULE_ENTRY) == 304,
 static_assert(sizeof(FIREWALL_RULE_OUTPUT) == 38928,
               "Firewall rule output ABI mismatch");
 
-// ---- 内核特征码扫描 (IOCTL 0x87F) ----
+// ---- 内核特征码扫�?(IOCTL 0x87F) ----
 #define IOCTL_KERNEL_PATTERN_SCAN                                               \
   CTL_CODE(0x8000, 0x87F, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
 
@@ -1631,7 +1756,7 @@ static_assert(sizeof(KERNEL_PATTERN_SCAN_HIT) == 152,
 static_assert(sizeof(KERNEL_PATTERN_SCAN_OUTPUT) == 9744,
               "Kernel pattern scan output ABI mismatch");
 
-// ---- 可疑（无文件映射的可执行）内存扫描 (IOCTL 0x880) ----
+// ---- 可疑（无文件映射的可执行）内存扫�?(IOCTL 0x880) ----
 #define IOCTL_SUSPICIOUS_MEMORY_SCAN                                            \
   CTL_CODE(0x8000, 0x880, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
 
@@ -1667,7 +1792,7 @@ static_assert(sizeof(SUSPECT_MEMORY_REGION) == 32,
 static_assert(sizeof(SUSPECT_MEMORY_OUTPUT) == 8208,
               "Suspect memory output ABI mismatch");
 
-/* ---- 内存区域控制：保护 / 分配 / 释放 (IOCTL 0x881-0x882) ---- */
+/* ---- 内存区域控制：保�?/ 分配 / 释放 (IOCTL 0x881-0x882) ---- */
 #define IOCTL_MEMORY_PROTECT                                                    \
   CTL_CODE(0x8000, 0x881, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_MEMORY_ALLOC_FREE                                                 \
@@ -1726,6 +1851,73 @@ typedef struct _WINDOW_PROTECT_INPUT {
 typedef struct _INJECTION_PROTECT_INPUT {
   ULONG ProcessId;
 } INJECTION_PROTECT_INPUT, *PINJECTION_PROTECT_INPUT;
+
+/* ---- APC 投递捕获 / 测试注入（与驱动 Protect.h 对应）---- */
+#define APC_CAPTURE_MAX_ENTRIES 4096
+#define APC_CAPTURE_FLAG_ENABLED 0x1u
+#define APC_CAPTURE_FLAG_TRUNCATED 0x2u
+#define APC_CAPTURE_FLAG_HOOK_EXPORT_OK 0x4u
+#define APC_CAPTURE_FLAG_HOOK_INTERNAL_OK 0x8u
+
+typedef struct _APC_CAPTURE_ENTRY {
+  ULONG TargetThreadId;
+  ULONG ApcMode;
+  ULONG Flags;
+  ULONG _Pad0;
+  ULONG_PTR ApcObject;
+  ULONG_PTR KernelRoutine;
+  ULONG_PTR RundownRoutine;
+  ULONG_PTR NormalRoutine;
+  ULONG_PTR SystemArgument1;
+  ULONG_PTR SystemArgument2;
+  ULONG64 TimeStamp;
+} APC_CAPTURE_ENTRY, *PAPC_CAPTURE_ENTRY;
+static_assert(sizeof(APC_CAPTURE_ENTRY) == 72, "APC_CAPTURE_ENTRY ABI mismatch");
+
+typedef struct _APC_CAPTURE_CTL_INPUT {
+  ULONG Enable;
+  ULONG Clear;
+} APC_CAPTURE_CTL_INPUT, *PAPC_CAPTURE_CTL_INPUT;
+
+typedef struct _APC_CAPTURE_CTL_OUTPUT {
+  ULONG Enabled;
+  ULONG Flags;
+  ULONG Captured;
+  ULONG Dropped;
+  ULONG Pending;
+  ULONG Capacity;
+  ULONG HookExportOk;
+  ULONG HookInternalOk;
+  ULONG Blocked;
+  ULONG BlockPgEnabled;
+} APC_CAPTURE_CTL_OUTPUT, *PAPC_CAPTURE_CTL_OUTPUT;
+
+typedef struct _APC_CAPTURE_OUTPUT {
+  ULONG Enabled;
+  ULONG Flags;
+  ULONG Captured;
+  ULONG Dropped;
+  ULONG Capacity;
+  ULONG EntryCount;
+  ULONG Blocked;
+  ULONG BlockPgEnabled;
+  APC_CAPTURE_ENTRY Entries[1];
+} APC_CAPTURE_OUTPUT, *PAPC_CAPTURE_OUTPUT;
+
+typedef struct _APC_TEST_INPUT {
+  ULONG TargetThreadId;
+  ULONG Count;
+  ULONG StallMicros;
+  ULONG _Pad0;
+} APC_TEST_INPUT, *PAPC_TEST_INPUT;
+
+typedef struct _APC_TEST_OUTPUT {
+  ULONG Requested;
+  ULONG Injected;
+  ULONG TargetThreadId;
+  ULONG _Pad0;
+  ULONG64 TargetApcObjects[8];
+} APC_TEST_OUTPUT, *PAPC_TEST_OUTPUT;
 
 typedef struct _HANDLE_CLOSE_INPUT {
   ULONG ProcessId;
@@ -1846,7 +2038,7 @@ BOOLEAN ShouldRetryOpenDeviceError(DWORD Error) {
 }
 
 // MaxAttempts=1 用于轮询路径：设备节点不存在时立即失败，避免每次 IOCTL
-// 阻塞在重试循环里。需要等待设备出现的启动流程显式传更大的值。
+// 阻塞在重试循环里。需要等待设备出现的启动流程显式传更大的值�?
 BOOLEAN OpenDeviceInternal(BOOLEAN Silent, int MaxAttempts) {
   DWORD LastError = ERROR_FILE_NOT_FOUND;
   for (int Attempt = 0; Attempt < MaxAttempts; ++Attempt) {
@@ -1881,8 +2073,8 @@ VOID CloseDevice() {
 BOOLEAN SendIoctl(DWORD IoControlCode, PVOID InputBuffer, DWORD InputSize) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   std::lock_guard<std::mutex> Lock(G_DeviceMutex);
-  // 轮询路径静默快速失败：驱动未加载时不重试、不刷控制台，
-  // 错误码通过 G_LastAegisCoreError 返回给调用方。
+  // 轮询路径静默快速失败：驱动未加载时不重试、不刷控制台�?
+  // 错误码通过 G_LastAegisCoreError 返回给调用方�?
   if (!OpenDeviceSilent()) {
     G_LastAegisCoreError = GetLastError();
     return FALSE;
@@ -2485,9 +2677,22 @@ BOOLEAN EnumerateThreadsAll(PTHREAD_ENUM_OUTPUT Output, ULONG Cursor) {
   Input.Version = THREAD_ENUM_VERSION;
   Input.Cursor = Cursor;
   DWORD BytesReturned = 0;
-  return SendIoctlWithOutput(IOCTL_ENUM_THREADS_ALL, &Input, sizeof(Input),
-                             Output, sizeof(THREAD_ENUM_OUTPUT),
-                             &BytesReturned);
+  if (!SendIoctlWithOutput(IOCTL_ENUM_THREADS_ALL, &Input, sizeof(Input),
+                           Output, sizeof(THREAD_ENUM_OUTPUT), &BytesReturned))
+    return FALSE;
+  if (BytesReturned < offsetof(THREAD_ENUM_OUTPUT, Entries) ||
+      BytesReturned > sizeof(*Output) ||
+      Output->Version != THREAD_ENUM_VERSION ||
+      Output->Count > THREAD_ENUM_BATCH_SIZE ||
+      Output->Count > (BytesReturned - offsetof(THREAD_ENUM_OUTPUT, Entries)) /
+                          sizeof(THREAD_ENUM_ENTRY) ||
+      (Output->NextCursor != 0 &&
+       (Output->Count == 0 || Output->NextCursor <= Cursor))) {
+    ZeroMemory(Output, sizeof(*Output));
+    G_LastAegisCoreError = ERROR_INVALID_DATA;
+    return FALSE;
+  }
+  return TRUE;
 }
 
 BOOLEAN SuspendThreadKernel(ULONG ThreadId) {
@@ -3116,7 +3321,7 @@ BOOLEAN EnumerateHotkeys(PHOTKEY_ENUM_OUTPUT Output) {
 BOOLEAN RemoveHotkey(const HOTKEY_ENUM_ENTRY& Entry, NTSTATUS* KernelStatus, DWORD* ErrorCode) {
   *KernelStatus = static_cast<NTSTATUS>(0xC0000001u);
   *ErrorCode = ERROR_SUCCESS;
-  // 初始化当前后台线程的 USER 上下文，再同步发起 IOCTL。
+  // 初始化当前后台线程的 USER 上下文，再同步发�?IOCTL�?
   MSG Message{};
   PeekMessageW(&Message, nullptr, 0, 0, PM_NOREMOVE);
   HOTKEY_REMOVE_INPUT Input{sizeof(HOTKEY_REMOVE_INPUT), 1, Entry};
@@ -3288,8 +3493,8 @@ inline bool QueryNamedDriverRecords(const std::wstring &DriverName,
                                       INVENTORY_LIST_HEADER *Header = nullptr) {
   INVENTORY_QUERY_INPUT Request{};
   Request.MaxEntries = INVENTORY_MAX_PAGE_RECORDS;
-  // 内核查询接受驱动对象名，但会自行补上 "\\Driver\\" 命名空间前缀。
-  // 调用方可能传服务名或已限定的对象路径，因此这里统一做规范化。
+  // 内核查询接受驱动对象名，但会自行补上 "\\Driver\\" 命名空间前缀�?
+  // 调用方可能传服务名或已限定的对象路径，因此这里统一做规范化�?
   std::wstring Normalized = DriverName;
   while (!Normalized.empty() &&
          (Normalized.front() == L' ' || Normalized.front() == L'\t'))
@@ -3423,7 +3628,7 @@ inline bool QueryAdvancedRecords(ULONG Kind, ULONG ProcessId,
                                 Header);
 }
 
-// PTE 页表遍历:TargetId=ADVANCED_KIND_PTE,虚拟地址经 Cursor 传入。
+// PTE 页表遍历:TargetId=ADVANCED_KIND_PTE,虚拟地址�?Cursor 传入�?
 inline bool QueryPteWalk(ULONG ProcessId, ULONG64 Address,
                           std::vector<INVENTORY_RECORD> &Records,
                           INVENTORY_LIST_HEADER *Header = nullptr) {
@@ -3581,7 +3786,7 @@ BOOLEAN HideDriverKernelCid(const WCHAR *ServiceName,
   return Result.NtStatus == 0;
 }
 
-// PreviousMode：0 = KernelMode，1 = UserMode
+// PreviousMode�? = KernelMode�? = UserMode
 BOOLEAN SetProcessPreviousMode(ULONG ProcessId, UCHAR PreviousMode = 0) {
   if (PreviousMode > 1) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -3810,8 +4015,8 @@ BOOLEAN DisablePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
   return Success;
 }
 
-/* 启用 PPN 路径（第三路径）：把 PG 校验例程所在可执行页置 NX 并 Hook #PF。
-   与 DisablePatchGuard 的主/辅路径独立，可单独调用。 */
+/* 启用 PPN 路径（第三路径）：把 PG 校验例程所在可执行页置 NX �?Hook #PF�?
+   �?DisablePatchGuard 的主/辅路径独立，可单独调用�?*/
 BOOLEAN EnablePPN(PPG_CONTROL_OUTPUT Output = NULL) {
   PG_CONTROL_OUTPUT Result = {};
 
@@ -3849,9 +4054,9 @@ BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output) {
   return Success;
 }
 
-/* 取消 PatchGuard 相关的 DPC：驱动侧枚举所有 DPC 队列并解码，摘除
-   DeferredContext 为非规范指针且 DeferredRoutine 落在 ntoskrnl 内的条目。
-   DryRun 非 0 时只分类不摘除（用于先摸底确认命中是否合理）。 */
+/* 取消 PatchGuard 相关�?DPC：驱动侧枚举所�?DPC 队列并解码，摘除
+   DeferredContext 为非规范指针�?DeferredRoutine 落在 ntoskrnl 内的条目�?
+   DryRun �?0 时只分类不摘除（用于先摸底确认命中是否合理）�?*/
 BOOLEAN CancelPatchGuardDpcs(PDPC_CANCEL_OUTPUT Output = NULL,
                              BOOLEAN DryRun = FALSE,
                              ULONG MaxCancel = 0) {
@@ -3873,6 +4078,134 @@ BOOLEAN CancelPatchGuardDpcs(PDPC_CANCEL_OUTPUT Output = NULL,
     return FALSE;
   }
 
+  return Success;
+}
+
+/* 取消 PatchGuard 相关�?APC：遍历所有内核线程的 KernelMode APC 队列�?
+   摘除 KernelRoutine == ntoskrnl!KiDispatchCallout �?RundownRoutine == NULL
+   的条目。DryRun �?0 时只分类不摘除（用于先摸底确认命中是否合理）�?*/
+BOOLEAN CancelPatchGuardApcs(PAPC_CANCEL_OUTPUT Output = NULL,
+                             BOOLEAN DryRun = FALSE,
+                             ULONG MaxCancel = 0,
+                             ULONG_PTR TargetApcObject = 0,
+                             ULONG TargetThreadId = 0) {
+  APC_CANCEL_INPUT Input = {};
+  Input.DryRun = DryRun ? 1u : 0u;
+  Input.MaxCancel = MaxCancel;
+  Input.TargetApcObject = TargetApcObject;
+  Input.TargetThreadId = TargetThreadId;
+
+  APC_CANCEL_OUTPUT Result = {};
+  DWORD BytesReturned = 0;
+  BOOLEAN Success =
+      SendIoctlWithOutput(IOCTL_CANCEL_PATCHGUARD_APC, &Input, sizeof(Input),
+                          &Result, sizeof(Result), &BytesReturned);
+
+  if (Output != NULL)
+    *Output = Result;
+
+  if (Success && Result.Status != 0) {
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
+    return FALSE;
+  }
+
+  return Success;
+}
+
+/* 列出所有内核 APC（只读清单，不摘链）。与 CancelPatchGuardApcs 走不同的
+   IOCTL（IOCTL_ENUM_APC），结果含普通 APC 条目。 */
+BOOLEAN EnumerateApcs(PAPC_CANCEL_OUTPUT Output = NULL,
+                      ULONG_PTR TargetApcObject = 0,
+                      ULONG TargetThreadId = 0) {
+  APC_CANCEL_INPUT Input = {};
+  Input.DryRun = 1; /* 只读：不摘除 */
+  Input.TargetApcObject = TargetApcObject;
+  Input.TargetThreadId = TargetThreadId;
+
+  APC_CANCEL_OUTPUT Result = {};
+  DWORD BytesReturned = 0;
+  BOOLEAN Success =
+      SendIoctlWithOutput(IOCTL_ENUM_APC, &Input, sizeof(Input), &Result,
+                          sizeof(Result), &BytesReturned);
+
+  if (Output != NULL)
+    *Output = Result;
+
+  if (Success && Result.Status != 0) {
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
+    return FALSE;
+  }
+
+  return Success;
+}
+
+/* 查询 APC 捕获状态（不改变 Enable/Clear）。 */
+BOOLEAN ApcCaptureQuery(PAPC_CAPTURE_CTL_OUTPUT Output = NULL) {
+  APC_CAPTURE_CTL_OUTPUT Result = {};
+  DWORD BytesReturned = 0;
+  BOOLEAN Success = SendIoctlWithOutput(
+      IOCTL_APC_CAPTURE_CTL, NULL, 0, &Result, sizeof(Result), &BytesReturned);
+
+  if (Output != NULL)
+    *Output = Result;
+  return Success;
+}
+
+/* 设置 APC 捕获：Enable=true 启用 / false 停用；Clear=true 顺带清空缓冲。 */
+BOOLEAN ApcCaptureCtl(BOOLEAN Enable, BOOLEAN Clear,
+                      PAPC_CAPTURE_CTL_OUTPUT Output = NULL) {
+  APC_CAPTURE_CTL_INPUT Input = {};
+  Input.Enable = Enable ? 1u : 0u;
+  Input.Clear = Clear ? 1u : 0u;
+
+  APC_CAPTURE_CTL_OUTPUT Result = {};
+  DWORD BytesReturned = 0;
+  BOOLEAN Success = SendIoctlWithOutput(
+      IOCTL_APC_CAPTURE_CTL, &Input, sizeof(Input), &Result, sizeof(Result),
+      &BytesReturned);
+
+  if (Output != NULL)
+    *Output = Result;
+  return Success;
+}
+
+/* 读取 APC 捕获环形缓冲到调用方缓冲区（大小由 BufferSize 决定）。
+   Output 指向的缓冲区至少应有 sizeof(APC_CAPTURE_OUTPUT) 大。 */
+BOOLEAN ApcCaptureRead(PAPC_CAPTURE_OUTPUT Output, DWORD BufferSize,
+                       PDWORD BytesReturned = NULL) {
+  if (Output == NULL || BufferSize < sizeof(APC_CAPTURE_OUTPUT)) {
+    G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
+    return FALSE;
+  }
+  DWORD LocalReturned = 0;
+  BOOLEAN Success = SendIoctlWithOutput(IOCTL_APC_CAPTURE_READ, NULL, 0, Output,
+                                        BufferSize, &LocalReturned);
+  if (BytesReturned != NULL)
+    *BytesReturned = LocalReturned;
+  return Success;
+}
+
+/* 主动注入标记 APC（验证扫描器）。 */
+BOOLEAN InjectTestApc(PAPC_TEST_OUTPUT Output = NULL, ULONG TargetThreadId = 0,
+                      ULONG Count = 1, ULONG StallMicros = 100) {
+  APC_TEST_INPUT Input = {};
+  Input.TargetThreadId = TargetThreadId;
+  Input.Count = Count;
+  Input.StallMicros = StallMicros;
+
+  APC_TEST_OUTPUT Result = {};
+  DWORD BytesReturned = 0;
+  BOOLEAN Success = SendIoctlWithOutput(IOCTL_INJECT_TEST_APC, &Input,
+                                        sizeof(Input), &Result, sizeof(Result),
+                                        &BytesReturned);
+
+  if (Output != NULL)
+    *Output = Result;
+
+  if (Success && Result.Injected == 0) {
+    G_LastAegisCoreError = ERROR_NOT_FOUND;
+    return FALSE;
+  }
   return Success;
 }
 
@@ -3978,7 +4311,7 @@ FORCEINLINE BOOL WindowRemoveTopmost(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0) {
                                0, 0, Flags);
 }
 
-/* ---- 命令行 ---- */
+/* ---- 命令�?---- */
 BOOL GetProcessCommandLine(ULONG ProcessId, PWCHAR Buffer, ULONG MaxLen) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (Buffer == NULL || MaxLen < 2) {
@@ -4032,7 +4365,7 @@ FORCEINLINE BOOL ServiceDelete(PCWSTR Name) {
   return ServiceKernelOp(Name, 4, 0);
 }
 
-/* ---- 注册表 ---- */
+/* ---- 注册�?---- */
 BOOL RegistryKernelOp(PCWSTR KeyPath, ULONG Op, PCWSTR ValueName,
                       ULONG ValueType, PVOID ValueData, ULONG ValueSize,
                       PVOID OutBuf, ULONG OutSize, PULONG Returned) {
@@ -4129,7 +4462,7 @@ BOOL EnumSyncObjectsKernel(PVOID OutBuf, ULONG OutSize, PULONG Count) {
   return Success;
 }
 
-/* ---- 防火墙 ---- */
+/* ---- 防火�?---- */
 BOOL FirewallKernelOpEx(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port,
                         ULONG Protocol, ULONG RemoteIpv4,
                         const UCHAR *RemoteIpv6, ULONG DirectionMask,
@@ -4162,7 +4495,7 @@ BOOL EnumerateFirewallRulesKernel(FIREWALL_RULE_OUTPUT *Output) {
                              sizeof(*Output), &BytesReturned);
 }
 
-/* ---- 内核特征码扫描 ---- */
+/* ---- 内核特征码扫�?---- */
 BOOL KernelPatternScan(PCWSTR TargetModule, PCWSTR PatternText,
                        KERNEL_PATTERN_SCAN_OUTPUT *Output) {
   if (!Output || !PatternText) return FALSE;
@@ -4202,7 +4535,7 @@ BOOL UnprotectWindowKernel(ULONG Pid, ULONG64 Hwnd) {
   return SendIoctl(IOCTL_REMOVE_WINDOW_PROTECT, &Input, sizeof(Input));
 }
 
-/* ---- 注入防护（非 PPL） ---- */
+/* ---- 注入防护（非 PPL�?---- */
 BOOL AddInjectionProtectKernel(ULONG Pid) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   INJECTION_PROTECT_INPUT Input = {Pid};

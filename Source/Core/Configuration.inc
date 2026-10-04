@@ -990,6 +990,10 @@ QString ApplicationStyleSheet(int MaterialOverride) {
             border-radius: {{SMALL_RADIUS}}px;
             gridline-color: {{DIVIDER}};
         }
+        QTreeView, QTreeWidget {
+            alternate-background-color: {{TABLE_ALT_SURFACE}};
+            outline: 0;
+        }
         QListWidget#PayloadShellHostList {
             padding: 6px;
         }

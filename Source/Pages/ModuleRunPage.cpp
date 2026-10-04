@@ -17,12 +17,14 @@ QWidget *CreateModuleRunPage() {
   Modules->setCurrentIndex(0);
   Modules->setMinimumWidth(260);
   auto *Refresh = MakeButton("Refresh");
+  auto *Check = MakeButton("Check");
   auto *Execute = MakeButton("Run", true);
   auto *Stop = MakeButton("Stop");
   Toolbar->addWidget(Categories);
   Toolbar->addWidget(Modules);
   Toolbar->addStretch();
   Toolbar->addWidget(Refresh);
+  Toolbar->addWidget(Check);
   Toolbar->addWidget(Stop);
   Toolbar->addWidget(Execute);
   Layout->addLayout(Toolbar);
@@ -63,17 +65,18 @@ QWidget *CreateModuleRunPage() {
   QObject::connect(OutputButton, &QPushButton::clicked, Page,
                    [Page] { ShowModuleOutputDialog(Page, "Module Output"); });
 
-  const auto PopulateOptions = [Modules, Options, Information, Execute, Stop] {
+  const auto PopulateOptions =
+      [Modules, Options, Information, Check, Execute, Stop] {
     Options->setRowCount(0);
     const QString Path = Modules->currentData().toString();
     ModuleEntry *Entry = FindDllModule(Path);
+    Check->setEnabled(false);
     Execute->setEnabled(false);
     Stop->setEnabled(false);
     if (!Entry) {
       Information->setText("Select a module to configure its call controls.");
       return;
     }
-
     QString Error;
     if (!LoadModuleInstance(*Entry, &Error)) {
       const QString Message = "Failed to load module: " + Error + "\n" + Path;
@@ -195,6 +198,80 @@ QWidget *CreateModuleRunPage() {
         PopulateModules();
         ShowSuccessNotice(Page, "ModuleRun", "Module list refreshed.");
       });
+  QObject::connect(Check, &QPushButton::clicked, Page, [Modules, Page] {
+    ModuleEntry *Entry = FindDllModule(Modules->currentData().toString());
+    if (!Entry)
+      return;
+    if (ModuleRunning.load()) {
+      ShowWarningNotice(Page, "ModuleRun",
+                        "Wait for the running module to finish before checking compatibility.");
+      return;
+    }
+    if (!Entry->ModuleInstance) {
+      QString Error;
+      if (!LoadModuleInstance(*Entry, &Error)) {
+        ShowErrorNotice(Page, "ModuleRun", Error);
+        return;
+      }
+    }
+
+    AppendModuleOutput("[*] Checking module compatibility: " +
+                       QString::fromStdString(Entry->Name) + "\n");
+    try {
+      bool Compatible = false;
+      DWORD SehCode = ERROR_SUCCESS;
+      QString CheckError;
+      const std::string Captured = Module::CaptureOutputStreaming(
+          [&] {
+            try {
+              if (!InvokeModuleCheckWithSeh(
+                      static_cast<ModuleBase *>(Entry->ModuleInstance),
+                      &Compatible, &SehCode))
+                CheckError = QString("Module raised SEH exception 0x%1.")
+                                 .arg(static_cast<qulonglong>(SehCode), 8, 16,
+                                      QLatin1Char('0'))
+                                 .toUpper();
+            } catch (const std::exception &Error) {
+              CheckError = "Module raised a C++ exception: " +
+                           QString::fromLocal8Bit(Error.what());
+            } catch (...) {
+              CheckError = "Module raised an unknown C++ exception.";
+            }
+          },
+          [](const std::string &Chunk) {
+            static thread_local QByteArray Carry;
+            AppendModuleOutput(DecodeConsoleChunk(
+                Carry,
+                QByteArray(Chunk.data(), static_cast<qsizetype>(Chunk.size()))));
+          });
+      Q_UNUSED(Captured);
+      if (!CheckError.isEmpty()) {
+        AppendModuleOutput("[!] Compatibility check failed: " + CheckError +
+                           "\n");
+        ShowErrorNotice(Page, "ModuleRun", CheckError);
+        return;
+      }
+      const QString Result = Compatible
+                                 ? "Compatibility check passed."
+                                 : "Compatibility check failed.";
+      AppendModuleOutput(QString(Compatible ? "[+] " : "[!] ") + Result +
+                         "\n");
+      if (Compatible)
+        ShowSuccessNotice(Page, "ModuleRun", Result);
+      else
+        ShowWarningNotice(Page, "ModuleRun", Result);
+    } catch (const std::exception &Error) {
+      const QString Message =
+          "Compatibility check raised an exception: " +
+          QString::fromLocal8Bit(Error.what());
+      AppendModuleOutput("[!] " + Message + "\n");
+      ShowErrorNotice(Page, "ModuleRun", Message);
+    } catch (...) {
+      const QString Message = "Compatibility check raised an unknown exception.";
+      AppendModuleOutput("[!] " + Message + "\n");
+      ShowErrorNotice(Page, "ModuleRun", Message);
+    }
+  });
   QObject::connect(Execute, &QPushButton::clicked, Page, [Modules, Page] {
     ModuleEntry *Entry = FindDllModule(Modules->currentData().toString());
     if (!Entry)
@@ -231,10 +308,12 @@ QWidget *CreateModuleRunPage() {
 
   auto *StateTimer = new QTimer(Page);
   QObject::connect(
-      StateTimer, &QTimer::timeout, Page, [Page, Modules, Execute, Stop] {
+      StateTimer, &QTimer::timeout, Page,
+      [Page, Modules, Check, Execute, Stop] {
         if (!Page->isVisible())
           return;
         const QString Path = Modules->currentData().toString();
+        Check->setEnabled(!Path.isEmpty() && !ModuleRunning.load());
         Execute->setEnabled(!Path.isEmpty() && !ModuleRunning.load());
         Stop->setEnabled(!Path.isEmpty() && ModuleRunning.load() &&
                          RunningModulePath == Path);

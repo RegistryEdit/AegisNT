@@ -3,6 +3,7 @@
 // PiDDB 等）槽位内容，支持缓存移除与定时刷新。
 // ============================================================
 #include "../../Platform/AegisCoreCall.h"
+#include <QDateTime>
 
 QWidget *CreateTablePage() {
   struct TableQueryResult {
@@ -20,6 +21,10 @@ QWidget *CreateTablePage() {
     DPC_ENUM_OUTPUT Dpc{};
     bool DpcAvailable = false;
     bool DpcQueried = false;
+    APC_CANCEL_OUTPUT Apc{};
+    bool ApcAvailable = false;
+    bool ApcQueried = false;
+    DWORD ApcError = ERROR_SUCCESS;
     DWORD ErrorCode = ERROR_SUCCESS;
     bool Success = false;
   };
@@ -32,6 +37,26 @@ QWidget *CreateTablePage() {
     // 与表格显示行同步的可移除目标；0 表示该行不可移除
     QVector<quintptr> RemoveTargets;
   };
+  const auto ApcScanSummary = [](const TableQueryResult &Result) -> QString {
+    if (!Result.ApcAvailable)
+      return QString("APC query failed (Win32 error %1); scan completeness unknown.")
+          .arg(Result.ApcError);
+    const auto &Apc = Result.Apc;
+    if (Apc.Status != 0)
+      return QString("APC query failed (NTSTATUS 0x%1); scan completeness unknown.")
+          .arg(Apc.Status, 8, 16, QLatin1Char('0'));
+    if (Apc.NtoskrnlSize == 0)
+      return "Kernel image metadata unavailable; scan completeness unknown.";
+    if (!Apc.Resolved || (Apc.Flags & APC_CANCEL_FLAG_ROUTINE_UNRESOLVED))
+      return "Full APC inventory listed; PG classification unavailable (resolver).";
+    if (Apc.Flags & APC_CANCEL_FLAG_SCAN_PARTIAL)
+      return "Partial scan; some thread queues could not be inspected.";
+    if (Apc.ThreadCount == 0)
+      return "No threads scanned; scan completeness unknown.";
+    if (Apc.Flags & APC_CANCEL_FLAG_TRUNCATED)
+      return "Scan finished; APC list truncated at the entry limit.";
+    return "Scan finished; APC inventory complete.";
+  };
 
   auto *Page = new QWidget;
   auto *Layout = new QVBoxLayout(Page);
@@ -42,7 +67,7 @@ QWidget *CreateTablePage() {
   Kind->addItems({"InterruptDescriptorTable", "I/O Timer", "SSDT", "ShadowSSDT",
                   "GlobalDescriptorTable", "PiDDBCacheTable", "CPU Registers",
                   "MSR Watch", "HalDispatchTable", "HalPrivateDispatchTable",
-                  "DPC"});
+                  "DPC", "APC"});
   Kind->setCurrentIndex(0);
   Kind->setMinimumWidth(300);
   auto *Search = new SearchLineEdit;
@@ -57,6 +82,8 @@ QWidget *CreateTablePage() {
   auto *MsrEnable = MakeButton("Enable Watch");
   auto *MsrDisable = MakeButton("Disable Watch");
   MsrDisable->setEnabled(false);
+  auto *ApcCaptureToggle = MakeButton("APC Capture: On");
+  auto *ApcInjectTest = MakeButton("Inject test APC");
   Toolbar->addWidget(Kind);
   Toolbar->addWidget(Search);
   Toolbar->addStretch();
@@ -64,6 +91,8 @@ QWidget *CreateTablePage() {
   Toolbar->addWidget(RefreshIndicator);
   Toolbar->addWidget(MsrEnable);
   Toolbar->addWidget(MsrDisable);
+  Toolbar->addWidget(ApcCaptureToggle);
+  Toolbar->addWidget(ApcInjectTest);
   Toolbar->addWidget(Refresh);
   Layout->addLayout(Toolbar);
   auto *Table = MakeTable({"Index", "Name", "Address", "Module / Symbol", "State", "Metadata"});
@@ -72,7 +101,7 @@ QWidget *CreateTablePage() {
   Table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
   Layout->addWidget(Table, 1);
   const auto State = std::make_shared<TablePageState>();
-  const auto Populate = [Kind, Search, Table, State] {
+  const auto Populate = [Kind, Search, Table, State, Status, ApcScanSummary] {
     auto TableState = State;
     Table->clearContents();
     Table->setRowCount(0);
@@ -310,6 +339,120 @@ QWidget *CreateTablePage() {
       }
       return;
     }
+    if (Tab == 11 && Result->ApcQueried) {
+      const auto &Apc = Result->Apc;
+      const QString ScanSummary = ApcScanSummary(*Result);
+      Status->setText(ScanSummary);
+      AddRow("-", "APC query", "-", ScanSummary);
+      if (!Result->ApcAvailable || Apc.Status != 0) {
+        AddRow("-", "Metadata", "-",
+               "Unavailable because the APC query failed.");
+        return;
+      }
+      const auto Hex = [](ULONG_PTR Value) {
+        return QString("0x%1").arg(Value, sizeof(ULONG_PTR) * 2, 16,
+                                    QLatin1Char('0')).toUpper();
+      };
+      AddRow("-", "Kernel APC", "-",
+             QString("%1 listed | scanned %2 | suspects %3 | threads %4 | flags 0x%5")
+                 .arg(Apc.EntryCount).arg(Apc.Scanned).arg(Apc.Suspects)
+                 .arg(Apc.ThreadCount)
+                 .arg(Apc.Flags, 0, 16));
+      AddRow("-", "Resolver", "-",
+             QString("ntoskrnl size %1 | KiDispatchCallout %2 | base low 32 bits %3 | "
+                     "ApcListHead +0x%4")
+                 .arg(Apc.NtoskrnlSize
+                          ? QString("0x%1").arg(Apc.NtoskrnlSize, 0, 16)
+                          : QString("unavailable"))
+                 .arg(Apc.Resolved ? "resolved" : "unresolved")
+                 .arg(Apc.NtoskrnlSize
+                          ? QString("0x%1").arg(Apc.NtoskrnlBaseLow, 8, 16, QLatin1Char('0'))
+                          : QString("unavailable"))
+                 .arg(Apc.ApcListHeadOffset, 0, 16));
+      for (ULONG Index = 0; Index < std::min<ULONG>(Apc.EntryCount, APC_CANCEL_MAX_ENTRIES); ++Index) {
+        const APC_CANCEL_ENTRY &Entry = Apc.Entries[Index];
+        const bool Suspect =
+            (Entry.Flags & APC_CANCEL_REASON_KERNELROUTINE_MATCH) &&
+            (Entry.Flags & APC_CANCEL_REASON_RUNDOWN_NULL);
+        AddRow(QString::number(Index),
+               QString("TID %1").arg(Entry.ThreadId),
+               Suspect ? QString("PG-SUSPECT") : QString("normal"),
+               QString("Kernel %1 | Rundown %2 | Context %3 | Queue %4 | flags 0x%5")
+                   .arg(Hex(Entry.KernelRoutine)).arg(Hex(Entry.RundownRoutine))
+                   .arg(Hex(Entry.Context)).arg(Hex(Entry.QueueHead))
+                   .arg(Entry.Flags, 0, 16).toUpper(),
+               Entry.KernelRoutine, static_cast<quintptr>(Entry.ApcObject));
+      }
+      if (Apc.EntryCount == 0)
+        AddRow("-", "(empty)", "-",
+               "No kernel APCs are queued right now; the inventory is empty.");
+
+      /* ---- 投递捕获（hook KeInsertQueueApc / KiInsertQueueApc）----
+         被动快照通常为空（内核 APC 生命周期极短），这里追加 hook 捕获到的
+         最近投递记录，作为真正能观测到 APC 的来源。 */
+      {
+        const ULONG MaxShow = 1024;
+        std::vector<BYTE> CapBuf(sizeof(APC_CAPTURE_OUTPUT) +
+                                 sizeof(APC_CAPTURE_ENTRY) * (MaxShow - 1));
+        PAPC_CAPTURE_OUTPUT Cap = (PAPC_CAPTURE_OUTPUT)CapBuf.data();
+        DWORD CapReturned = 0;
+        if (ApcCaptureRead(Cap, (DWORD)CapBuf.size(), &CapReturned)) {
+          const ULONG CapAvail =
+              (ULONG)((CapBuf.size() - sizeof(APC_CAPTURE_OUTPUT)) /
+                      sizeof(APC_CAPTURE_ENTRY) + 1);
+          const ULONG CapCount = std::min<ULONG>(Cap->EntryCount, CapAvail);
+          AddRow("-", "Capture", "-",
+                 QString("enabled %1 | captured %2 | dropped %3 | pending %4 | "
+                         "blocked %5 | block PG %6 | hooks export %7 internal %8")
+                     .arg(Cap->Enabled ? "yes" : "no")
+                     .arg(Cap->Captured)
+                     .arg(Cap->Dropped)
+                     .arg(CapCount)
+                     .arg(Cap->Blocked)
+                     .arg(Cap->BlockPgEnabled ? "on" : "off")
+                     .arg((Cap->Flags & APC_CAPTURE_FLAG_HOOK_EXPORT_OK) ? "ok"
+                                                                        : "no")
+                     .arg((Cap->Flags & APC_CAPTURE_FLAG_HOOK_INTERNAL_OK)
+                              ? "ok"
+                              : "no"));
+          for (ULONG Index = 0; Index < CapCount; ++Index) {
+            const APC_CAPTURE_ENTRY &E = Cap->Entries[Index];
+            const bool Blocked = (E.Flags & APC_CANCEL_REASON_BLOCKED) != 0;
+            const bool Test = (E.Flags & APC_CANCEL_REASON_TEST_APC) != 0;
+            /* KeQuerySystemTime 为自 1601-01-01 UTC 的 100ns 计数；
+               转 Unix 秒（减 11644473600）后格式化。 */
+            QString TimeText = "-";
+            if (E.TimeStamp != 0) {
+              const qint64 UnixSecs =
+                  static_cast<qint64>(E.TimeStamp / 10000000ULL) -
+                  11644473600LL;
+              TimeText = QDateTime::fromSecsSinceEpoch(UnixSecs)
+                             .toString("HH:mm:ss.zzz");
+            }
+            AddRow(QString("cap %1").arg(Index),
+                   Blocked ? QString("BLOCKED")
+                           : (Test ? QString("TEST-APC")
+                                   : QString("hooked insert")),
+                   Hex(E.ApcObject),
+                   QString("Time %1 | TID %2 | mode %3 | Kernel %4 | "
+                           "Rundown %5 | Normal %6 | Arg1 %7 | Arg2 %8 | "
+                           "flags 0x%9")
+                       .arg(TimeText)
+                       .arg(E.TargetThreadId)
+                       .arg(E.ApcMode == 0 ? "kernel" : "user")
+                       .arg(Hex(E.KernelRoutine))
+                       .arg(Hex(E.RundownRoutine))
+                       .arg(Hex(E.NormalRoutine))
+                       .arg(Hex(E.SystemArgument1))
+                       .arg(Hex(E.SystemArgument2))
+                       .arg(E.Flags, 0, 16)
+                       .toUpper(),
+                   E.KernelRoutine, static_cast<quintptr>(E.ApcObject));
+          }
+        }
+      }
+      return;
+    }
     if (Tab == 0) {
       AddRow("-", "IDT Base", Hex(Summary.IdtBase));
       AddRow("-", "IDT Limit", QString::number(Summary.IdtLimit));
@@ -414,7 +557,8 @@ QWidget *CreateTablePage() {
         Tab == 6 || (Tab < 5 && Result->Available[Tab]) ||
         (Tab == 5 && Result->PiDDBQueried) || (Tab == 7 && Result->MsrQueried) ||
         ((Tab == 8 || Tab == 9) && Result->HalDispQueried) ||
-        (Tab == 10 && Result->DpcQueried);
+        (Tab == 10 && Result->DpcQueried) ||
+        (Tab == 11 && Result->ApcQueried);
     if (AlreadyLoaded) {
       Populate();
       return;
@@ -470,11 +614,21 @@ QWidget *CreateTablePage() {
         ErrorCode = G_LastAegisCoreError;
         State->Result->DpcQueried = true;
         State->Result->DpcAvailable = Success || ErrorCode == ERROR_NOT_FOUND;
+      } else if (Tab == 11) {
+        APC_CANCEL_OUTPUT Output{};
+        Success = EnumerateApcs(&Output) != FALSE;
+        State->Result->Apc = Output;
+        ErrorCode = G_LastAegisCoreError;
+        State->Result->ApcQueried = true;
+        // ERROR_NOT_FOUND 视为"扫描完成但解析不可用/无命中"，不是加载失败。
+        State->Result->ApcAvailable = Success || ErrorCode == ERROR_NOT_FOUND;
+        State->Result->ApcError = ErrorCode;
       }
       // ERROR_NOT_FOUND 视为"表存在但为空"而非加载失败
       if (!(Tab == 5 && ErrorCode == ERROR_NOT_FOUND) &&
           !((Tab == 8 || Tab == 9) && ErrorCode == ERROR_NOT_FOUND) &&
-          !(Tab == 10 && ErrorCode == ERROR_NOT_FOUND))
+          !(Tab == 10 && ErrorCode == ERROR_NOT_FOUND) &&
+          !(Tab == 11 && ErrorCode == ERROR_NOT_FOUND))
         ErrorCode = G_LastAegisCoreError;
 
       QMetaObject::invokeMethod(
@@ -487,17 +641,20 @@ QWidget *CreateTablePage() {
             Refresh->setEnabled(true);
             if (!SafePage)
               return;
-
             if (!Success &&
                 !(Tab == 5 && State->Result->PiDDBQueried &&
                   State->Result->PiDDBAvailable) &&
                 !((Tab == 8 || Tab == 9) && State->Result->HalDispQueried &&
                   State->Result->HalDispAvailable) &&
                 !(Tab == 10 && State->Result->DpcQueried &&
-                  State->Result->DpcAvailable)) {
+                  State->Result->DpcAvailable) &&
+                !(Tab == 11 && State->Result->ApcQueried &&
+                  State->Result->ApcAvailable)) {
               const QString Message =
                   QString("Load failed (error %1)").arg(ErrorCode);
               Status->setText(Message);
+              if (Tab == 11 && Kind->currentIndex() == Tab)
+                Populate();
               if (ShowResult)
                 ShowErrorNotice(SafePage, "Table", Message);
               return;
@@ -505,8 +662,9 @@ QWidget *CreateTablePage() {
 
             if (Kind->currentIndex() == Tab)
               Populate();
-            Status->setText(QString("Loaded %1").arg(Kind->itemText(Tab)));
-            if (ShowResult)
+            if (Tab != 11)
+              Status->setText(QString("Loaded %1").arg(Kind->itemText(Tab)));
+            if (ShowResult && Tab != 11)
               ShowSuccessNotice(SafePage, "Table", "Selected table loaded.");
           },
           Qt::QueuedConnection);
@@ -564,7 +722,7 @@ QWidget *CreateTablePage() {
           Qt::QueuedConnection);
     }).detach();
   };
-  // 右键菜单：PiDDB(5) 移除缓存条目、DPC(10) 移除 DPC、IO Timer(1) 提示不可移除；
+  // 右键菜单：PiDDB(5)、DPC(10)、APC(11) 支持逐条移除；IO Timer(1) 仅提示；
   // 其余标签页按 RemoveTarget 是否非零决定是否显示 Remove。
   QObject::connect(Table, &QWidget::customContextMenuRequested, Page,
                    [Page, Table, Kind, State, Query](const QPoint &Position) {
@@ -607,6 +765,14 @@ QWidget *CreateTablePage() {
                                            Ok = RemoveDpcEntry(Target, 0) !=
                                                 FALSE;
                                            Description = "DPC entry";
+                                         } else if (Tab == 11) {
+                                           APC_CANCEL_OUTPUT Output{};
+                                           Ok = CancelPatchGuardApcs(
+                                                    &Output, FALSE, 1,
+                                                    static_cast<ULONG_PTR>(Target),
+                                                    0) != FALSE &&
+                                                Output.Cancelled > 0;
+                                           Description = "APC entry";
                                          } else {
                                            ShowErrorNotice(
                                                Page, "Table",
@@ -632,8 +798,24 @@ QWidget *CreateTablePage() {
                      ReleaseMenuAfterClose(Menu);
                      Menu->exec(Table->viewport()->mapToGlobal(Position));
                    });
+  /* APC 捕获按钮文本自同步：始终以驱动实际状态为准。按钮文本会被运行时
+     翻译刷新，因此不能用文本反推当前状态。 */
+  const auto SetApcCaptureButton = [ApcCaptureToggle](bool Enabled) {
+    const QString Text = Enabled ? "APC Capture: On" : "APC Capture: Off";
+    /* TranslateObject() 会缓存按钮的原始文本；同步更新缓存，避免语言刷新
+       把动态状态恢复成创建时的默认值。 */
+    ApcCaptureToggle->setProperty("LanguageOriginal_text", Text);
+    ApcCaptureToggle->setText(Text);
+  };
+  const auto SyncApcCaptureButton = [SetApcCaptureButton] {
+    APC_CAPTURE_CTL_OUTPUT Current{};
+    if (ApcCaptureQuery(&Current))
+      SetApcCaptureButton(Current.Enabled != 0);
+  };
   QObject::connect(Kind, &ComboBox::currentIndexChanged, Page,
-                   [Populate, LoadTabAsync](int Index) {
+                   [Populate, LoadTabAsync, SyncApcCaptureButton](int Index) {
+                     if (Index == 11)
+                       SyncApcCaptureButton();
                      Populate();
                      (*LoadTabAsync)(Index, false);
                    });
@@ -665,6 +847,58 @@ QWidget *CreateTablePage() {
                           .arg(G_LastAegisCoreError));
     }
   });
+  /* APC 投递捕获开关：读取当前状态后反转。 */
+  QObject::connect(ApcCaptureToggle, &QPushButton::clicked, Page,
+                   [=] {
+                     /* Query first: the label may have been translated or
+                        refreshed asynchronously and is not a state store. */
+                     APC_CAPTURE_CTL_OUTPUT Current{};
+                     if (!ApcCaptureQuery(&Current)) {
+                       ShowErrorNotice(Page, "APC Capture",
+                                       QString("Failed to query capture state "
+                                               "(error %1).")
+                                           .arg(G_LastAegisCoreError));
+                       return;
+                     }
+                     const bool Enable = Current.Enabled == 0;
+                     APC_CAPTURE_CTL_OUTPUT Result{};
+                     if (ApcCaptureCtl(Enable, false, &Result)) {
+                       SetApcCaptureButton(Result.Enabled != 0);
+                       ShowSuccessNotice(
+                           Page, "APC Capture",
+                           Result.Enabled
+                               ? QString("Capture enabled (export hook %1, "
+                                         "internal hook %2).")
+                                     .arg(Result.HookExportOk ? "yes" : "no")
+                                     .arg(Result.HookInternalOk ? "yes" : "no")
+                               : QString("Capture disabled."));
+                       (*LoadTabAsync)(11, false);
+                     } else {
+                       ShowErrorNotice(Page, "APC Capture",
+                                       QString("Failed to toggle capture "
+                                               "(error %1).")
+                                           .arg(G_LastAegisCoreError));
+                     }
+                   });
+  /* 注入标记 APC：注入后立即刷新 APC 页观察。 */
+  QObject::connect(ApcInjectTest, &QPushButton::clicked, Page,
+                   [=] {
+                     APC_TEST_OUTPUT Result{};
+                     if (InjectTestApc(&Result)) {
+                       ShowSuccessNotice(
+                           Page, "APC Capture",
+                           QString("Injected %1 test APC(s) into TID %2.")
+                               .arg(Result.Injected)
+                               .arg(Result.TargetThreadId));
+                       (*LoadTabAsync)(11, false);
+                     } else {
+                       ShowErrorNotice(Page, "APC Capture",
+                                       QString("Test APC injection failed "
+                                               "(error %1).")
+                                           .arg(G_LastAegisCoreError));
+                     }
+                   });
+  SyncApcCaptureButton();
   Query(false);
   return Page;
 }
