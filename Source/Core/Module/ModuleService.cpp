@@ -157,19 +157,14 @@ ModuleEntry ModuleService::ProbeModuleFile(const QString &Path) {
     Module.Name = Info.Name.empty() ? Module.Name : Info.Name;
     Module.Description = Info.Description.empty() ? Module.Name : Info.Description;
     Module.Author = Info.Author.empty() ? "Unknown" : Info.Author;
-    Module.Category = ModuleTypeToString(Info.Type);
+    Module.Category = "Unknown";  // ModuleTypeToString(Info.Type);
 
-    // 提取选项
-    for (const auto &[Name, OptionPointer] : Instance->GetOptions()) {
-        ModuleOption Item;
-        Item.Name = Name;
-        Item.Type = OptionPointer->TypeName();
-        Item.Value = OptionPointer->GetValue();
-        Item.Default = OptionPointer->GetDefaultValue();
-        Item.Description = OptionPointer->GetDescription();
-        Item.Required = OptionPointer->GetRequired() == OptionRequired::Required;
-        Module.Options.push_back(Item);
-    }
+    // 提取选项 - 暂时禁用，需要 ModuleBase
+    // for (const auto &[Name, OptionPointer] : Instance->GetOptions()) {
+    //     ModuleOption Item;
+    //     Item.Name = Name;
+    //     ...
+    // }
 
     DestroyModuleInstance(Module);
     Module.Valid = true;
@@ -303,6 +298,7 @@ const ModuleEntry *ModuleService::FindDriverModule(const QString &Path) const {
     return nullptr;
 }
 
+#if 0  // 暂时禁用 ModuleBase 相关功能
 bool ModuleService::InvokeModuleWithSeh(ModuleBase *Instance, bool *Result,
                                        DWORD *ExceptionCode) {
     if (Result)
