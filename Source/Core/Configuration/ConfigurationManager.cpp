@@ -4,6 +4,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QJsonArray>
 #include <QSaveFile>
 #include <QStandardPaths>
 
@@ -158,7 +159,9 @@ QJsonValue ConfigurationManager::GetValue(const QString &Section, const QString 
         return Fallback;
 
     QJsonObject SectionObj = Configuration[Section].toObject();
-    return SectionObj.value(Key, Fallback);
+    if (!SectionObj.contains(Key))
+        return Fallback;
+    return SectionObj[Key];
 }
 
 void ConfigurationManager::SetValue(const QString &Section, const QString &Key,

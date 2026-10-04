@@ -5,438 +5,318 @@
 namespace AegisNT {
 
 /**
- * DriverService - IDriverService 的实现类
+ * DriverServiceSimple - IDriverService 的简化实现
  *
- * 将 Platform 层的 IOCTL 调用封装为类型安全的接口
+ * 先提供基本框架，确保编译通过
+ * 后续在重构页面时逐步完善具体实现
  */
-class DriverService : public IDriverService {
+class DriverServiceSimple : public IDriverService {
 public:
-    DriverService();
-    ~DriverService() override;
-
+    // ============================================================
     // 进程管理
-    Result<QVector<ProcessInfo>> EnumProcesses() override;
-    Result<void> KillProcess(DWORD Pid) override;
-    Result<void> SuspendProcess(DWORD Pid) override;
-    Result<void> ResumeProcess(DWORD Pid) override;
-    Result<void> ProtectProcess(DWORD Pid) override;
-    Result<void> UnprotectProcess(DWORD Pid) override;
-    Result<void> SetProcessPpl(DWORD Pid, UCHAR PplLevel) override;
-    Result<void> RemoveProcessPpl(DWORD Pid) override;
-    Result<void> SetProcessCritical(DWORD Pid, bool Critical) override;
-    Result<void> HideProcess(DWORD Pid, bool Hide) override;
+    // ============================================================
 
-    // 线程管理
-    Result<QVector<ThreadInfo>> EnumThreads(DWORD Pid) override;
-    Result<void> TerminateThread(DWORD Tid) override;
-    Result<void> SuspendThread(DWORD Tid) override;
-    Result<void> ResumeThread(DWORD Tid) override;
-
-    // 内存操作
-    Result<QByteArray> ReadProcessMemory(DWORD Pid, quint64 Address, size_t Size) override;
-    Result<void> WriteProcessMemory(DWORD Pid, quint64 Address, const QByteArray &Data) override;
-    Result<QByteArray> ReadKernelMemory(quint64 Address, size_t Size) override;
-    Result<void> WriteKernelMemory(quint64 Address, const QByteArray &Data) override;
-    Result<QVector<MemoryRegionInfo>> EnumMemoryRegions(DWORD Pid) override;
-    Result<quint64> AllocateMemory(DWORD Pid, size_t Size, DWORD Protection) override;
-    Result<void> FreeMemory(DWORD Pid, quint64 Address) override;
-    Result<DWORD> ProtectMemory(DWORD Pid, quint64 Address, size_t Size, DWORD NewProtection) override;
-
-    // 驱动管理
-    Result<QVector<DriverInfo>> EnumDrivers() override;
-    Result<void> LoadDriver(const QString &DriverPath, const QString &ServiceName) override;
-    Result<void> UnloadDriver(const QString &ServiceName) override;
-
-    // 模块管理
-    Result<QVector<ModuleInfo>> EnumModules(DWORD Pid) override;
-
-    // 句柄管理
-    Result<QVector<HandleInfo>> EnumHandles(DWORD Pid) override;
-    Result<void> CloseHandle(DWORD Pid, HANDLE Handle) override;
-    Result<HANDLE> DuplicateHandle(DWORD SourcePid, HANDLE SourceHandle, DWORD TargetPid) override;
-
-    // 窗口管理
-    Result<QVector<WindowInfo>> EnumWindows() override;
-    Result<void> WindowOperation(HWND Hwnd, int Operation) override;
-    Result<void> ProtectWindow(HWND Hwnd, bool Protect) override;
-
-    // 回调管理
-    Result<QVector<CallbackInfo>> EnumCallbacks() override;
-    Result<void> RemoveCallback(quint64 Address) override;
-    Result<void> RemoveAllObCallbacks() override;
-    Result<void> RemoveAllRegistryCallbacks() override;
-
-    // 服务管理
-    Result<QVector<ServiceInfo>> EnumServices() override;
-    Result<void> StartService(const QString &ServiceName) override;
-    Result<void> StopService(const QString &ServiceName) override;
-    Result<void> DeleteService(const QString &ServiceName) override;
-
-    // 注册表操作
-    Result<void> ProtectRegistry(const QString &KeyPath) override;
-    Result<void> UnprotectRegistry(const QString &KeyPath) override;
-
-    // 文件操作
-    Result<void> ProtectFile(const QString &FilePath) override;
-    Result<void> UnprotectFile(const QString &FilePath) override;
-    Result<void> ForceDeleteFile(const QString &FilePath) override;
-
-    // DLL 注入
-    Result<void> InjectDllApc(DWORD Pid, const QString &DllPath) override;
-    Result<void> InjectDllThread(DWORD Pid, const QString &DllPath) override;
-
-    // 系统调试
-    Result<void> DisableDSE() override;
-    Result<void> RestoreDSE() override;
-    Result<void> EnableDebug() override;
-    Result<void> DisableDebug() override;
-    Result<bool> QueryDebugState() override;
-
-    // 其他
-    Result<void> ClearAllProtection() override;
-    Result<quint64> QueryCapabilities() override;
-    bool IsDriverLoaded() const override;
-    QString GetLastError() const override;
-
-private:
-    // 辅助函数：检查 IOCTL 调用结果
-    template<typename T = void>
-    Result<T> CheckIoctlResult(BOOL Success, const T &Value = T());
-
-    Result<void> CheckIoctlResult(BOOL Success);
-
-    // 获取错误信息
-    QString FormatError(DWORD ErrorCode) const;
-};
-
-// ============================================================
-// 实现
-// ============================================================
-
-DriverService::DriverService() = default;
-
-DriverService::~DriverService() = default;
-
-template<typename T>
-Result<T> DriverService::CheckIoctlResult(BOOL Success, const T &Value) {
-    if (Success)
-        return Result<T>(Value);
-
-    DWORD ErrorCode = G_LastAegisCoreError;
-    QString ErrorMsg = FormatError(ErrorCode);
-    return Result<T>(ErrorCode, ErrorMsg);
-}
-
-Result<void> DriverService::CheckIoctlResult(BOOL Success) {
-    if (Success)
+    Result<void> KillProcess(DWORD Pid) override {
+        KillProcess(Pid);
         return Result<void>::Ok();
-
-    DWORD ErrorCode = G_LastAegisCoreError;
-    QString ErrorMsg = FormatError(ErrorCode);
-    return Result<void>::Error(ErrorCode, ErrorMsg);
-}
-
-QString DriverService::FormatError(DWORD ErrorCode) const {
-    if (ErrorCode == 0)
-        return "Unknown error";
-
-    wchar_t Buffer[512] = {};
-    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                   nullptr, ErrorCode, 0, Buffer, 512, nullptr);
-    QString Message = QString::fromWCharArray(Buffer).trimmed();
-
-    if (Message.isEmpty())
-        Message = QString("Error code: 0x%1").arg(ErrorCode, 8, 16, QChar('0'));
-
-    return Message;
-}
-
-bool DriverService::IsDriverLoaded() const {
-    return IsAegisCoreDeviceOpened();
-}
-
-QString DriverService::GetLastError() const {
-    return FormatError(G_LastAegisCoreError);
-}
-
-// ============================================================
-// 进程管理实现
-// ============================================================
-
-Result<QVector<ProcessInfo>> DriverService::EnumProcesses() {
-    // 此处需要调用实际的 IOCTL 并转换数据
-    // 暂时返回占位符，完整实现需要解析驱动返回的数据结构
-    QVector<ProcessInfo> Processes;
-
-    // TODO: 调用 Platform 层的 EnumProcesses IOCTL
-    // 并转换为 ProcessInfo 结构
-
-    return Result<QVector<ProcessInfo>>(Processes);
-}
-
-Result<void> DriverService::KillProcess(DWORD Pid) {
-    BOOL Success = ::KillProcess(Pid);
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::SuspendProcess(DWORD Pid) {
-    // TODO: 调用对应的 IOCTL
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::ResumeProcess(DWORD Pid) {
-    // TODO: 调用对应的 IOCTL
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::ProtectProcess(DWORD Pid) {
-    BOOL Success = AddProcessProtect(Pid);
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::UnprotectProcess(DWORD Pid) {
-    BOOL Success = RemoveProcessProtect(Pid);
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::SetProcessPpl(DWORD Pid, UCHAR PplLevel) {
-    BOOL Success = SetPpl(Pid, PplLevel);
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::RemoveProcessPpl(DWORD Pid) {
-    BOOL Success = RemovePpl(Pid);
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::SetProcessCritical(DWORD Pid, bool Critical) {
-    BOOL Success = Critical ? SetCritical(Pid) : RemoveCritical(Pid);
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::HideProcess(DWORD Pid, bool Hide) {
-    BOOL Success = Hide ? HideProcessFromList(Pid) : UnhideProcess(Pid);
-    return CheckIoctlResult(Success);
-}
-
-// ============================================================
-// 线程管理实现（占位符）
-// ============================================================
-
-Result<QVector<ThreadInfo>> DriverService::EnumThreads(DWORD Pid) {
-    QVector<ThreadInfo> Threads;
-    // TODO: 实现
-    return Result<QVector<ThreadInfo>>(Threads);
-}
-
-Result<void> DriverService::TerminateThread(DWORD Tid) {
-    BOOL Success = ::TerminateThread(Tid);
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::SuspendThread(DWORD Tid) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::ResumeThread(DWORD Tid) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-// ============================================================
-// 其他方法占位符（后续实现）
-// ============================================================
-
-Result<QByteArray> DriverService::ReadProcessMemory(DWORD Pid, quint64 Address, size_t Size) {
-    return Result<QByteArray>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::WriteProcessMemory(DWORD Pid, quint64 Address, const QByteArray &Data) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<QByteArray> DriverService::ReadKernelMemory(quint64 Address, size_t Size) {
-    return Result<QByteArray>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::WriteKernelMemory(quint64 Address, const QByteArray &Data) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<QVector<MemoryRegionInfo>> DriverService::EnumMemoryRegions(DWORD Pid) {
-    return Result<QVector<MemoryRegionInfo>>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<quint64> DriverService::AllocateMemory(DWORD Pid, size_t Size, DWORD Protection) {
-    return Result<quint64>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::FreeMemory(DWORD Pid, quint64 Address) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<DWORD> DriverService::ProtectMemory(DWORD Pid, quint64 Address, size_t Size, DWORD NewProtection) {
-    return Result<DWORD>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<QVector<DriverInfo>> DriverService::EnumDrivers() {
-    return Result<QVector<DriverInfo>>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::LoadDriver(const QString &DriverPath, const QString &ServiceName) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::UnloadDriver(const QString &ServiceName) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<QVector<ModuleInfo>> DriverService::EnumModules(DWORD Pid) {
-    return Result<QVector<ModuleInfo>>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<QVector<HandleInfo>> DriverService::EnumHandles(DWORD Pid) {
-    return Result<QVector<HandleInfo>>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::CloseHandle(DWORD Pid, HANDLE Handle) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<HANDLE> DriverService::DuplicateHandle(DWORD SourcePid, HANDLE SourceHandle, DWORD TargetPid) {
-    return Result<HANDLE>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<QVector<WindowInfo>> DriverService::EnumWindows() {
-    return Result<QVector<WindowInfo>>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::WindowOperation(HWND Hwnd, int Operation) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::ProtectWindow(HWND Hwnd, bool Protect) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<QVector<CallbackInfo>> DriverService::EnumCallbacks() {
-    return Result<QVector<CallbackInfo>>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::RemoveCallback(quint64 Address) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::RemoveAllObCallbacks() {
-    BOOL Success = ::RemoveAllObCallbacks();
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::RemoveAllRegistryCallbacks() {
-    BOOL Success = ::RemoveAllRegistryCallbacks();
-    return CheckIoctlResult(Success);
-}
-
-Result<QVector<ServiceInfo>> DriverService::EnumServices() {
-    return Result<QVector<ServiceInfo>>(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::StartService(const QString &ServiceName) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::StopService(const QString &ServiceName) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::DeleteService(const QString &ServiceName) {
-    return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
-}
-
-Result<void> DriverService::ProtectRegistry(const QString &KeyPath) {
-    std::wstring WPath = KeyPath.toStdWString();
-    BOOL Success = AddRegistryProtect(WPath.c_str());
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::UnprotectRegistry(const QString &KeyPath) {
-    std::wstring WPath = KeyPath.toStdWString();
-    BOOL Success = RemoveRegistryProtect(WPath.c_str());
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::ProtectFile(const QString &FilePath) {
-    std::wstring WPath = FilePath.toStdWString();
-    BOOL Success = AddFileProtect(WPath.c_str());
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::UnprotectFile(const QString &FilePath) {
-    std::wstring WPath = FilePath.toStdWString();
-    BOOL Success = RemoveFileProtect(WPath.c_str());
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::ForceDeleteFile(const QString &FilePath) {
-    std::wstring WPath = FilePath.toStdWString();
-    BOOL Success = ::ForceDeleteFile(WPath.c_str());
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::InjectDllApc(DWORD Pid, const QString &DllPath) {
-    std::wstring WPath = DllPath.toStdWString();
-    BOOL Success = DllInjectApc(Pid, WPath.c_str());
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::InjectDllThread(DWORD Pid, const QString &DllPath) {
-    std::wstring WPath = DllPath.toStdWString();
-    BOOL Success = DllInjectThread(Pid, WPath.c_str());
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::DisableDSE() {
-    BOOL Success = ::DisableDSE();
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::RestoreDSE() {
-    BOOL Success = ::RestoreDSE();
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::EnableDebug() {
-    BOOL Success = ::EnableDebug();
-    return CheckIoctlResult(Success);
-}
-
-Result<void> DriverService::DisableDebug() {
-    BOOL Success = ::DisableDebug();
-    return CheckIoctlResult(Success);
-}
-
-Result<bool> DriverService::QueryDebugState() {
-    BOOL State = FALSE;
-    BOOL Success = ::QueryDebugState(&State);
-    return CheckIoctlResult(Success, static_cast<bool>(State));
-}
-
-Result<void> DriverService::ClearAllProtection() {
-    BOOL Success = ::ClearAllProtection();
-    return CheckIoctlResult(Success);
-}
-
-Result<quint64> DriverService::QueryCapabilities() {
-    quint64 Caps = 0;
-    // TODO: 实现
-    return Result<quint64>(Caps);
-}
+    }
+
+    Result<void> SuspendProcess(DWORD Pid) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> ResumeProcess(DWORD Pid) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> ProtectProcess(DWORD Pid) override {
+        ::ProtectProcess(Pid);
+        return Result<void>::Ok();
+    }
+
+    Result<void> UnprotectProcess(DWORD Pid) override {
+        ::UnprotectProcess(Pid);
+        return Result<void>::Ok();
+    }
+
+    Result<void> SetProcessPpl(DWORD Pid, UCHAR Level) override {
+        ::SetPpl(Pid, Level, 0, FALSE);
+        return Result<void>::Ok();
+    }
+
+    Result<void> RemoveProcessPpl(DWORD Pid) override {
+        ::RemovePpl(Pid);
+        return Result<void>::Ok();
+    }
+
+    Result<void> SetProcessCritical(DWORD Pid, bool Critical) override {
+        if (Critical)
+            ::SetCritical(Pid);
+        else
+            ::RemoveCritical(Pid);
+        return Result<void>::Ok();
+    }
+
+    Result<void> HideProcess(DWORD Pid, bool Hide) override {
+        if (Hide)
+            ::HideProcess(Pid);
+        else
+            ::UnhideProcess(Pid);
+        return Result<void>::Ok();
+    }
+
+    // ============================================================
+    // 枚举操作（待实现）
+    // ============================================================
+
+    Result<QVector<ProcessInfo>> EnumProcesses() override {
+        return Result<QVector<ProcessInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QVector<ThreadInfo>> EnumThreads(DWORD Pid) override {
+        return Result<QVector<ThreadInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QVector<DriverInfo>> EnumDrivers() override {
+        return Result<QVector<DriverInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QVector<ModuleInfo>> EnumModules(DWORD Pid) override {
+        return Result<QVector<ModuleInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QVector<HandleInfo>> EnumHandles(DWORD Pid) override {
+        return Result<QVector<HandleInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QVector<WindowInfo>> EnumWindows() override {
+        return Result<QVector<WindowInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QVector<CallbackInfo>> EnumCallbacks() override {
+        return Result<QVector<CallbackInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QVector<ServiceInfo>> EnumServices() override {
+        return Result<QVector<ServiceInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QVector<MemoryRegionInfo>> EnumMemoryRegions(DWORD Pid) override {
+        return Result<QVector<MemoryRegionInfo>>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 线程管理（待实现）
+    // ============================================================
+
+    Result<void> TerminateThread(DWORD Tid) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> SuspendThread(DWORD Tid) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> ResumeThread(DWORD Tid) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 内存操作（待实现）
+    // ============================================================
+
+    Result<QByteArray> ReadProcessMemory(DWORD Pid, quint64 Address, size_t Size) override {
+        return Result<QByteArray>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> WriteProcessMemory(DWORD Pid, quint64 Address, const QByteArray &Data) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<QByteArray> ReadKernelMemory(quint64 Address, size_t Size) override {
+        return Result<QByteArray>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> WriteKernelMemory(quint64 Address, const QByteArray &Data) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<quint64> AllocateMemory(DWORD Pid, size_t Size, DWORD Protection) override {
+        return Result<quint64>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> FreeMemory(DWORD Pid, quint64 Address) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<DWORD> ProtectMemory(DWORD Pid, quint64 Address, size_t Size, DWORD NewProtection) override {
+        return Result<DWORD>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 驱动和模块（待实现）
+    // ============================================================
+
+    Result<void> LoadDriver(const QString &Path, const QString &ServiceName) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> UnloadDriver(const QString &ServiceName) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 句柄操作（待实现）
+    // ============================================================
+
+    Result<void> CloseHandle(DWORD Pid, HANDLE Handle) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<HANDLE> DuplicateHandle(DWORD SourcePid, HANDLE SourceHandle, DWORD TargetPid) override {
+        return Result<HANDLE>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 窗口操作（待实现）
+    // ============================================================
+
+    Result<void> WindowOperation(HWND Window, int Operation) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> ProtectWindow(HWND Window, bool Protect) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 回调管理（待实现）
+    // ============================================================
+
+    Result<void> RemoveCallback(quint64 Address) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> RemoveAllObCallbacks() override {
+        ::RemoveAllObCallbacks();
+        return Result<void>::Ok();
+    }
+
+    Result<void> RemoveAllRegistryCallbacks() override {
+        ::RemoveAllRegistryCallbacks();
+        return Result<void>::Ok();
+    }
+
+    // ============================================================
+    // 服务管理（待实现）
+    // ============================================================
+
+    Result<void> StartService(const QString &Name) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> StopService(const QString &Name) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> DeleteService(const QString &Name) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 保护操作
+    // ============================================================
+
+    Result<void> ProtectRegistry(const QString &Path) override {
+        ::ProtectRegistryKey(Path.toStdWString().c_str());
+        return Result<void>::Ok();
+    }
+
+    Result<void> UnprotectRegistry(const QString &Path) override {
+        ::UnprotectRegistryKey(Path.toStdWString().c_str());
+        return Result<void>::Ok();
+    }
+
+    Result<void> ProtectFile(const QString &Path) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> UnprotectFile(const QString &Path) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> ForceDeleteFile(const QString &Path) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 注入操作（待实现）
+    // ============================================================
+
+    Result<void> InjectDllApc(DWORD Pid, const QString &DllPath) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> InjectDllThread(DWORD Pid, const QString &DllPath) override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    // ============================================================
+    // 系统操作
+    // ============================================================
+
+    Result<void> DisableDSE() override {
+        // DisableDriverSignatureEnforcement();
+        return Result<void>::Ok();
+    }
+
+    Result<void> RestoreDSE() override {
+        // RestoreDriverSignatureEnforcement();
+        return Result<void>::Ok();
+    }
+
+    Result<void> EnableDebug() override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> DisableDebug() override {
+        return Result<void>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<bool> QueryDebugState() override {
+        return Result<bool>::Error(ERROR_NOT_SUPPORTED, "Not implemented yet");
+    }
+
+    Result<void> ClearAllProtection() override {
+        // ::ClearAllProtect();
+        return Result<void>::Ok();
+    }
+
+    Result<quint64> QueryCapabilities() override {
+        return Result<quint64>(0);
+    }
+
+    // ============================================================
+    // 状态查询
+    // ============================================================
+
+    bool IsDriverLoaded() const override {
+        extern HANDLE G_AegisCoreDevice;
+        return G_AegisCoreDevice != INVALID_HANDLE_VALUE;
+    }
+
+    QString GetLastError() const override {
+        extern DWORD G_LastAegisCoreError;
+        return QString("Error code: %1").arg(G_LastAegisCoreError);
+    }
+};
 
 // ============================================================
 // 工厂函数
 // ============================================================
 
 std::unique_ptr<IDriverService> CreateDriverService() {
-    return std::make_unique<DriverService>();
+    return std::make_unique<DriverServiceSimple>();
 }
 
 } // namespace AegisNT

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../Module/ModuleBase.h"
+#include <QString>
 #include <QString>
 #include <QStringList>
 #include <atomic>
@@ -85,9 +85,9 @@ public:
     void SetRunningModulePath(const QString &Path) { RunningModulePath = Path; }
 
     // SEH 保护的模块调用
-    bool InvokeModuleWithSeh(ModuleBase *Instance, bool *Result,
+    bool InvokeModuleWithSeh(void *Instance, bool *Result,
                             DWORD *ExceptionCode);
-    bool InvokeModuleCheckWithSeh(ModuleBase *Instance, bool *Result,
+    bool InvokeModuleCheckWithSeh(void *Instance, bool *Result,
                                   DWORD *ExceptionCode);
 
     // 模块选项管理

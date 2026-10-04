@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../Models/CoreModels.h"
+#include "../Source/Models/CoreModels.h"
 #include <QString>
 #include <QVector>
 #include <windows.h>

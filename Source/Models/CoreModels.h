@@ -133,10 +133,23 @@ struct ServiceInfo {
 template<typename T>
 class Result {
 public:
-    Result() : Success(false), ErrorCode(0)
+    Result() : Success(false), ErrorCode(0) {}
     Result(const T &Value) : Success(true), ErrorCode(0), Data(Value) {}
     Result(DWORD Code, const QString &Message)
         : Success(false), ErrorCode(Code), ErrorMessage(Message) {}
+
+    // 静态工厂方法
+    static Result<T> Ok() {
+        return Result<T>();
+    }
+
+    static Result<T> Ok(const T &Value) {
+        return Result<T>(Value);
+    }
+
+    static Result<T> Error(DWORD Code, const QString &Message) {
+        return Result<T>(Code, Message);
+    }
 
     bool IsSuccess() const { return Success; }
     bool IsError() const { return !Success; }

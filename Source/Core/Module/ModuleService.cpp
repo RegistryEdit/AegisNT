@@ -1,6 +1,6 @@
 #include "ModuleService.h"
 #include "../Configuration/ConfigurationManager.h"
-#include "../../Platform/DriverControl.h"
+// #include "../../Platform/DriverControl.h"
 #include <QDir>
 #include <QFileInfo>
 
