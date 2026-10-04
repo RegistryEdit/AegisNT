@@ -121,10 +121,35 @@
     <ClCompile Include="AegisNT.cpp" />
     <ClCompile Include="Source\AppContext.cpp" />
     <ClCompile Include="Source\Pages\PageRegistry.cpp" />
+    <!-- Core 层 -->
+    <ClCompile Include="Source\Core\Configuration\ConfigurationManager.cpp" />
+    <ClCompile Include="Source\Core\Module\ModuleService.cpp" />
+    <ClCompile Include="Source\Core\Auth\AuthService.cpp" />
+    <!-- Platform 层 -->
+    <ClCompile Include="Platform\AegisCoreClient.cpp" />
+    <!-- Services 层 -->
+    <ClCompile Include="Source\Services\DriverService.cpp" />
+    <!-- UI 层 -->
+    <ClCompile Include="Source\UI\Common\Base\PageBase.cpp" />
+    <ClCompile Include="Source\UI\Common\Widgets\RefreshControl.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\AppContext.h" />
     <ClInclude Include="Source\KernelResearch.h" />
+    <!-- Core 层 -->
+    <ClInclude Include="Source\Core\Configuration\ConfigurationManager.h" />
+    <ClInclude Include="Source\Core\Module\ModuleService.h" />
+    <ClInclude Include="Source\Core\Auth\AuthService.h" />
+    <!-- Models 层 -->
+    <ClInclude Include="Source\Models\CoreModels.h" />
+    <!-- Platform 层 -->
+    <ClInclude Include="Platform\AegisCoreClient.h" />
+    <!-- Services 层 -->
+    <ClInclude Include="Source\Services\IDriverService.h" />
+    <!-- UI 层 -->
+    <ClInclude Include="Source\UI\Common\Base\PageBase.h" />
+    <ClInclude Include="Source\UI\Common\Widgets\RefreshControl.h" />
+    <ClInclude Include="Source\UI\Common\Widgets\DebouncedSearchEdit.h" />
     <ClInclude Include="Source\Pages\ChatPage.h" />
     <ClInclude Include="Source\Pages\AccountPage.h" />
     <ClInclude Include="Server\ChatProtocol.h" />
