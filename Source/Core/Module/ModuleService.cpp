@@ -66,6 +66,8 @@ void ModuleService::SetCachedModuleOptionValue(ModuleEntry &Module,
         if (OptionNameMatches(Option.Name, Aliases))
             Option.Value = Utf8Bytes(Value);
     }
+    // 暂时禁用 ModuleBase
+    /*
     if (Module.ModuleInstance) {
         auto *Instance = static_cast<ModuleBase *>(Module.ModuleInstance);
         for (const auto &[Name, OptionPointer] : Instance->GetOptions()) {
@@ -74,11 +76,14 @@ void ModuleService::SetCachedModuleOptionValue(ModuleEntry &Module,
                 Instance->SetOption(Name, Utf8Bytes(Value));
         }
     }
+    */
 }
 
 void ModuleService::DestroyModuleInstance(ModuleEntry &Module) {
     if (!Module.Handle)
         return;
+    // 暂时禁用 ModuleBase
+    /*
     if (Module.ModuleInstance) {
         const auto Destroy = reinterpret_cast<void (*)(ModuleBase *)>(
             GetProcAddress(Module.Handle, "DestroyModule"));
@@ -86,6 +91,7 @@ void ModuleService::DestroyModuleInstance(ModuleEntry &Module) {
             Destroy(static_cast<ModuleBase *>(Module.ModuleInstance));
         Module.ModuleInstance = nullptr;
     }
+    */
     FreeLibrary(Module.Handle);
     Module.Handle = nullptr;
     Module.Loaded = false;
@@ -103,6 +109,8 @@ bool ModuleService::LoadModuleInstance(ModuleEntry &Module, QString *Error) {
         return false;
     }
 
+    // 暂时禁用 ModuleBase 相关功能
+    /*
     const auto Create = reinterpret_cast<ModuleBase *(*)()>(
         GetProcAddress(Handle, "CreateModule"));
     const auto Destroy = reinterpret_cast<void (*)(ModuleBase *)>(
@@ -131,7 +139,9 @@ bool ModuleService::LoadModuleInstance(ModuleEntry &Module, QString *Error) {
         if (!Option.Value.empty())
             Instance->SetOption(Option.Name, Option.Value);
     }
+    */
 
+    Module.Handle = Handle;
     Module.Loaded = true;
     return true;
 }
