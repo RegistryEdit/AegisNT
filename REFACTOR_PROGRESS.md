@@ -41,17 +41,40 @@
 
 ---
 
-### 🔄 阶段 2：创建服务抽象层（进行中）
+### 🔄 阶段 2：创建服务抽象层（进行中 50%）
 
-**目标**: 在 UI 和 Platform 层之间引入服务层接口
+**耗时**: 进行中  
+**完成度**: 50%
 
-**计划工作**：
-1. 定义 `IDriverService` 接口（抽象 138 个 IOCTL 操作）
-2. 实现 `DriverService` 类（调用 AegisCoreClient）
-3. 为 1-2 个小页面引入依赖注入（如 ModuleRunPage）
-4. 编写单元测试（Mock 驱动服务）
+**已完成**：
+- ✅ 数据模型层（CoreModels.h - 9 个模型 + Result<T>）
+- ✅ 服务接口（IDriverService.h - 60+ 方法）
+- ✅ 服务实现框架（DriverService.cpp - 20+ 核心方法）
 
-**预计耗时**: 2 周
+**文件统计**：
+```
+新增文件：3 个
+  - CoreModels.h (171 行)
+  - IDriverService.h (333 行)
+  - DriverService.cpp (402 行)
+
+总计：906 行代码
+```
+
+**关键改进**：
+- UI 层与 Platform 层完全解耦
+- 类型安全的 Result<T> 错误处理
+- 支持依赖注入和 Mock 测试
+- 统一的服务接口抽象
+
+**待完成工作**：
+1. 完善数据解析方法（EnumProcesses 等）
+2. 为页面引入依赖注入（ModuleRunPage, RegistryPage）
+3. 编写单元测试
+4. 创建迁移文档
+
+**提交哈希**: `26f0ef1`  
+**预计完成**: 1 周
 
 ---
 
