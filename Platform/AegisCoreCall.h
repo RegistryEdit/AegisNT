@@ -2005,7 +2005,7 @@ inline DWORD G_LastAegisCoreError = ERROR_SUCCESS;
 inline std::wstring G_LastAegisCoreDetails;
 inline DWORD AegisCoreNtStatusToWin32(NTSTATUS Status);
 
-BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
+inline BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
   if (OutPid)
     *OutPid = 0;
 
@@ -2075,7 +2075,7 @@ BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
 
 inline std::mutex G_DeviceMutex;
 
-BOOLEAN TryOpenDevice() {
+inline BOOLEAN TryOpenDevice() {
   G_DeviceHandle =
       CreateFileW(L"\\\\.\\AegisCore", GENERIC_READ | GENERIC_WRITE, 0, NULL,
                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -2083,7 +2083,7 @@ BOOLEAN TryOpenDevice() {
   return G_DeviceHandle != INVALID_HANDLE_VALUE;
 }
 
-BOOLEAN ShouldRetryOpenDeviceError(DWORD Error) {
+inline BOOLEAN ShouldRetryOpenDeviceError(DWORD Error) {
   switch (Error) {
   case ERROR_GEN_FAILURE:
   case ERROR_DEVICE_NOT_CONNECTED:
@@ -2096,7 +2096,7 @@ BOOLEAN ShouldRetryOpenDeviceError(DWORD Error) {
 
 // MaxAttempts=1 用于轮询路径：设备节点不存在时立即失败，避免每次 IOCTL
 // 阻塞在重试循环里。需要等待设备出现的启动流程显式传更大的值�?
-BOOLEAN OpenDeviceInternal(BOOLEAN Silent, int MaxAttempts) {
+inline BOOLEAN OpenDeviceInternal(BOOLEAN Silent, int MaxAttempts) {
   DWORD LastError = ERROR_FILE_NOT_FOUND;
   for (int Attempt = 0; Attempt < MaxAttempts; ++Attempt) {
     if (TryOpenDevice())
@@ -2116,18 +2116,18 @@ BOOLEAN OpenDeviceInternal(BOOLEAN Silent, int MaxAttempts) {
   return FALSE;
 }
 
-BOOLEAN OpenDevice() { return OpenDeviceInternal(FALSE, 2); }
+inline BOOLEAN OpenDevice() { return OpenDeviceInternal(FALSE, 2); }
 
-BOOLEAN OpenDeviceSilent() { return OpenDeviceInternal(TRUE, 1); }
+inline BOOLEAN OpenDeviceSilent() { return OpenDeviceInternal(TRUE, 1); }
 
-VOID CloseDevice() {
+inline VOID CloseDevice() {
   if (G_DeviceHandle != INVALID_HANDLE_VALUE) {
     CloseHandle(G_DeviceHandle);
     G_DeviceHandle = INVALID_HANDLE_VALUE;
   }
 }
 
-BOOLEAN SendIoctl(DWORD IoControlCode, PVOID InputBuffer, DWORD InputSize) {
+inline BOOLEAN SendIoctl(DWORD IoControlCode, PVOID InputBuffer, DWORD InputSize) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   std::lock_guard<std::mutex> Lock(G_DeviceMutex);
   // 轮询路径静默快速失败：驱动未加载时不重试、不刷控制台�?
@@ -2151,7 +2151,7 @@ BOOLEAN SendIoctl(DWORD IoControlCode, PVOID InputBuffer, DWORD InputSize) {
   return TRUE;
 }
 
-BOOLEAN SendIoctlWithOutput(DWORD IoControlCode, PVOID InputBuffer,
+inline BOOLEAN SendIoctlWithOutput(DWORD IoControlCode, PVOID InputBuffer,
                             DWORD InputSize, PVOID OutputBuffer,
                             DWORD OutputSize, PDWORD BytesReturned) {
   G_LastAegisCoreError = ERROR_SUCCESS;
@@ -2175,7 +2175,7 @@ BOOLEAN SendIoctlWithOutput(DWORD IoControlCode, PVOID InputBuffer,
   return TRUE;
 }
 
-BOOLEAN EnumProcessEntries(std::vector<PROCESS_ENUM_ENTRY> &Entries) {
+inline BOOLEAN EnumProcessEntries(std::vector<PROCESS_ENUM_ENTRY> &Entries) {
   Entries.clear();
 
   for (int Attempt = 0; Attempt < 2; ++Attempt) {
@@ -2213,7 +2213,7 @@ BOOLEAN EnumProcessEntries(std::vector<PROCESS_ENUM_ENTRY> &Entries) {
   return FALSE;
 }
 
-VOID KillProcess(ULONG ProcessId) {
+inline VOID KillProcess(ULONG ProcessId) {
   wprintf(L"[*] Killing process PID=%u ...\n", ProcessId);
 
   KILL_PROCESS_INPUT Input = {0};
@@ -2223,7 +2223,7 @@ VOID KillProcess(ULONG ProcessId) {
     wprintf(L"[+] Process termination request sent.\n");
 }
 
-VOID ProcessWriteZeroMemory(ULONG ProcessId) {
+inline VOID ProcessWriteZeroMemory(ULONG ProcessId) {
   wprintf(L"[*] Writing zero memory to process PID=%u ...\n", ProcessId);
 
   TERMINATE_PROCESS_MEMORY_INPUT Input = {0};
@@ -2233,7 +2233,7 @@ VOID ProcessWriteZeroMemory(ULONG ProcessId) {
     wprintf(L"[+] Process termination request sent.\n");
 }
 
-VOID ProtectProcess(ULONG ProcessId) {
+inline VOID ProtectProcess(ULONG ProcessId) {
   wprintf(L"[*] Adding process PID=%u to protection list ...\n", ProcessId);
 
   PROCESS_PROTECT_INPUT Input = {0};
@@ -2243,7 +2243,7 @@ VOID ProtectProcess(ULONG ProcessId) {
     wprintf(L"[+] Process PID=%u protected.\n", ProcessId);
 }
 
-VOID UnprotectProcess(ULONG ProcessId) {
+inline VOID UnprotectProcess(ULONG ProcessId) {
   wprintf(L"[*] Removing process PID=%u from protection list ...\n", ProcessId);
 
   PROCESS_PROTECT_INPUT Input = {0};
@@ -2253,14 +2253,14 @@ VOID UnprotectProcess(ULONG ProcessId) {
     wprintf(L"[+] Process PID=%u unprotected.\n", ProcessId);
 }
 
-BOOLEAN AddProcessCreateBlock(const PROCESS_CREATE_BLOCK_ENTRY &Entry) {
+inline BOOLEAN AddProcessCreateBlock(const PROCESS_CREATE_BLOCK_ENTRY &Entry) {
   PROCESS_CREATE_BLOCK_INPUT Input = {};
   Input.Operation = PROCESS_CREATE_BLOCK_OP_ADD;
   Input.Entry = Entry;
   return SendIoctl(IOCTL_ADD_PROCESS_CREATE_BLOCK, &Input, sizeof(Input));
 }
 
-BOOLEAN DriverImageBlockOperation(ULONG Operation,
+inline BOOLEAN DriverImageBlockOperation(ULONG Operation,
                                   const DRIVER_IMAGE_BLOCK_ENTRY &Entry) {
   DRIVER_IMAGE_BLOCK_INPUT Input = {};
   Input.Operation = Operation;
@@ -2268,7 +2268,7 @@ BOOLEAN DriverImageBlockOperation(ULONG Operation,
   return SendIoctl(IOCTL_DRIVER_IMAGE_BLOCK_OP, &Input, sizeof(Input));
 }
 
-BOOLEAN EnumerateDriverImageBlocks(DRIVER_IMAGE_BLOCK_OUTPUT *Output) {
+inline BOOLEAN EnumerateDriverImageBlocks(DRIVER_IMAGE_BLOCK_OUTPUT *Output) {
   if (!Output) return FALSE;
   ZeroMemory(Output, sizeof(*Output));
   DWORD BytesReturned = 0;
@@ -2276,26 +2276,26 @@ BOOLEAN EnumerateDriverImageBlocks(DRIVER_IMAGE_BLOCK_OUTPUT *Output) {
                              Output, sizeof(*Output), &BytesReturned);
 }
 
-BOOLEAN ApplyProcessDisguise(const PROCESS_DISGUISE_ENTRY &Entry) {
+inline BOOLEAN ApplyProcessDisguise(const PROCESS_DISGUISE_ENTRY &Entry) {
   PROCESS_DISGUISE_INPUT Input = {};
   Input.Entry = Entry;
   return SendIoctl(IOCTL_PROCESS_DISGUISE, &Input, sizeof(Input));
 }
 
-BOOLEAN RemoveProcessCreateBlock(const PROCESS_CREATE_BLOCK_ENTRY &Entry) {
+inline BOOLEAN RemoveProcessCreateBlock(const PROCESS_CREATE_BLOCK_ENTRY &Entry) {
   PROCESS_CREATE_BLOCK_INPUT Input = {};
   Input.Operation = PROCESS_CREATE_BLOCK_OP_REMOVE;
   Input.Entry = Entry;
   return SendIoctl(IOCTL_REMOVE_PROCESS_CREATE_BLOCK, &Input, sizeof(Input));
 }
 
-BOOLEAN ClearProcessCreateBlocks() {
+inline BOOLEAN ClearProcessCreateBlocks() {
   PROCESS_CREATE_BLOCK_INPUT Input = {};
   Input.Operation = PROCESS_CREATE_BLOCK_OP_CLEAR;
   return SendIoctl(IOCTL_REMOVE_PROCESS_CREATE_BLOCK, &Input, sizeof(Input));
 }
 
-BOOLEAN EnumerateProcessCreateBlocks(PROCESS_CREATE_BLOCK_OUTPUT *Output) {
+inline BOOLEAN EnumerateProcessCreateBlocks(PROCESS_CREATE_BLOCK_OUTPUT *Output) {
   if (!Output) return FALSE;
   ZeroMemory(Output, sizeof(*Output));
   DWORD BytesReturned = 0;
@@ -2303,7 +2303,7 @@ BOOLEAN EnumerateProcessCreateBlocks(PROCESS_CREATE_BLOCK_OUTPUT *Output) {
                              Output, sizeof(*Output), &BytesReturned);
 }
 
-BOOLEAN RootkitScan(ROOTKIT_SCAN_INPUT *Input,
+inline BOOLEAN RootkitScan(ROOTKIT_SCAN_INPUT *Input,
                     ROOTKIT_SCAN_OUTPUT *Output) {
   if (!Input || !Output) return FALSE;
   Input->Size = sizeof(*Input);
@@ -2314,26 +2314,26 @@ BOOLEAN RootkitScan(ROOTKIT_SCAN_INPUT *Input,
                              Output, sizeof(*Output), &BytesReturned);
 }
 
-BOOLEAN EtwProviderOperate(const ETW_PROVIDER_OPERATION &Input) {
+inline BOOLEAN EtwProviderOperate(const ETW_PROVIDER_OPERATION &Input) {
   ETW_PROVIDER_OPERATION Op = Input;
   Op.Size = sizeof(Op);
   Op.Version = 1;
   return SendIoctl(IOCTL_ETW_PROVIDER_OPERATION, &Op, sizeof(Op));
 }
 
-BOOLEAN EtwProviderStart() {
+inline BOOLEAN EtwProviderStart() {
   ETW_PROVIDER_OPERATION Op = {};
   Op.Operation = ETW_PROVIDER_OP_START;
   return EtwProviderOperate(Op);
 }
 
-BOOLEAN EtwProviderStop() {
+inline BOOLEAN EtwProviderStop() {
   ETW_PROVIDER_OPERATION Op = {};
   Op.Operation = ETW_PROVIDER_OP_STOP;
   return EtwProviderOperate(Op);
 }
 
-BOOLEAN EtwProviderEnable(ULONG Index, UCHAR Level = 0,
+inline BOOLEAN EtwProviderEnable(ULONG Index, UCHAR Level = 0,
                           ULONG64 Keywords = 0) {
   ETW_PROVIDER_OPERATION Op = {};
   Op.Operation = ETW_PROVIDER_OP_ENABLE;
@@ -2343,14 +2343,14 @@ BOOLEAN EtwProviderEnable(ULONG Index, UCHAR Level = 0,
   return EtwProviderOperate(Op);
 }
 
-BOOLEAN EtwProviderDisable(ULONG Index) {
+inline BOOLEAN EtwProviderDisable(ULONG Index) {
   ETW_PROVIDER_OPERATION Op = {};
   Op.Operation = ETW_PROVIDER_OP_DISABLE;
   Op.ProviderIndex = Index;
   return EtwProviderOperate(Op);
 }
 
-BOOLEAN EtwProviderQueryStatus(ETW_PROVIDER_STATUS *Output) {
+inline BOOLEAN EtwProviderQueryStatus(ETW_PROVIDER_STATUS *Output) {
   if (!Output) return FALSE;
   ZeroMemory(Output, sizeof(*Output));
   DWORD BytesReturned = 0;
@@ -2364,7 +2364,7 @@ BOOLEAN EtwProviderQueryStatus(ETW_PROVIDER_STATUS *Output) {
   return TRUE;
 }
 
-BOOLEAN MsrQueryValues(MSR_QUERY_OUTPUT *Output) {
+inline BOOLEAN MsrQueryValues(MSR_QUERY_OUTPUT *Output) {
   if (!Output) return FALSE;
   MSR_OPERATION_INPUT Input = {};
   Input.Size = sizeof(Input);
@@ -2380,7 +2380,7 @@ BOOLEAN MsrQueryValues(MSR_QUERY_OUTPUT *Output) {
   return TRUE;
 }
 
-BOOLEAN MsrWatchEnable() {
+inline BOOLEAN MsrWatchEnable() {
   MSR_OPERATION_INPUT Input = {};
   Input.Size = sizeof(Input);
   Input.Version = 1;
@@ -2388,7 +2388,7 @@ BOOLEAN MsrWatchEnable() {
   return SendIoctl(IOCTL_MSR_OPERATION, &Input, sizeof(Input));
 }
 
-BOOLEAN MsrWatchDisable() {
+inline BOOLEAN MsrWatchDisable() {
   MSR_OPERATION_INPUT Input = {};
   Input.Size = sizeof(Input);
   Input.Version = 1;
@@ -2396,7 +2396,7 @@ BOOLEAN MsrWatchDisable() {
   return SendIoctl(IOCTL_MSR_OPERATION, &Input, sizeof(Input));
 }
 
-VOID ProtectRegistryKey(const WCHAR *KeyPath) {
+inline VOID ProtectRegistryKey(const WCHAR *KeyPath) {
   wprintf(L"[*] Adding registry key to protection: %s\n", KeyPath);
 
   REGISTRY_PROTECT_INPUT Input = {0};
@@ -2406,7 +2406,7 @@ VOID ProtectRegistryKey(const WCHAR *KeyPath) {
     wprintf(L"[+] Registry key protected.\n");
 }
 
-VOID UnprotectRegistryKey(const WCHAR *KeyPath) {
+inline VOID UnprotectRegistryKey(const WCHAR *KeyPath) {
   wprintf(L"[*] Removing registry key from protection: %s\n", KeyPath);
 
   REGISTRY_PROTECT_INPUT Input = {0};
@@ -2416,7 +2416,7 @@ VOID UnprotectRegistryKey(const WCHAR *KeyPath) {
     wprintf(L"[+] Registry key unprotected.\n");
 }
 
-BOOLEAN ProtectFile(const WCHAR *FilePath) {
+inline BOOLEAN ProtectFile(const WCHAR *FilePath) {
   wprintf(L"[*] Adding file to protection: %s\n", FilePath);
 
   FILE_PROTECT_INPUT Input = {0};
@@ -2429,7 +2429,7 @@ BOOLEAN ProtectFile(const WCHAR *FilePath) {
   return Success;
 }
 
-BOOLEAN UnprotectFile(const WCHAR *FilePath) {
+inline BOOLEAN UnprotectFile(const WCHAR *FilePath) {
   wprintf(L"[*] Removing file from protection: %s\n", FilePath);
 
   FILE_PROTECT_INPUT Input = {0};
@@ -2442,7 +2442,7 @@ BOOLEAN UnprotectFile(const WCHAR *FilePath) {
   return Success;
 }
 
-VOID SetPpl(ULONG ProcessId, UCHAR ProtectionType, UCHAR ProtectionSigner,
+inline VOID SetPpl(ULONG ProcessId, UCHAR ProtectionType, UCHAR ProtectionSigner,
             BOOLEAN Audit) {
   wprintf(L"[*] Setting PPL on PID=%u Type=%u Signer=%u Audit=%u ...\n",
           ProcessId, ProtectionType, ProtectionSigner, Audit);
@@ -2458,7 +2458,7 @@ VOID SetPpl(ULONG ProcessId, UCHAR ProtectionType, UCHAR ProtectionSigner,
     wprintf(L"[+] PPL set on PID=%u.\n", ProcessId);
 }
 
-VOID RemovePpl(ULONG ProcessId) {
+inline VOID RemovePpl(ULONG ProcessId) {
   wprintf(L"[*] Removing PPL from PID=%u ...\n", ProcessId);
 
   PPL_CONTROL_INPUT Input = {0};
@@ -2469,7 +2469,7 @@ VOID RemovePpl(ULONG ProcessId) {
     wprintf(L"[+] PPL removed from PID=%u.\n", ProcessId);
 }
 
-VOID QueryPpl(ULONG ProcessId) {
+inline VOID QueryPpl(ULONG ProcessId) {
   wprintf(L"[*] Querying PPL for PID=%u ...\n", ProcessId);
 
   PPL_QUERY_INPUT Input = {0};
@@ -2542,7 +2542,7 @@ VOID QueryPpl(ULONG ProcessId) {
   }
 }
 
-VOID SetCritical(ULONG ProcessId) {
+inline VOID SetCritical(ULONG ProcessId) {
   wprintf(L"[*] Setting PID=%u as critical process (terminate = BSOD) ...\n",
           ProcessId);
   wprintf(L"[!] WARNING: Killing this process will crash the system!\n");
@@ -2554,7 +2554,7 @@ VOID SetCritical(ULONG ProcessId) {
     wprintf(L"[+] PID=%u is now a critical process.\n", ProcessId);
 }
 
-VOID RemoveCritical(ULONG ProcessId) {
+inline VOID RemoveCritical(ULONG ProcessId) {
   wprintf(L"[*] Removing critical process flag from PID=%u ...\n", ProcessId);
 
   CRITICAL_PROCESS_INPUT Input = {0};
@@ -2564,7 +2564,7 @@ VOID RemoveCritical(ULONG ProcessId) {
     wprintf(L"[+] PID=%u is no longer a critical process.\n", ProcessId);
 }
 
-VOID HideProcess(ULONG ProcessId) {
+inline VOID HideProcess(ULONG ProcessId) {
   wprintf(L"[*] Hiding PID=%u from task manager ...\n", ProcessId);
 
   CRITICAL_PROCESS_INPUT Input = {0};
@@ -2574,7 +2574,7 @@ VOID HideProcess(ULONG ProcessId) {
     wprintf(L"[+] PID=%u is now hidden.\n", ProcessId);
 }
 
-VOID UnhideProcess(ULONG ProcessId) {
+inline VOID UnhideProcess(ULONG ProcessId) {
   wprintf(L"[*] Unhiding PID=%u ...\n", ProcessId);
 
   CRITICAL_PROCESS_INPUT Input = {0};
@@ -2584,7 +2584,7 @@ VOID UnhideProcess(ULONG ProcessId) {
     wprintf(L"[+] PID=%u is now visible.\n", ProcessId);
 }
 
-VOID HideProcessCid(ULONG ProcessId) {
+inline VOID HideProcessCid(ULONG ProcessId) {
   wprintf(L"[*] Permanently hiding PID=%u (list unlink + PspCidTable removal) ...\n", ProcessId);
 
   CRITICAL_PROCESS_INPUT Input = {0};
@@ -2594,7 +2594,7 @@ VOID HideProcessCid(ULONG ProcessId) {
     wprintf(L"[+] PID=%u is now permanently hidden.\n", ProcessId);
 }
 
-BOOLEAN ForceDeleteFile(const WCHAR *FilePath) {
+inline BOOLEAN ForceDeleteFile(const WCHAR *FilePath) {
   if (FilePath == NULL || FilePath[0] == L'\0') {
     G_LastAegisCoreError = ERROR_INVALID_NAME;
     return FALSE;
@@ -2634,7 +2634,7 @@ BOOLEAN ForceDeleteFile(const WCHAR *FilePath) {
   return Success;
 }
 
-VOID AdjustPrivileges(ULONG ProcessId, const WCHAR *PrivName, BOOLEAN Enable) {
+inline VOID AdjustPrivileges(ULONG ProcessId, const WCHAR *PrivName, BOOLEAN Enable) {
   wprintf(L"[*] %s privilege '%s' on PID=%u ...\n",
           Enable ? L"Enabling" : L"Disabling", PrivName, ProcessId);
 
@@ -2654,7 +2654,7 @@ VOID AdjustPrivileges(ULONG ProcessId, const WCHAR *PrivName, BOOLEAN Enable) {
     wprintf(L"[+] Privilege adjusted.\n");
 }
 
-VOID QueueApc(ULONG ProcessId, ULONG Action) {
+inline VOID QueueApc(ULONG ProcessId, ULONG Action) {
   wprintf(L"[*] Queuing APC to PID=%u (action=%u) ...\n", ProcessId, Action);
 
   APC_INPUT Input = {0};
@@ -2665,7 +2665,7 @@ VOID QueueApc(ULONG ProcessId, ULONG Action) {
     wprintf(L"[+] APC queued to PID=%u.\n", ProcessId);
 }
 
-VOID DisableApc(ULONG ProcessId) {
+inline VOID DisableApc(ULONG ProcessId) {
   wprintf(L"[*] Disabling APC delivery for PID=%u ...\n", ProcessId);
 
   CRITICAL_PROCESS_INPUT Input = {0};
@@ -2675,7 +2675,7 @@ VOID DisableApc(ULONG ProcessId) {
     wprintf(L"[+] APCs disabled for PID=%u.\n", ProcessId);
 }
 
-VOID EnableApc(ULONG ProcessId) {
+inline VOID EnableApc(ULONG ProcessId) {
   wprintf(L"[*] Enabling APC delivery for PID=%u ...\n", ProcessId);
 
   CRITICAL_PROCESS_INPUT Input = {0};
@@ -2685,7 +2685,7 @@ VOID EnableApc(ULONG ProcessId) {
     wprintf(L"[+] APCs re-enabled for PID=%u.\n", ProcessId);
 }
 
-BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId) {
+inline BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId) {
   wprintf(L"[*] Terminating TID=%u in PID=%u via AegisCore ...\n", ThreadId,
           ProcessId);
 
@@ -2723,7 +2723,7 @@ BOOLEAN KillThread(ULONG ThreadId, ULONG ProcessId) {
   return FALSE;
 }
 
-BOOLEAN EnumerateThreadsAll(PTHREAD_ENUM_OUTPUT Output, ULONG Cursor) {
+inline BOOLEAN EnumerateThreadsAll(PTHREAD_ENUM_OUTPUT Output, ULONG Cursor) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -2752,33 +2752,33 @@ BOOLEAN EnumerateThreadsAll(PTHREAD_ENUM_OUTPUT Output, ULONG Cursor) {
   return TRUE;
 }
 
-BOOLEAN SuspendThreadKernel(ULONG ThreadId) {
+inline BOOLEAN SuspendThreadKernel(ULONG ThreadId) {
   THREAD_ID_INPUT Input = {};
   Input.ThreadId = ThreadId;
   return SendIoctl(IOCTL_THREAD_SUSPEND, &Input, sizeof(Input));
 }
 
-BOOLEAN ResumeThreadKernel(ULONG ThreadId) {
+inline BOOLEAN ResumeThreadKernel(ULONG ThreadId) {
   THREAD_ID_INPUT Input = {};
   Input.ThreadId = ThreadId;
   return SendIoctl(IOCTL_THREAD_RESUME, &Input, sizeof(Input));
 }
 
-BOOLEAN SetThreadPreviousMode(ULONG ThreadId, UCHAR PreviousMode) {
+inline BOOLEAN SetThreadPreviousMode(ULONG ThreadId, UCHAR PreviousMode) {
   THREAD_PREVIOUS_MODE_INPUT Input = {};
   Input.ThreadId = ThreadId;
   Input.PreviousMode = PreviousMode;
   return SendIoctl(IOCTL_SET_THREAD_PREVIOUS_MODE, &Input, sizeof(Input));
 }
 
-BOOLEAN SetThreadApcQueueable(ULONG ThreadId, UCHAR Value) {
+inline BOOLEAN SetThreadApcQueueable(ULONG ThreadId, UCHAR Value) {
   THREAD_APC_QUEUEABLE_INPUT Input = {};
   Input.ThreadId = ThreadId;
   Input.Value = Value;
   return SendIoctl(IOCTL_SET_THREAD_APC_QUEUEABLE, &Input, sizeof(Input));
 }
 
-BOOLEAN KillProcessByThreads(
+inline BOOLEAN KillProcessByThreads(
     ULONG ProcessId, TERMINATE_PROCESS_THREADS_OUTPUT &Output) {
   ZeroMemory(&Output, sizeof(Output));
   Output.ProcessId = ProcessId;
@@ -2822,7 +2822,7 @@ BOOLEAN KillProcessByThreads(
   return FALSE;
 }
 
-BOOLEAN DllInjectApc(ULONG ProcessId, const WCHAR *DllPath) {
+inline BOOLEAN DllInjectApc(ULONG ProcessId, const WCHAR *DllPath) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (DllPath == NULL || DllPath[0] == L'\0') {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -2841,7 +2841,7 @@ BOOLEAN DllInjectApc(ULONG ProcessId, const WCHAR *DllPath) {
   return Success;
 }
 
-BOOLEAN DllInjectThread(ULONG ProcessId, const WCHAR *DllPath) {
+inline BOOLEAN DllInjectThread(ULONG ProcessId, const WCHAR *DllPath) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (DllPath == NULL || DllPath[0] == L'\0') {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -2860,35 +2860,35 @@ BOOLEAN DllInjectThread(ULONG ProcessId, const WCHAR *DllPath) {
   return Success;
 }
 
-VOID ClearAllProtection() {
+inline VOID ClearAllProtection() {
   wprintf(L"[*] Clearing all protection lists ...\n");
 
   if (SendIoctl(IOCTL_CLEAR_ALL_PROTECTION, NULL, 0))
     wprintf(L"[+] All protection lists cleared.\n");
 }
 
-VOID RemoveAllObCallbacks() {
+inline VOID RemoveAllObCallbacks() {
   wprintf(L"[*] Removing all Ob (Process/Thread) callbacks ...\n");
 
   if (SendIoctl(IOCTL_REMOVE_ALL_OBCALLBACKS, NULL, 0))
     wprintf(L"[+] All Ob callbacks removed.\n");
 }
 
-VOID RemoveAllRegistryCallbacks() {
+inline VOID RemoveAllRegistryCallbacks() {
   wprintf(L"[*] Removing all registry callbacks ...\n");
 
   if (SendIoctl(IOCTL_REMOVE_ALL_REGISTRYCALLBACKS, NULL, 0))
     wprintf(L"[+] All registry callbacks removed.\n");
 }
 
-VOID RemoveAllFilters() {
+inline VOID RemoveAllFilters() {
   wprintf(L"[*] Removing all minifilters ...\n");
 
   if (SendIoctl(IOCTL_REMOVE_ALL_FILTERS, NULL, 0))
     wprintf(L"[+] All minifilters removed.\n");
 }
 
-VOID EnumCallbacks() {
+inline VOID EnumCallbacks() {
   wprintf(L"[*] Enumerating all registered callbacks ...\n\n");
 
   DWORD BytesReturned = 0;
@@ -3023,7 +3023,7 @@ VOID EnumCallbacks() {
   free(Out);
 }
 
-VOID RemoveCallbackByAddress(const WCHAR *AddrStr) {
+inline VOID RemoveCallbackByAddress(const WCHAR *AddrStr) {
   ULONG_PTR Address = wcstoull(AddrStr, NULL, 16);
   if (Address == 0) {
     wprintf(L"[!] Invalid address: %s\n", AddrStr);
@@ -3049,7 +3049,7 @@ static ULONG ResolveAccountPid(ULONG AccountType) {
   return 0;
 }
 
-BOOLEAN SetToken(ULONG SourcePid, ULONG TargetPid) {
+inline BOOLEAN SetToken(ULONG SourcePid, ULONG TargetPid) {
   if (SourcePid == 0 || TargetPid == 0) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -3062,7 +3062,7 @@ BOOLEAN SetToken(ULONG SourcePid, ULONG TargetPid) {
   return SendIoctl(IOCTL_STEAL_TOKEN, &Input, sizeof(Input));
 }
 
-BOOLEAN SetTokenAs(ULONG AccountType, ULONG TargetPid,
+inline BOOLEAN SetTokenAs(ULONG AccountType, ULONG TargetPid,
                    PULONG OutSourcePid = NULL) {
   ULONG AccountPid = ResolveAccountPid(AccountType);
   if (AccountPid == 0) {
@@ -3144,7 +3144,7 @@ static BOOLEAN ConvertLaunchPathToWin32Path(const WCHAR *ImagePath,
   return FALSE;
 }
 
-BOOLEAN LaunchAs(ULONG AccountType, const WCHAR *ImagePath,
+inline BOOLEAN LaunchAs(ULONG AccountType, const WCHAR *ImagePath,
                  PULONG OutProcessId = NULL) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (OutProcessId)
@@ -3235,7 +3235,7 @@ BOOLEAN LaunchAs(ULONG AccountType, const WCHAR *ImagePath,
   return TRUE;
 }
 
-BOOLEAN ReadMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer, ULONG Size,
+inline BOOLEAN ReadMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer, ULONG Size,
                    PULONG BytesRead) {
   if (BytesRead)
     *BytesRead = 0;
@@ -3272,7 +3272,7 @@ BOOLEAN ReadMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer, ULONG Size,
   return Success;
 }
 
-BOOLEAN WriteMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer,
+inline BOOLEAN WriteMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer,
                     ULONG Size) {
   if (Buffer == NULL || Size == 0) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -3296,7 +3296,7 @@ BOOLEAN WriteMemory(ULONG ProcessId, ULONG_PTR Address, PVOID Buffer,
   return Success;
 }
 
-BOOLEAN QuerySystemTables(PSYSTEM_TABLES_OUTPUT Output) {
+inline BOOLEAN QuerySystemTables(PSYSTEM_TABLES_OUTPUT Output) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -3311,7 +3311,7 @@ BOOLEAN QuerySystemTables(PSYSTEM_TABLES_OUTPUT Output) {
   return Success;
 }
 
-BOOLEAN QuerySystemTableEntries(ULONG TableKind,
+inline BOOLEAN QuerySystemTableEntries(ULONG TableKind,
                                 PSYSTEM_TABLE_ENTRIES_OUTPUT Output) {
   if (Output == NULL || TableKind > SYSTEM_TABLE_KIND_GDT) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -3325,7 +3325,7 @@ BOOLEAN QuerySystemTableEntries(ULONG TableKind,
       sizeof(SYSTEM_TABLE_ENTRIES_OUTPUT), &BytesReturned);
 }
 
-BOOLEAN QueryPiDDBCacheEntries(PPIDDB_CACHE_ENUM_OUTPUT Output) {
+inline BOOLEAN QueryPiDDBCacheEntries(PPIDDB_CACHE_ENUM_OUTPUT Output) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -3337,7 +3337,7 @@ BOOLEAN QueryPiDDBCacheEntries(PPIDDB_CACHE_ENUM_OUTPUT Output) {
                              sizeof(PIDDB_CACHE_ENUM_OUTPUT), &BytesReturned);
 }
 
-BOOLEAN QueryHalDispatchEntries(ULONG TableKind,
+inline BOOLEAN QueryHalDispatchEntries(ULONG TableKind,
                                 PSYSTEM_TABLE_ENTRIES_OUTPUT Output) {
   if (Output == NULL ||
       (TableKind != HAL_DISPATCH_TABLE_KIND_PUBLIC &&
@@ -3353,7 +3353,7 @@ BOOLEAN QueryHalDispatchEntries(ULONG TableKind,
       sizeof(SYSTEM_TABLE_ENTRIES_OUTPUT), &BytesReturned);
 }
 
-BOOLEAN EnumerateDpcQueue(PDPC_ENUM_OUTPUT Output) {
+inline BOOLEAN EnumerateDpcQueue(PDPC_ENUM_OUTPUT Output) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -3364,7 +3364,7 @@ BOOLEAN EnumerateDpcQueue(PDPC_ENUM_OUTPUT Output) {
                              sizeof(DPC_ENUM_OUTPUT), &BytesReturned);
 }
 
-BOOLEAN EnumerateHotkeys(PHOTKEY_ENUM_OUTPUT Output) {
+inline BOOLEAN EnumerateHotkeys(PHOTKEY_ENUM_OUTPUT Output) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -3375,7 +3375,7 @@ BOOLEAN EnumerateHotkeys(PHOTKEY_ENUM_OUTPUT Output) {
                              sizeof(HOTKEY_ENUM_OUTPUT), &BytesReturned);
 }
 
-BOOLEAN RemoveHotkey(const HOTKEY_ENUM_ENTRY& Entry, NTSTATUS* KernelStatus,
+inline BOOLEAN RemoveHotkey(const HOTKEY_ENUM_ENTRY& Entry, NTSTATUS* KernelStatus,
                      DWORD* ErrorCode, ULONG* Detail = nullptr,
                      HOTKEY_REMOVE_DIAGNOSTIC* Diagnostic = nullptr) {
   if (!KernelStatus || !ErrorCode) return FALSE;
@@ -3422,7 +3422,7 @@ BOOLEAN RemoveHotkey(const HOTKEY_ENUM_ENTRY& Entry, NTSTATUS* KernelStatus,
   return Output.KernelStatus >= 0;
 }
 
-BOOLEAN RemoveDpcEntry(ULONG_PTR DpcObject, ULONG Cpu) {
+inline BOOLEAN RemoveDpcEntry(ULONG_PTR DpcObject, ULONG Cpu) {
   if (DpcObject == 0) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -3433,7 +3433,7 @@ BOOLEAN RemoveDpcEntry(ULONG_PTR DpcObject, ULONG Cpu) {
   return SendIoctl(IOCTL_REMOVE_DPC, &Input, sizeof(Input));
 }
 
-BOOLEAN RemovePiDDBCacheEntry(ULONG_PTR EntryAddress) {
+inline BOOLEAN RemovePiDDBCacheEntry(ULONG_PTR EntryAddress) {
   if (EntryAddress == 0) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -3448,7 +3448,7 @@ inline DWORD AegisCoreNtStatusToWin32(NTSTATUS Status) {
                      : (DWORD)RtlNtStatusToDosError(Status);
 }
 
-BOOLEAN QueryDriverEntries(std::vector<DRIVER_ENUM_ENTRY> &Entries,
+inline BOOLEAN QueryDriverEntries(std::vector<DRIVER_ENUM_ENTRY> &Entries,
                            PDRIVER_ENUM_HEADER Header = NULL) {
   Entries.clear();
   if (Header != NULL)
@@ -3769,7 +3769,7 @@ inline bool RollbackAdvancedTransaction(ULONG Kind, ULONG64 TransactionId,
   return AdvancedOperation(Input, Output);
 }
 
-BOOLEAN LoadDriverKernel(const WCHAR *ServiceName, const WCHAR *ImagePath,
+inline BOOLEAN LoadDriverKernel(const WCHAR *ServiceName, const WCHAR *ImagePath,
                          PDRIVER_CONTROL_OUTPUT Output = NULL) {
   if (ServiceName == NULL || ServiceName[0] == L'\0' || ImagePath == NULL ||
       ImagePath[0] == L'\0') {
@@ -3794,7 +3794,7 @@ BOOLEAN LoadDriverKernel(const WCHAR *ServiceName, const WCHAR *ImagePath,
   return Result.NtStatus == 0;
 }
 
-BOOLEAN UnloadDriverKernel(const WCHAR *ServiceName, BOOLEAN DeleteOnUnload,
+inline BOOLEAN UnloadDriverKernel(const WCHAR *ServiceName, BOOLEAN DeleteOnUnload,
                            PDRIVER_CONTROL_OUTPUT Output = NULL) {
   if (ServiceName == NULL || ServiceName[0] == L'\0') {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -3818,7 +3818,7 @@ BOOLEAN UnloadDriverKernel(const WCHAR *ServiceName, BOOLEAN DeleteOnUnload,
   return Result.NtStatus == 0;
 }
 
-BOOLEAN HideDriverKernel(const WCHAR *ServiceName,
+inline BOOLEAN HideDriverKernel(const WCHAR *ServiceName,
                          PDRIVER_HIDE_OUTPUT Output = NULL) {
   if (ServiceName == NULL || ServiceName[0] == L'\0') {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -3841,7 +3841,7 @@ BOOLEAN HideDriverKernel(const WCHAR *ServiceName,
   return Result.NtStatus == 0;
 }
 
-BOOLEAN HideDriverKernelCid(const WCHAR *ServiceName,
+inline BOOLEAN HideDriverKernelCid(const WCHAR *ServiceName,
                             PDRIVER_HIDE_OUTPUT Output = NULL) {
   if (ServiceName == NULL || ServiceName[0] == L'\0') {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -3865,7 +3865,7 @@ BOOLEAN HideDriverKernelCid(const WCHAR *ServiceName,
 }
 
 // PreviousMode�? = KernelMode�? = UserMode
-BOOLEAN SetProcessPreviousMode(ULONG ProcessId, UCHAR PreviousMode = 0) {
+inline BOOLEAN SetProcessPreviousMode(ULONG ProcessId, UCHAR PreviousMode = 0) {
   if (PreviousMode > 1) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -3877,7 +3877,7 @@ BOOLEAN SetProcessPreviousMode(ULONG ProcessId, UCHAR PreviousMode = 0) {
   return SendIoctl(IOCTL_SET_PREVIOUS_MODE, &Input, sizeof(Input));
 }
 
-BOOLEAN KernelReadMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
+inline BOOLEAN KernelReadMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
                          PULONG BytesRead,
                          KRNL_MEMRW_METHOD Method = KrnlMemRwAuto) {
   if (BytesRead)
@@ -3921,7 +3921,7 @@ BOOLEAN KernelReadMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
   return Success;
 }
 
-BOOLEAN KernelWriteMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
+inline BOOLEAN KernelWriteMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
                           KRNL_MEMRW_METHOD Method = KrnlMemRwAuto) {
   if (Buffer == NULL || Size == 0) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -3946,7 +3946,7 @@ BOOLEAN KernelWriteMemory(ULONG_PTR Address, PVOID Buffer, ULONG Size,
 }
 
 /* ---- 内存区域控制 (IOCTL 0x881/0x882) ---- */
-BOOL KernelProtectMemory(ULONG ProcessId, ULONG_PTR Address, ULONG64 Size,
+inline BOOL KernelProtectMemory(ULONG ProcessId, ULONG_PTR Address, ULONG64 Size,
                          ULONG NewProtect, ULONG *OldProtect) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   MEMORY_PROTECT_INPUT Input = {};
@@ -3964,7 +3964,7 @@ BOOL KernelProtectMemory(ULONG ProcessId, ULONG_PTR Address, ULONG64 Size,
   return Success;
 }
 
-BOOL KernelAllocMemory(ULONG ProcessId, ULONG64 Size, ULONG Protect,
+inline BOOL KernelAllocMemory(ULONG ProcessId, ULONG64 Size, ULONG Protect,
                        BOOLEAN ReserveOnly, ULONG_PTR *BaseAddress) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   MEMORY_ALLOC_INPUT Input = {};
@@ -3983,7 +3983,7 @@ BOOL KernelAllocMemory(ULONG ProcessId, ULONG64 Size, ULONG Protect,
   return Success;
 }
 
-BOOL KernelFreeMemory(ULONG ProcessId, ULONG_PTR Address) {
+inline BOOL KernelFreeMemory(ULONG ProcessId, ULONG_PTR Address) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   MEMORY_ALLOC_INPUT Input = {};
   Input.ProcessId = ProcessId;
@@ -3995,7 +3995,7 @@ BOOL KernelFreeMemory(ULONG ProcessId, ULONG_PTR Address) {
                              &Output, sizeof(Output), &BytesReturned);
 }
 
-BOOLEAN DisableDse(PDSE_CONTROL_OUTPUT Output = NULL) {
+inline BOOLEAN DisableDse(PDSE_CONTROL_OUTPUT Output = NULL) {
   DSE_CONTROL_OUTPUT Result = {};
 
   DWORD BytesReturned = 0;
@@ -4013,7 +4013,7 @@ BOOLEAN DisableDse(PDSE_CONTROL_OUTPUT Output = NULL) {
   return Success;
 }
 
-BOOLEAN RestoreDse(PDSE_CONTROL_OUTPUT Output = NULL) {
+inline BOOLEAN RestoreDse(PDSE_CONTROL_OUTPUT Output = NULL) {
   DSE_CONTROL_OUTPUT Result = {};
 
   DWORD BytesReturned = 0;
@@ -4031,7 +4031,7 @@ BOOLEAN RestoreDse(PDSE_CONTROL_OUTPUT Output = NULL) {
   return Success;
 }
 
-BOOLEAN QueryDse(PDSE_CONTROL_OUTPUT Output) {
+inline BOOLEAN QueryDse(PDSE_CONTROL_OUTPUT Output) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -4050,11 +4050,11 @@ BOOLEAN QueryDse(PDSE_CONTROL_OUTPUT Output) {
   return Success;
 }
 
-BOOLEAN EnableDebug() { return SendIoctl(IOCTL_ENABLE_DEBUG, NULL, 0); }
+inline BOOLEAN EnableDebug() { return SendIoctl(IOCTL_ENABLE_DEBUG, NULL, 0); }
 
-BOOLEAN DisableDebug() { return SendIoctl(IOCTL_DISABLE_DEBUG, NULL, 0); }
+inline BOOLEAN DisableDebug() { return SendIoctl(IOCTL_DISABLE_DEBUG, NULL, 0); }
 
-BOOLEAN QueryDebugState(PDEBUG_STATE_OUTPUT Output) {
+inline BOOLEAN QueryDebugState(PDEBUG_STATE_OUTPUT Output) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -4074,7 +4074,7 @@ BOOLEAN QueryDebugState(PDEBUG_STATE_OUTPUT Output) {
   return Success;
 }
 
-BOOLEAN DisablePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
+inline BOOLEAN DisablePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
   PG_CONTROL_OUTPUT Result = {};
 
   DWORD BytesReturned = 0;
@@ -4095,7 +4095,7 @@ BOOLEAN DisablePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
 
 /* 启用 PPN 路径（第三路径）：把 PG 校验例程所在可执行页置 NX �?Hook #PF�?
    �?DisablePatchGuard 的主/辅路径独立，可单独调用�?*/
-BOOLEAN EnablePPN(PPG_CONTROL_OUTPUT Output = NULL) {
+inline BOOLEAN EnablePPN(PPG_CONTROL_OUTPUT Output = NULL) {
   PG_CONTROL_OUTPUT Result = {};
 
   DWORD BytesReturned = 0;
@@ -4113,7 +4113,7 @@ BOOLEAN EnablePPN(PPG_CONTROL_OUTPUT Output = NULL) {
   return Success;
 }
 
-BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output) {
+inline BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output) {
   if (Output == NULL) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
@@ -4135,7 +4135,7 @@ BOOLEAN QueryPatchGuard(PPG_CONTROL_OUTPUT Output) {
 /* 取消 PatchGuard 相关�?DPC：驱动侧枚举所�?DPC 队列并解码，摘除
    DeferredContext 为非规范指针�?DeferredRoutine 落在 ntoskrnl 内的条目�?
    DryRun �?0 时只分类不摘除（用于先摸底确认命中是否合理）�?*/
-BOOLEAN CancelPatchGuardDpcs(PDPC_CANCEL_OUTPUT Output = NULL,
+inline BOOLEAN CancelPatchGuardDpcs(PDPC_CANCEL_OUTPUT Output = NULL,
                              BOOLEAN DryRun = FALSE,
                              ULONG MaxCancel = 0) {
   DPC_CANCEL_INPUT Input = {};
@@ -4162,7 +4162,7 @@ BOOLEAN CancelPatchGuardDpcs(PDPC_CANCEL_OUTPUT Output = NULL,
 /* 取消 PatchGuard 相关�?APC：遍历所有内核线程的 KernelMode APC 队列�?
    摘除 KernelRoutine == ntoskrnl!KiDispatchCallout �?RundownRoutine == NULL
    的条目。DryRun �?0 时只分类不摘除（用于先摸底确认命中是否合理）�?*/
-BOOLEAN CancelPatchGuardApcs(PAPC_CANCEL_OUTPUT Output = NULL,
+inline BOOLEAN CancelPatchGuardApcs(PAPC_CANCEL_OUTPUT Output = NULL,
                              BOOLEAN DryRun = FALSE,
                              ULONG MaxCancel = 0,
                              ULONG_PTR TargetApcObject = 0,
@@ -4192,7 +4192,7 @@ BOOLEAN CancelPatchGuardApcs(PAPC_CANCEL_OUTPUT Output = NULL,
 
 /* 列出所有内核 APC（只读清单，不摘链）。与 CancelPatchGuardApcs 走不同的
    IOCTL（IOCTL_ENUM_APC），结果含普通 APC 条目。 */
-BOOLEAN EnumerateApcs(PAPC_CANCEL_OUTPUT Output = NULL,
+inline BOOLEAN EnumerateApcs(PAPC_CANCEL_OUTPUT Output = NULL,
                       ULONG_PTR TargetApcObject = 0,
                       ULONG TargetThreadId = 0) {
   APC_CANCEL_INPUT Input = {};
@@ -4218,7 +4218,7 @@ BOOLEAN EnumerateApcs(PAPC_CANCEL_OUTPUT Output = NULL,
 }
 
 /* 查询 APC 捕获状态（不改变 Enable/Clear）。 */
-BOOLEAN ApcCaptureQuery(PAPC_CAPTURE_CTL_OUTPUT Output = NULL) {
+inline BOOLEAN ApcCaptureQuery(PAPC_CAPTURE_CTL_OUTPUT Output = NULL) {
   APC_CAPTURE_CTL_OUTPUT Result = {};
   DWORD BytesReturned = 0;
   BOOLEAN Success = SendIoctlWithOutput(
@@ -4230,7 +4230,7 @@ BOOLEAN ApcCaptureQuery(PAPC_CAPTURE_CTL_OUTPUT Output = NULL) {
 }
 
 /* 设置 APC 捕获：Enable=true 启用 / false 停用；Clear=true 顺带清空缓冲。 */
-BOOLEAN ApcCaptureCtl(BOOLEAN Enable, BOOLEAN Clear,
+inline BOOLEAN ApcCaptureCtl(BOOLEAN Enable, BOOLEAN Clear,
                       PAPC_CAPTURE_CTL_OUTPUT Output = NULL) {
   APC_CAPTURE_CTL_INPUT Input = {};
   Input.Enable = Enable ? 1u : 0u;
@@ -4249,7 +4249,7 @@ BOOLEAN ApcCaptureCtl(BOOLEAN Enable, BOOLEAN Clear,
 
 /* 读取 APC 捕获环形缓冲到调用方缓冲区（大小由 BufferSize 决定）。
    Output 指向的缓冲区至少应有 sizeof(APC_CAPTURE_OUTPUT) 大。 */
-BOOLEAN ApcCaptureRead(PAPC_CAPTURE_OUTPUT Output, DWORD BufferSize,
+inline BOOLEAN ApcCaptureRead(PAPC_CAPTURE_OUTPUT Output, DWORD BufferSize,
                        PDWORD BytesReturned = NULL) {
   if (Output == NULL || BufferSize < sizeof(APC_CAPTURE_OUTPUT)) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -4264,7 +4264,7 @@ BOOLEAN ApcCaptureRead(PAPC_CAPTURE_OUTPUT Output, DWORD BufferSize,
 }
 
 /* 主动注入标记 APC（验证扫描器）。 */
-BOOLEAN InjectTestApc(PAPC_TEST_OUTPUT Output = NULL, ULONG TargetThreadId = 0,
+inline BOOLEAN InjectTestApc(PAPC_TEST_OUTPUT Output = NULL, ULONG TargetThreadId = 0,
                       ULONG Count = 1, ULONG StallMicros = 100) {
   APC_TEST_INPUT Input = {};
   Input.TargetThreadId = TargetThreadId;
@@ -4287,7 +4287,7 @@ BOOLEAN InjectTestApc(PAPC_TEST_OUTPUT Output = NULL, ULONG TargetThreadId = 0,
   return Success;
 }
 
-BOOL EnumerateWindowsKernel(_Out_writes_bytes_all_(BufferSize) PVOID Buffer,
+inline BOOL EnumerateWindowsKernel(_Out_writes_bytes_all_(BufferSize) PVOID Buffer,
                             _In_ ULONG BufferSize,
                             _Out_ PULONG EntriesReturned) {
   G_LastAegisCoreError = ERROR_SUCCESS;
@@ -4309,7 +4309,7 @@ BOOL EnumerateWindowsKernel(_Out_writes_bytes_all_(BufferSize) PVOID Buffer,
   return Success;
 }
 
-BOOL WindowOperationKernel(ULONG ProcessId, ULONG64 Hwnd, ULONG Operation,
+inline BOOL WindowOperationKernel(ULONG ProcessId, ULONG64 Hwnd, ULONG Operation,
                            _In_opt_ PCWSTR NewTitle, LONG NewX, LONG NewY,
                            LONG NewWidth, LONG NewHeight, ULONG Flags) {
   G_LastAegisCoreError = ERROR_SUCCESS;
@@ -4390,7 +4390,7 @@ FORCEINLINE BOOL WindowRemoveTopmost(ULONG Pid, ULONG64 Hwnd, ULONG Flags = 0) {
 }
 
 /* ---- 命令�?---- */
-BOOL GetProcessCommandLine(ULONG ProcessId, PWCHAR Buffer, ULONG MaxLen) {
+inline BOOL GetProcessCommandLine(ULONG ProcessId, PWCHAR Buffer, ULONG MaxLen) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (Buffer == NULL || MaxLen < 2) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -4418,7 +4418,7 @@ BOOL GetProcessCommandLine(ULONG ProcessId, PWCHAR Buffer, ULONG MaxLen) {
 }
 
 /* ---- 服务 ---- */
-BOOL ServiceKernelOp(PCWSTR Name, ULONG Op, ULONG SvcType) {
+inline BOOL ServiceKernelOp(PCWSTR Name, ULONG Op, ULONG SvcType) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   SERVICE_OPERATION_INPUT Input = {};
   Input.Operation = Op;
@@ -4444,7 +4444,7 @@ FORCEINLINE BOOL ServiceDelete(PCWSTR Name) {
 }
 
 /* ---- 注册�?---- */
-BOOL RegistryKernelOp(PCWSTR KeyPath, ULONG Op, PCWSTR ValueName,
+inline BOOL RegistryKernelOp(PCWSTR KeyPath, ULONG Op, PCWSTR ValueName,
                       ULONG ValueType, PVOID ValueData, ULONG ValueSize,
                       PVOID OutBuf, ULONG OutSize, PULONG Returned) {
   G_LastAegisCoreError = ERROR_SUCCESS;
@@ -4490,7 +4490,7 @@ FORCEINLINE BOOL RegDeleteValueKernel(PCWSTR KeyPath, PCWSTR ValName) {
 }
 
 /* ---- 会话 ---- */
-BOOL SessionKernelOp(ULONG SessionId, ULONG Op, PVOID OutBuf, ULONG OutSize,
+inline BOOL SessionKernelOp(ULONG SessionId, ULONG Op, PVOID OutBuf, ULONG OutSize,
                      PULONG Returned) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   SESSION_OPERATION_INPUT Input = {SessionId, Op};
@@ -4511,7 +4511,7 @@ FORCEINLINE BOOL LogoffSession(ULONG SessionId) {
 }
 
 /* ---- Mitigation ---- */
-BOOL QueryMitigationKernel(ULONG Pid, PVOID OutBuf, ULONG OutSize,
+inline BOOL QueryMitigationKernel(ULONG Pid, PVOID OutBuf, ULONG OutSize,
                            PULONG Returned) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   DWORD BytesReturned = 0;
@@ -4523,14 +4523,14 @@ BOOL QueryMitigationKernel(ULONG Pid, PVOID OutBuf, ULONG OutSize,
   return Success;
 }
 
-BOOL SetMitigationKernel(ULONG Pid, ULONG PolicyId, ULONG64 Flags) {
+inline BOOL SetMitigationKernel(ULONG Pid, ULONG PolicyId, ULONG64 Flags) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   MITIGATION_SET_INPUT Input = {Pid, PolicyId, Flags};
   return SendIoctl(IOCTL_MITIGATION_SET, &Input, sizeof(Input));
 }
 
 /* ---- 同步对象 ---- */
-BOOL EnumSyncObjectsKernel(PVOID OutBuf, ULONG OutSize, PULONG Count) {
+inline BOOL EnumSyncObjectsKernel(PVOID OutBuf, ULONG OutSize, PULONG Count) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   DWORD BytesReturned = 0;
   BOOL Success = SendIoctlWithOutput(IOCTL_ENUM_SYNC_OBJECTS, NULL, 0, OutBuf,
@@ -4541,7 +4541,7 @@ BOOL EnumSyncObjectsKernel(PVOID OutBuf, ULONG OutSize, PULONG Count) {
 }
 
 /* ---- 防火�?---- */
-BOOL FirewallKernelOpEx(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port,
+inline BOOL FirewallKernelOpEx(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port,
                         ULONG Protocol, ULONG RemoteIpv4,
                         const UCHAR *RemoteIpv6, ULONG DirectionMask,
                         ULONG FamilyMask) {
@@ -4560,12 +4560,12 @@ BOOL FirewallKernelOpEx(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port,
   return SendIoctl(IOCTL_FIREWALL_OPERATION, &Input, sizeof(Input));
 }
 
-BOOL FirewallKernelOp(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port,
+inline BOOL FirewallKernelOp(PCWSTR RuleName, ULONG Op, ULONG Action, ULONG Port,
                       ULONG Protocol) {
   return FirewallKernelOpEx(RuleName, Op, Action, Port, Protocol, 0, nullptr, 0, 0);
 }
 
-BOOL EnumerateFirewallRulesKernel(FIREWALL_RULE_OUTPUT *Output) {
+inline BOOL EnumerateFirewallRulesKernel(FIREWALL_RULE_OUTPUT *Output) {
   if (!Output) return FALSE;
   ZeroMemory(Output, sizeof(*Output));
   DWORD BytesReturned = 0;
@@ -4574,7 +4574,7 @@ BOOL EnumerateFirewallRulesKernel(FIREWALL_RULE_OUTPUT *Output) {
 }
 
 /* ---- 内核特征码扫�?---- */
-BOOL KernelPatternScan(PCWSTR TargetModule, PCWSTR PatternText,
+inline BOOL KernelPatternScan(PCWSTR TargetModule, PCWSTR PatternText,
                        KERNEL_PATTERN_SCAN_OUTPUT *Output) {
   if (!Output || !PatternText) return FALSE;
   G_LastAegisCoreError = ERROR_SUCCESS;
@@ -4590,7 +4590,7 @@ BOOL KernelPatternScan(PCWSTR TargetModule, PCWSTR PatternText,
 }
 
 /* ---- 可疑内存扫描 ---- */
-BOOL SuspiciousMemoryScan(ULONG ProcessId, SUSPECT_MEMORY_OUTPUT *Output) {
+inline BOOL SuspiciousMemoryScan(ULONG ProcessId, SUSPECT_MEMORY_OUTPUT *Output) {
   if (!Output) return FALSE;
   G_LastAegisCoreError = ERROR_SUCCESS;
   SUSPECT_MEMORY_INPUT Input = {ProcessId, 0};
@@ -4601,39 +4601,39 @@ BOOL SuspiciousMemoryScan(ULONG ProcessId, SUSPECT_MEMORY_OUTPUT *Output) {
 }
 
 /* ---- 窗口保护 ---- */
-BOOL ProtectWindowKernel(ULONG Pid, ULONG64 Hwnd, ULONG Flags) {
+inline BOOL ProtectWindowKernel(ULONG Pid, ULONG64 Hwnd, ULONG Flags) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   WINDOW_PROTECT_INPUT Input = {Pid, Hwnd, Flags ? Flags : WINPROT_ALL};
   return SendIoctl(IOCTL_ADD_WINDOW_PROTECT, &Input, sizeof(Input));
 }
 
-BOOL UnprotectWindowKernel(ULONG Pid, ULONG64 Hwnd) {
+inline BOOL UnprotectWindowKernel(ULONG Pid, ULONG64 Hwnd) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   WINDOW_PROTECT_INPUT Input = {Pid, Hwnd, 0};
   return SendIoctl(IOCTL_REMOVE_WINDOW_PROTECT, &Input, sizeof(Input));
 }
 
 /* ---- 注入防护（非 PPL�?---- */
-BOOL AddInjectionProtectKernel(ULONG Pid) {
+inline BOOL AddInjectionProtectKernel(ULONG Pid) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   INJECTION_PROTECT_INPUT Input = {Pid};
   return SendIoctl(IOCTL_ADD_INJECTION_PROTECTION, &Input, sizeof(Input));
 }
 
-BOOL RemoveInjectionProtectKernel(ULONG Pid) {
+inline BOOL RemoveInjectionProtectKernel(ULONG Pid) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   INJECTION_PROTECT_INPUT Input = {Pid};
   return SendIoctl(IOCTL_REMOVE_INJECTION_PROTECTION, &Input, sizeof(Input));
 }
 
 /* ---- 句柄操作 ---- */
-BOOL ForceCloseHandleKernel(ULONG ProcessId, ULONG HandleValue) {
+inline BOOL ForceCloseHandleKernel(ULONG ProcessId, ULONG HandleValue) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   HANDLE_CLOSE_INPUT Input = {ProcessId, HandleValue};
   return SendIoctl(IOCTL_HANDLE_CLOSE, &Input, sizeof(Input));
 }
 
-BOOL DowngradeHandleKernel(ULONG ProcessId, ULONG HandleValue,
+inline BOOL DowngradeHandleKernel(ULONG ProcessId, ULONG HandleValue,
                            ACCESS_MASK NewAccess, ULONG *OutNewHandle) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (OutNewHandle)
@@ -4649,7 +4649,7 @@ BOOL DowngradeHandleKernel(ULONG ProcessId, ULONG HandleValue,
   return TRUE;
 }
 
-BOOL DuplicateAndDowngradeHandleKernel(ULONG SourcePid, ULONG SourceHandle,
+inline BOOL DuplicateAndDowngradeHandleKernel(ULONG SourcePid, ULONG SourceHandle,
                                        ULONG TargetPid, ACCESS_MASK NewAccess,
                                        ULONG_PTR *OutNewHandle) {
   G_LastAegisCoreError = ERROR_SUCCESS;
@@ -4672,7 +4672,7 @@ BOOL DuplicateAndDowngradeHandleKernel(ULONG SourcePid, ULONG SourceHandle,
   return NT_SUCCESS(Output.Status);
 }
 
-BOOLEAN SetIdtLimit() {
+inline BOOLEAN SetIdtLimit() {
   BOOLEAN Success = SendIoctl(IOCTL_SET_IDT_LIMIT, 0, 0);
 
   return Success;
@@ -4680,7 +4680,7 @@ BOOLEAN SetIdtLimit() {
 
 /* ---- 线程劫持操作 ---- */
 
-BOOLEAN HijackThreadContext(ULONG ThreadId, ULONG_PTR TargetRip) {
+inline BOOLEAN HijackThreadContext(ULONG ThreadId, ULONG_PTR TargetRip) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (ThreadId == 0 || TargetRip == 0) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -4691,7 +4691,7 @@ BOOLEAN HijackThreadContext(ULONG ThreadId, ULONG_PTR TargetRip) {
   return SendIoctl(IOCTL_THREAD_HIJACK_CONTEXT, &Input, sizeof(Input));
 }
 
-BOOLEAN HijackThreadTrapFrame(ULONG ThreadId, ULONG_PTR TargetRip) {
+inline BOOLEAN HijackThreadTrapFrame(ULONG ThreadId, ULONG_PTR TargetRip) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (ThreadId == 0 || TargetRip == 0) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
@@ -4702,7 +4702,7 @@ BOOLEAN HijackThreadTrapFrame(ULONG ThreadId, ULONG_PTR TargetRip) {
   return SendIoctl(IOCTL_THREAD_HIJACK_TRAPFRAME, &Input, sizeof(Input));
 }
 
-BOOLEAN RemoteCallViaKernel(ULONG ThreadId, ULONG_PTR Function,
+inline BOOLEAN RemoteCallViaKernel(ULONG ThreadId, ULONG_PTR Function,
                             ULONG_PTR Arg1, ULONG_PTR Arg2,
                             ULONG_PTR Arg3, ULONG_PTR Arg4,
                             PLONG OutResult) {
@@ -4727,7 +4727,7 @@ BOOLEAN RemoteCallViaKernel(ULONG ThreadId, ULONG_PTR Function,
 
 /* ---- Shellcode 注入 + 线程劫持 ---- */
 
-BOOLEAN InjectShellcode(ULONG ProcessId, const UCHAR *Shellcode, ULONG Size,
+inline BOOLEAN InjectShellcode(ULONG ProcessId, const UCHAR *Shellcode, ULONG Size,
                         ULONG_PTR *OutAddress) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (ProcessId == 0 || Shellcode == NULL || Size == 0 || OutAddress == NULL) {
@@ -4757,7 +4757,7 @@ BOOLEAN InjectShellcode(ULONG ProcessId, const UCHAR *Shellcode, ULONG Size,
   return Ok;
 }
 
-BOOLEAN InjectAndHijack(ULONG ThreadId, const UCHAR *Shellcode, ULONG Size,
+inline BOOLEAN InjectAndHijack(ULONG ThreadId, const UCHAR *Shellcode, ULONG Size,
                         ULONG_PTR *OutAddress) {
   G_LastAegisCoreError = ERROR_SUCCESS;
   if (ThreadId == 0 || Shellcode == NULL || Size == 0 || OutAddress == NULL) {

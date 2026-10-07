@@ -220,6 +220,9 @@
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="Data\translations.qrc" />
+    <QtMoc Include="Source\UI\Common\Base\PageBase.h" />
+    <QtMoc Include="Source\UI\Common\Widgets\RefreshControl.h" />
+    <QtMoc Include="Source\UI\Common\Widgets\DebouncedSearchEdit.h" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Data\Config.json">

@@ -301,8 +301,8 @@ public:
     // ============================================================
 
     bool IsDriverLoaded() const override {
-        extern HANDLE G_AegisCoreDevice;
-        return G_AegisCoreDevice != INVALID_HANDLE_VALUE;
+        extern HANDLE G_DeviceHandle;
+        return G_DeviceHandle != INVALID_HANDLE_VALUE;
     }
 
     QString GetLastError() const override {
