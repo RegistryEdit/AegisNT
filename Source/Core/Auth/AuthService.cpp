@@ -17,8 +17,15 @@
 namespace AegisNT {
 
 // 前向声明辅助函数
-extern void ShowSuccessNotice(QWidget *Parent, const QString &Title, const QString &Content);
-extern void ShowErrorNotice(QWidget *Parent, const QString &Title, const QString &Content);
+void ShowSuccessNotice(QWidget *Parent, const QString &Title,
+                       const QString &Content) {
+    QMessageBox::information(Parent, Title, Content);
+}
+
+void ShowErrorNotice(QWidget *Parent, const QString &Title,
+                     const QString &Content) {
+    QMessageBox::critical(Parent, Title, Content);
+}
 
 AuthService::AuthService() = default;
 

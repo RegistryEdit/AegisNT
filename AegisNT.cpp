@@ -1,7 +1,7 @@
 // ============================================================
 // AegisNT 主程序入口（单翻译单元）
 // ------------------------------------------------------------
-// 本文件采用 unity build 方式组织：通过 #include 并入 Source/Pages/
+// 本文件采用 unity build 方式组织：通过 #include 并入 Source/UI/Pages/
 // 各页面实现、Source/Core 的配置/负载/模块运行时、Platform/ 的
 // 驱动调用封装等，最终形成单一 main() 可执行文件。
 // 全局共享状态集中在 AegisNT::ApplicationContext()（见
@@ -151,7 +151,7 @@
 #include "Module/ModuleBase.h"
 #include "Module/ModuleTypes.h"
 #include "Module/OutputCapture.h"
-#include "Platform/DiskDrvCall.h"
+#include "Platform/AegisDiskCall.h"
 #include "Platform/DllInject.h"
 #include "Platform/DllMonitor.h"
 #include "Platform/DriverControl.h"
@@ -165,9 +165,9 @@
 #include "Platform/UserProcessCtl.h"
 #include "Platform/UserSecurityInfo.h"
 #include "Source/AppContext.h"
-#include "Source/KernelResearch.h"
-#include "Source/Pages/PageFactory.h"
-#include "Source/Pages/PageRegistry.h"
+#include "Source/UI/Pages/KernelResearch.h"
+#include "Source/UI/Pages/PageFactory.h"
+#include "Source/UI/Pages/PageRegistry.h"
 #include <openssl/applink.c>
 
 #include <algorithm>
@@ -970,11 +970,11 @@ QString ConfigurationPath() {
 
 void AppendConsoleOutput(const QString &Text);
 
-#include "Source/Core/Configuration.inc"
+#include "Source/Core/Runtime/Configuration.inc"
 
-#include "Source/Core/PayloadShell.inc"
+#include "Source/Core/Runtime/PayloadShell.inc"
 
-#include "Source/Core/ModuleRuntime.inc"
+#include "Source/Core/Runtime/ModuleRuntime.inc"
 
 QIcon CreateFluentIcon(Fluent::IconType Icon) { return Fluent::icon(Icon); }
 
@@ -2821,70 +2821,70 @@ private:
 
 QWidget *CreateInformationPage() { return new InformationOverviewPage; }
 
-#include "Source/Pages/TaskManagerPage.cpp"
+#include "Source/UI/Pages/TaskManagerPage.cpp"
 
 QWidget *CreateTaskPage() { return new TaskManagerPage; }
 
-#include "Source/Pages/MonitorPage.cpp"
+#include "Source/UI/Pages/MonitorPage.cpp"
 
 QWidget *CreateMonitorPage() { return new MonitorManagerPage; }
 
-#include "Source/Pages/RegistryPage.cpp"
+#include "Source/UI/Pages/RegistryPage.cpp"
 
 QWidget *CreateRegistryPage() { return new RegistryManagerPage; }
 
-#include "Source/Pages/FilePage.cpp"
+#include "Source/UI/Pages/FilePage.cpp"
 
 QWidget *CreateFilePage() { return new FileExplorerPage; }
 
-#include "Source/Pages/WindowPage.cpp"
+#include "Source/UI/Pages/WindowPage.cpp"
 
 QWidget *CreateWindowPage() { return new WindowManagerPage; }
 
-#include "Source/Pages/DiskPage.cpp"
+#include "Source/UI/Pages/DiskPage.cpp"
 
-#include "Source/Pages/MemoryPage.cpp"
+#include "Source/UI/Pages/MemoryPage.cpp"
 
-#include "Source/Pages/TablePage.cpp"
+#include "Source/UI/Pages/TablePage.cpp"
 
-#include "Source/Pages/CallbackPage.cpp"
+#include "Source/UI/Pages/CallbackPage.cpp"
 
-#include "Source/Pages/PayloadPage.cpp"
+#include "Source/UI/Pages/PayloadPage.cpp"
 
-#include "Source/Pages/ModuleRunPage.cpp"
+#include "Source/UI/Pages/ModuleRunPage.cpp"
 
-#include "Source/Pages/ConsolePage.cpp"
+#include "Source/UI/Pages/ConsolePage.cpp"
 
-#include "Source/Auth/AuthHelpers.inc"
+#include "Source/Core/Auth/AuthHelpers.inc"
 
 #include "Source/Dialogs/RegisterDialog.cpp"
 
 #include "Source/Dialogs/LoginDialog.cpp"
 
-#include "Source/Pages/ChatPage.cpp"
+#include "Source/UI/Pages/ChatPage.cpp"
 
-#include "Source/Pages/AccountPage.cpp"
+#include "Source/UI/Pages/AccountPage.cpp"
 
-#include "Source/Pages/ModuleManagerPage.cpp"
+#include "Source/UI/Pages/ModuleManagerPage.cpp"
 
-#include "Source/Pages/KernelInspectorPage.cpp"
+#include "Source/UI/Pages/KernelInspectorPage.cpp"
 
-#include "Source/Pages/KernelResearchPage.cpp"
+#include "Source/UI/Pages/KernelResearchPage.cpp"
 
-#include "Source/Pages/NetworkPage.cpp"
+#include "Source/UI/Pages/NetworkPage.cpp"
 
-#include "Source/Pages/HookLabPage.cpp"
+#include "Source/UI/Pages/HookLabPage.cpp"
 
-#include "Source/Pages/SnapshotLabPage.cpp"
+#include "Source/UI/Pages/SnapshotLabPage.cpp"
 
-#include "Source/Pages/SettingsPage.cpp"
+#include "Source/UI/Pages/SettingsPage.cpp"
 
-#include "Source/Pages/HotKeysPage.cpp"
+#include "Source/UI/Pages/HotKeysPage.cpp"
 
 QWidget *CreatePageBody(int Index) {
   // 页面工厂：按侧边栏索引创建对应页面实例。
-  // 页面定义（标题/副标题/图标）见 Source/Pages/PageRegistry.cpp，
-  // 实际的页面类声明集中在 Source/Pages/PageFactory.h。
+  // 页面定义（标题/副标题/图标）见 Source/UI/Pages/PageRegistry.cpp，
+  // 实际的页面类声明集中在 Source/UI/Pages/PageFactory.h。
   switch (Index) {
   case 0:
     return CreateInformationPage();

@@ -175,8 +175,8 @@ const wchar_t *DriverDevicePathForService(const wchar_t *ServiceName) {
   if (lstrcmpiW(ServiceName, L"AegisSentinel") == 0) {
     return L"\\\\.\\AegisSentinel";
   }
-  if (lstrcmpiW(ServiceName, L"DiskDrv") == 0) {
-    return L"\\\\.\\DiskDrv";
+  if (lstrcmpiW(ServiceName, L"AegisDisk") == 0) {
+    return L"\\\\.\\AegisDisk";
   }
   return nullptr;
 }

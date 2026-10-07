@@ -98,7 +98,7 @@ The unified `Ring0Core.sys` driver exposes three device channels:
 | --- | --- |
 | `\\.\AegisCore` | Processes, threads, memory, windows, services, network rules, and kernel inspection / operations |
 | `\\.\AegisSentinel` | Kernel events, monitoring queues, filters, and audit / block rules |
-| `\\.\DiskDrv` | Disk protection, blocked events, and one-shot allow tokens |
+| `\\.\AegisDisk` | Disk protection, blocked events, and one-shot allow tokens |
 
 Some queries fall back to user-mode APIs when the driver is unavailable. This does not make every page or operation available without a driver.
 

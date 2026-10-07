@@ -34,7 +34,7 @@ public:
     virtual void OnPageHide() {}
     virtual void OnPageRefresh() {}
 
-protected:
+public:
     // 访问服务
     IDriverService *GetDriverService() const { return m_driverService; }
 

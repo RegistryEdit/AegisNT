@@ -1,6 +1,14 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <ItemGroup>
+    <ItemGroup>
+    <ClInclude Include="Source\UI\Pages\KernelResearch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\UI\Pages\KernelResearchPage.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+<ItemGroup>
     <Filter Include="Source Files">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>qml;cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
@@ -29,7 +37,7 @@
     <ClCompile Include="Source\AppContext.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Pages\PageRegistry.cpp">
+    <ClCompile Include="Source\UI\Pages\PageRegistry.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -37,70 +45,67 @@
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\PageFactory.h">
+    <ClInclude Include="Source\UI\Pages\PageFactory.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\PageRegistry.h">
+    <ClInclude Include="Source\UI\Pages\PageRegistry.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\CallbackPage.h">
+    <ClInclude Include="Source\UI\Pages\CallbackPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\ConsolePage.h">
+    <ClInclude Include="Source\UI\Pages\ConsolePage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\DiskPage.h">
+    <ClInclude Include="Source\UI\Pages\DiskPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\DriverPage.h">
+    <ClInclude Include="Source\UI\Pages\DriverPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\FilePage.h">
+    <ClInclude Include="Source\UI\Pages\FilePage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\HandleLabPage.h">
+    <ClInclude Include="Source\UI\Pages\HotKeysPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\HotKeysPage.h">
+    <ClInclude Include="Source\UI\Pages\KernelInspectorPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\KernelInspectorPage.h">
+    <ClInclude Include="Source\UI\Pages\MemoryPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\MemoryPage.h">
+    <ClInclude Include="Source\UI\Pages\ModuleManagerPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\ModuleManagerPage.h">
+    <ClInclude Include="Source\UI\Pages\ModuleRunPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\ModuleRunPage.h">
+    <ClInclude Include="Source\UI\Pages\MonitorPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\MonitorPage.h">
+    <ClInclude Include="Source\UI\Pages\PayloadPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\PayloadPage.h">
+    <ClInclude Include="Source\UI\Pages\RegistryPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\RegistryPage.h">
+    <ClInclude Include="Source\UI\Pages\ServicePage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\ServicePage.h">
+    <ClInclude Include="Source\UI\Pages\SettingsPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\SettingsPage.h">
+    <ClInclude Include="Source\UI\Pages\SnapshotLabPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\SnapshotLabPage.h">
+    <ClInclude Include="Source\UI\Pages\TablePage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\TablePage.h">
+    <ClInclude Include="Source\UI\Pages\TaskManagerPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Pages\TaskManagerPage.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Source\Pages\WindowPage.h">
+    <ClInclude Include="Source\UI\Pages\WindowPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -114,4 +119,15 @@
       <Filter>Resource Files</Filter>
     </Image>
   </ItemGroup>
-</Project>
+  <ItemGroup>
+    <QtMoc Include="Source\UI\Common\Base\PageBase.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="Source\UI\Common\Widgets\RefreshControl.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="Source\UI\Common\Widgets\DebouncedSearchEdit.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+  </ItemGroup></Project>
+

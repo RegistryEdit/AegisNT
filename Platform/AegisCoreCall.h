@@ -1,3 +1,10 @@
+// NT API declarations
+typedef LONG NTSTATUS;
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
+// RtlNtStatusToDosError 已在 winternl.h 中声明
+
 // ============================================================
 // AegisCore 驱动的用户态调用封装（全员 inline，并入主 TU）：
 // 进程/注册�?文件/回调保护、内核读写信道、句�?线程注入�?
@@ -12,7 +19,12 @@
 #include <string>
 #include <vector>
 #include <windows.h>
+#include <winternl.h>
 #include <winioctl.h>
+
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
 
 #pragma comment(lib, "advapi32.lib")
 
@@ -1246,6 +1258,9 @@ typedef struct _THREAD_APC_QUEUEABLE_INPUT {
 #define DPC_SNAPSHOT_TRUNCATED 0x1u
 #define DPC_SNAPSHOT_SCAN_INCOMPLETE 0x2u
 #define DPC_SNAPSHOT_DIAGNOSTICS_VALID 0x80000000u
+#define DPC_ENTRY_FLAG_IN_QUEUE       0x00000001u
+#define DPC_ENTRY_FLAG_TIMER_REFERENCE 0x00000002u
+#define DPC_ENTRY_FLAG_THREADED       0x00000004u
 
 typedef struct _DPC_ENUM_ENTRY {
   ULONG Index;
@@ -1255,7 +1270,7 @@ typedef struct _DPC_ENUM_ENTRY {
   ULONG_PTR Context;
   ULONG_PTR DueTime; /* raw KTIMER.DueTime (not encoded); 0 when unavailable */
   ULONG Encoded;     /* 1 = DpcObject decoded from KTIMER.Dpc */
-  ULONG _Pad0;
+  ULONG Flags;
 } DPC_ENUM_ENTRY, *PDPC_ENUM_ENTRY;
 
 static_assert(sizeof(DPC_ENUM_ENTRY) == 48, "DPC_ENUM_ENTRY ABI mismatch");
@@ -1343,13 +1358,55 @@ typedef struct _HOTKEY_REMOVE_INPUT {
   HOTKEY_ENUM_ENTRY Entry;
 } HOTKEY_REMOVE_INPUT, *PHOTKEY_REMOVE_INPUT;
 
+typedef struct _HOTKEY_REMOVE_DIAGNOSTIC {
+    ULONG64 Actual;
+    ULONG64 Resolved;
+    ULONG64 Expected;
+    ULONG64 Alternate;
+    ULONG64 BaseImage;
+    ULONG64 FullImage;
+    UCHAR Code[16];
+    ULONG CodeSize;
+    ULONG Reserved;
+} HOTKEY_REMOVE_DIAGNOSTIC;
+
 typedef struct _HOTKEY_REMOVE_OUTPUT {
-  ULONG Size;
-  NTSTATUS KernelStatus;
+    ULONG Size;
+    NTSTATUS KernelStatus;
+    ULONG Detail;
+    ULONG Reserved;
+    HOTKEY_REMOVE_DIAGNOSTIC Diagnostic;
 } HOTKEY_REMOVE_OUTPUT, *PHOTKEY_REMOVE_OUTPUT;
 
+#define HOTKEY_REMOVE_DETAIL_NONE             0u
+#define HOTKEY_REMOVE_DETAIL_IMAGE            1u
+#define HOTKEY_REMOVE_DETAIL_EXPORT           2u
+#define HOTKEY_REMOVE_DETAIL_ENTRY_PATTERN    3u
+#define HOTKEY_REMOVE_DETAIL_LEAVE_EXPORT     4u
+#define HOTKEY_REMOVE_DETAIL_ENTRY_IMPORT     5u
+#define HOTKEY_REMOVE_DETAIL_THREAD_IMPORT    6u
+#define HOTKEY_REMOVE_DETAIL_WRAPPER          7u
+#define HOTKEY_REMOVE_DETAIL_CORE             8u
+#define HOTKEY_REMOVE_DETAIL_DELETE           9u
+#define HOTKEY_REMOVE_DETAIL_TABLE           10u
+#define HOTKEY_REMOVE_DETAIL_SESSION_IMAGE   11u
+#define HOTKEY_REMOVE_DETAIL_SESSION_IMPORT  12u
+#define HOTKEY_REMOVE_DETAIL_SESSION_OFFSET  13u
+#define HOTKEY_REMOVE_DETAIL_SESSION_POINTER 14u
+#define HOTKEY_REMOVE_DETAIL_SESSION_TABLE   15u
+#define HOTKEY_REMOVE_DETAIL_SPECIAL_WINDOW  16u
+#define HOTKEY_REMOVE_DETAIL_INTERNAL_ENTRY  17u
+#define HOTKEY_REMOVE_DETAIL_LINKED_ENTRY    18u
+#define HOTKEY_REMOVE_DETAIL_GUI_CONTEXT     19u
+#define HOTKEY_REMOVE_DETAIL_STALE_ENTRY     20u
+#define HOTKEY_REMOVE_DETAIL_DELETE_FAILED   21u
+#define HOTKEY_REMOVE_DETAIL_ENTER_TARGET    22u
+#define HOTKEY_REMOVE_DETAIL_LEAVE_TARGET    23u
+#define HOTKEY_REMOVE_DETAIL_ENTER_SLOT      24u
+#define HOTKEY_REMOVE_DETAIL_LEAVE_SLOT      25u
+
 static_assert(sizeof(HOTKEY_REMOVE_INPUT) == 56, "HOTKEY_REMOVE_INPUT ABI mismatch");
-static_assert(sizeof(HOTKEY_REMOVE_OUTPUT) == 8, "HOTKEY_REMOVE_OUTPUT ABI mismatch");
+static_assert(sizeof(HOTKEY_REMOVE_OUTPUT) == 88, "HOTKEY_REMOVE_OUTPUT ABI mismatch");
 
 static_assert(sizeof(HOTKEY_ENUM_ENTRY) == 48, "HOTKEY_ENUM_ENTRY ABI mismatch");
 
@@ -1943,7 +2000,7 @@ typedef struct _HANDLE_DUP_DOWNGRADE_OUTPUT {
   ULONG Status;
 } HANDLE_DUP_DOWNGRADE_OUTPUT, *PHANDLE_DUP_DOWNGRADE_OUTPUT;
 
-HANDLE G_DeviceHandle = INVALID_HANDLE_VALUE;
+inline HANDLE G_DeviceHandle = INVALID_HANDLE_VALUE;
 inline DWORD G_LastAegisCoreError = ERROR_SUCCESS;
 inline std::wstring G_LastAegisCoreDetails;
 inline DWORD AegisCoreNtStatusToWin32(NTSTATUS Status);
@@ -2016,7 +2073,7 @@ BOOLEAN EnsureTrustedInstallerRunning(PULONG OutPid = NULL) {
   return TRUE;
 }
 
-std::mutex G_DeviceMutex;
+inline std::mutex G_DeviceMutex;
 
 BOOLEAN TryOpenDevice() {
   G_DeviceHandle =
@@ -3318,9 +3375,14 @@ BOOLEAN EnumerateHotkeys(PHOTKEY_ENUM_OUTPUT Output) {
                              sizeof(HOTKEY_ENUM_OUTPUT), &BytesReturned);
 }
 
-BOOLEAN RemoveHotkey(const HOTKEY_ENUM_ENTRY& Entry, NTSTATUS* KernelStatus, DWORD* ErrorCode) {
+BOOLEAN RemoveHotkey(const HOTKEY_ENUM_ENTRY& Entry, NTSTATUS* KernelStatus,
+                     DWORD* ErrorCode, ULONG* Detail = nullptr,
+                     HOTKEY_REMOVE_DIAGNOSTIC* Diagnostic = nullptr) {
+  if (!KernelStatus || !ErrorCode) return FALSE;
   *KernelStatus = static_cast<NTSTATUS>(0xC0000001u);
   *ErrorCode = ERROR_SUCCESS;
+  if (Detail) *Detail = HOTKEY_REMOVE_DETAIL_NONE;
+  if (Diagnostic) ZeroMemory(Diagnostic, sizeof(*Diagnostic));
   // 初始化当前后台线程的 USER 上下文，再同步发�?IOCTL�?
   MSG Message{};
   PeekMessageW(&Message, nullptr, 0, 0, PM_NOREMOVE);
@@ -3336,11 +3398,27 @@ BOOLEAN RemoveHotkey(const HOTKEY_ENUM_ENTRY& Entry, NTSTATUS* KernelStatus, DWO
       sizeof(Input), &Output, sizeof(Output), &BytesReturned, nullptr);
   const DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
   CloseDevice();
+  // 旧驱动返回 8 字节；成功结果仍有效，失败时明确提示重载而非误报布局不支持。
+  if (Ok && BytesReturned == 8 && Output.Size == 8) {
+    *KernelStatus = Output.KernelStatus;
+    if (Output.KernelStatus >= 0) return TRUE;
+    *ErrorCode = ERROR_REVISION_MISMATCH;
+    return FALSE;
+  }
+  if (Ok && BytesReturned == 12 && Output.Size == 12) {
+    *KernelStatus = Output.KernelStatus;
+    if (Detail) *Detail = Output.Detail;
+    if (Output.KernelStatus >= 0) return TRUE;
+    *ErrorCode = ERROR_REVISION_MISMATCH;
+    return FALSE;
+  }
   if (!Ok || BytesReturned != sizeof(Output) || Output.Size != sizeof(Output)) {
     *ErrorCode = Ok ? ERROR_INVALID_DATA : Error;
     return FALSE;
   }
   *KernelStatus = Output.KernelStatus;
+  if (Detail) *Detail = Output.Detail;
+  if (Diagnostic) *Diagnostic = Output.Diagnostic;
   return Output.KernelStatus >= 0;
 }
 
@@ -3367,7 +3445,7 @@ BOOLEAN RemovePiDDBCacheEntry(ULONG_PTR EntryAddress) {
 
 inline DWORD AegisCoreNtStatusToWin32(NTSTATUS Status) {
   return Status == 0 ? ERROR_SUCCESS
-                     : static_cast<DWORD>(RtlNtStatusToDosError(Status));
+                     : (DWORD)RtlNtStatusToDosError(Status);
 }
 
 BOOLEAN QueryDriverEntries(std::vector<DRIVER_ENUM_ENTRY> &Entries,

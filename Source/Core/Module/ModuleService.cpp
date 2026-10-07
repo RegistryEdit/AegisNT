@@ -1,16 +1,15 @@
 #include "ModuleService.h"
 #include "../Configuration/ConfigurationManager.h"
-// #include "../../Platform/DriverControl.h"
 #include <QDir>
 #include <QFileInfo>
+
+extern DWORD LoadDriverService(LPCWSTR DriverPath, LPCWSTR ServiceName);
+extern DWORD UnloadDriverService(LPCWSTR ServiceName);
+extern bool IsDriverServiceRunning(LPCWSTR ServiceName);
 
 namespace AegisNT {
 
 // 外部函数声明（来自 Platform 层）
-extern DWORD LoadDriverService(LPCWSTR DriverPath, LPCWSTR ServiceName);
-extern DWORD UnloadDriverService(LPCWSTR ServiceName);
-extern BOOL IsDriverServiceRunning(LPCWSTR ServiceName);
-
 // 辅助函数：UTF-8 转换
 static std::string Utf8Bytes(const QString &Str) {
     return Str.toUtf8().toStdString();
@@ -66,8 +65,6 @@ void ModuleService::SetCachedModuleOptionValue(ModuleEntry &Module,
         if (OptionNameMatches(Option.Name, Aliases))
             Option.Value = Utf8Bytes(Value);
     }
-    // 暂时禁用 ModuleBase
-    /*
     if (Module.ModuleInstance) {
         auto *Instance = static_cast<ModuleBase *>(Module.ModuleInstance);
         for (const auto &[Name, OptionPointer] : Instance->GetOptions()) {
@@ -76,14 +73,11 @@ void ModuleService::SetCachedModuleOptionValue(ModuleEntry &Module,
                 Instance->SetOption(Name, Utf8Bytes(Value));
         }
     }
-    */
 }
 
 void ModuleService::DestroyModuleInstance(ModuleEntry &Module) {
     if (!Module.Handle)
         return;
-    // 暂时禁用 ModuleBase
-    /*
     if (Module.ModuleInstance) {
         const auto Destroy = reinterpret_cast<void (*)(ModuleBase *)>(
             GetProcAddress(Module.Handle, "DestroyModule"));
@@ -91,7 +85,6 @@ void ModuleService::DestroyModuleInstance(ModuleEntry &Module) {
             Destroy(static_cast<ModuleBase *>(Module.ModuleInstance));
         Module.ModuleInstance = nullptr;
     }
-    */
     FreeLibrary(Module.Handle);
     Module.Handle = nullptr;
     Module.Loaded = false;
@@ -109,8 +102,6 @@ bool ModuleService::LoadModuleInstance(ModuleEntry &Module, QString *Error) {
         return false;
     }
 
-    // 暂时禁用 ModuleBase 相关功能
-    /*
     const auto Create = reinterpret_cast<ModuleBase *(*)()>(
         GetProcAddress(Handle, "CreateModule"));
     const auto Destroy = reinterpret_cast<void (*)(ModuleBase *)>(
@@ -139,14 +130,12 @@ bool ModuleService::LoadModuleInstance(ModuleEntry &Module, QString *Error) {
         if (!Option.Value.empty())
             Instance->SetOption(Option.Name, Option.Value);
     }
-    */
 
     Module.Handle = Handle;
     Module.Loaded = true;
     return true;
 }
 
-#if 0  // 暂时禁用 ProbeModuleFile - 需要 ModuleBase
 ModuleEntry ModuleService::ProbeModuleFile(const QString &Path) {
     ModuleEntry Module;
     Module.Path = Utf8Bytes(QFileInfo(Path).absoluteFilePath());
@@ -168,17 +157,23 @@ ModuleEntry ModuleService::ProbeModuleFile(const QString &Path) {
     Module.Name = Info.Name.empty() ? Module.Name : Info.Name;
     Module.Description = Info.Description.empty() ? Module.Name : Info.Description;
     Module.Author = Info.Author.empty() ? "Unknown" : Info.Author;
-    Module.Category = "Unknown";  // ModuleTypeToString(Info.Type);
-
-    // 提取选项 - 暂时禁用，需要 ModuleBase
-    // for (const auto &[Name, OptionPointer] : Instance->GetOptions()) {
-    //     ModuleOption Item;
-    //     Item.Name = Name;
-    //     ...
-    // }
+    Module.Category = ModuleTypeToString(Info.Type);
+    Module.Options.clear();
+    for (const auto &[Name, OptionPointer] : Instance->GetOptions()) {
+        if (!OptionPointer)
+            continue;
+        ModuleOption Item;
+        Item.Name = Name;
+        Item.Type = OptionPointer->TypeName();
+        Item.Value = OptionPointer->GetValue();
+        Item.Default = OptionPointer->GetDefaultValue();
+        Item.Description = OptionPointer->GetDescription();
+        Item.Required = OptionPointer->GetRequired() == OptionRequired::Required;
+        Module.Options.push_back(std::move(Item));
+    }
 
     DestroyModuleInstance(Module);
-    Module.Valid = true;
+    Module.Valid = QFileInfo::exists(QString::fromStdString(Module.Path));
     return Module;
 }
 
@@ -212,7 +207,7 @@ bool ModuleService::QueryDriverLoadedState(ModuleEntry &Module) {
         QString::fromStdString(Module.ServiceName).toStdWString();
     if (Service.empty())
         return false;
-    return IsDriverServiceRunning(Service.c_str());
+    return ::IsDriverServiceRunning(Service.c_str());
 }
 
 void ModuleService::ScanRuntimeModules() {
@@ -309,7 +304,6 @@ const ModuleEntry *ModuleService::FindDriverModule(const QString &Path) const {
     return nullptr;
 }
 
-#if 0  // 暂时禁用 ModuleBase 相关功能
 bool ModuleService::InvokeModuleWithSeh(ModuleBase *Instance, bool *Result,
                                        DWORD *ExceptionCode) {
     if (Result)
@@ -378,4 +372,3 @@ ModuleService &GlobalModuleService() {
 }
 
 } // namespace AegisNT
-

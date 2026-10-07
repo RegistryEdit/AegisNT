@@ -1,11 +1,12 @@
 #pragma once
 
 #include <QString>
-#include <QString>
 #include <QStringList>
 #include <atomic>
+#include <string>
 #include <vector>
 #include <windows.h>
+#include "../../../Module/ModuleBase.h"
 
 namespace AegisNT {
 
@@ -85,9 +86,9 @@ public:
     void SetRunningModulePath(const QString &Path) { RunningModulePath = Path; }
 
     // SEH 保护的模块调用
-    bool InvokeModuleWithSeh(void *Instance, bool *Result,
+    bool InvokeModuleWithSeh(ModuleBase *Instance, bool *Result,
                             DWORD *ExceptionCode);
-    bool InvokeModuleCheckWithSeh(void *Instance, bool *Result,
+    bool InvokeModuleCheckWithSeh(ModuleBase *Instance, bool *Result,
                                   DWORD *ExceptionCode);
 
     // 模块选项管理
