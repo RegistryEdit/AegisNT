@@ -150,7 +150,7 @@ public:
     FileModel->setReadOnly(false);
     FileModel->setNameFilterDisables(false);
 
-    DirectoryTree = new QTreeView;
+    DirectoryTree = new FluentTreeView;
     DirectoryTree->setModel(DirectoryModel);
     DirectoryTree->setRootIndex(DirectoryModel->index(QString()));
     DirectoryTree->setHeaderHidden(true);
@@ -160,7 +160,7 @@ public:
       DirectoryTree->hideColumn(Column);
     InstallFluentScrollBar(DirectoryTree, Qt::Vertical);
 
-    FileView = new QTreeView;
+    FileView = new FluentTreeView;
     FileView->setModel(FileModel);
     FileView->setAlternatingRowColors(false);
     FileView->setRootIsDecorated(false);
@@ -489,7 +489,7 @@ private:
   void CreateFolder() {
     bool Accepted = false;
     const QString Name =
-        QInputDialog::getText(this, "New folder",
+        FluentInputDialog::getText(this, "New folder",
                               "Folder name:", QLineEdit::Normal, "New folder",
                               &Accepted)
             .trimmed();
@@ -510,7 +510,7 @@ private:
     const QFileInfo Information(Paths.first());
     bool Accepted = false;
     const QString Name =
-        QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal,
+        FluentInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal,
                               Information.fileName(), &Accepted)
             .trimmed();
     if (!Accepted || Name.isEmpty() || Name == Information.fileName())
@@ -652,7 +652,7 @@ private:
     if (Paths.isEmpty())
       return;
     const QString DestinationDirectory =
-        QFileDialog::getExistingDirectory(this, "Copy to", CurrentPath);
+        FluentFileDialog::getExistingDirectory(this, "Copy to", CurrentPath);
     if (DestinationDirectory.isEmpty())
       return;
     QStringList Failures;
@@ -681,7 +681,7 @@ private:
   }
 
   void BrowseMonitorDirectory() {
-    const QString Directory = QFileDialog::getExistingDirectory(
+    const QString Directory = FluentFileDialog::getExistingDirectory(
         this, "Monitor directory", CurrentPath);
     if (Directory.isEmpty())
       return;

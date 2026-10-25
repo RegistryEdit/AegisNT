@@ -4,6 +4,7 @@
 #include <QString>
 #include <QVector>
 #include <windows.h>
+#include <atomic>
 
 namespace AegisNT {
 
@@ -17,6 +18,8 @@ class AegisCoreClient {
 public:
     AegisCoreClient();
     ~AegisCoreClient();
+    AegisCoreClient(const AegisCoreClient &) = delete;
+    AegisCoreClient &operator=(const AegisCoreClient &) = delete;
 
     // 连接管理
     bool OpenDevice();
@@ -41,28 +44,36 @@ public:
 
     // 线程操作
     bool TerminateThread(DWORD Tid);
-    bool EnumThreads(DWORD Pid, void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned);
+    bool SuspendThread(DWORD Tid);
+    bool ResumeThread(DWORD Tid);
+    bool EnumThreads(DWORD Pid, void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned, ULONG64 Cursor = 0);
 
     // 内存操作
     bool ReadProcessMemory(DWORD Pid, ULONG64 Address, void *Buffer, SIZE_T Size);
     bool WriteProcessMemory(DWORD Pid, ULONG64 Address, const void *Buffer, SIZE_T Size);
     bool ReadKernelMemory(ULONG64 Address, void *Buffer, SIZE_T Size);
     bool WriteKernelMemory(ULONG64 Address, const void *Buffer, SIZE_T Size);
+    bool AllocateMemory(DWORD Pid, SIZE_T Size, DWORD Protection, ULONG64 *Address);
+    bool FreeMemory(DWORD Pid, ULONG64 Address);
+    bool ProtectMemory(DWORD Pid, ULONG64 Address, SIZE_T Size, DWORD Protection, DWORD *OldProtection);
+    bool EnumMemoryRegions(DWORD Pid, void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned, ULONG64 Cursor = 0);
 
     // 驱动操作
     bool EnumDrivers(void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned);
 
     // 模块操作
-    bool EnumModules(DWORD Pid, void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned);
+    bool EnumModules(DWORD Pid, void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned, ULONG64 Cursor = 0);
 
     // 句柄操作
-    bool EnumHandles(DWORD Pid, void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned);
+    bool EnumHandles(DWORD Pid, void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned, ULONG64 Cursor = 0);
     bool CloseRemoteHandle(DWORD Pid, HANDLE Handle);
+    bool DuplicateRemoteHandle(DWORD SourcePid, HANDLE SourceHandle, DWORD TargetPid, HANDLE *TargetHandle);
 
     // 窗口操作
     bool EnumWindows(void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned);
     bool ProtectWindow(HWND Hwnd);
     bool UnprotectWindow(HWND Hwnd);
+    bool WindowOperation(HWND Hwnd, int Operation);
 
     // 回调操作
     bool EnumCallbacks(void *OutputBuffer, DWORD OutputSize, DWORD *BytesReturned);
@@ -95,9 +106,16 @@ public:
     bool QueryCapabilities(ULONG64 *Capabilities);
 
     // 错误处理
-    DWORD GetLastError() const { return m_lastError; }
+    DWORD GetLastError() const { return m_lastError.load(); }
 
 private:
+    bool OpenDeviceLocked();
+    bool Fail(DWORD Error);
+    bool Succeed();
+    bool ChangeProcessSuspension(DWORD Pid, bool Suspend);
+    bool ChangeThreadState(DWORD Tid, int Operation);
+    bool EnumInventory(DWORD Code, DWORD Pid, ULONG64 Cursor, void *Output, DWORD Size, DWORD *Returned);
+    bool EnumRaw(DWORD Code, void *Output, DWORD Size, DWORD *Returned, DWORD MinimumSize);
     // 通用 IOCTL 调用
     bool DeviceIoControl(DWORD IoControlCode,
                         void *InputBuffer, DWORD InputSize,
@@ -105,13 +123,13 @@ private:
                         DWORD *BytesReturned);
 
     HANDLE m_deviceHandle;
-    DWORD m_lastError;
+    std::atomic<DWORD> m_lastError;
 };
 
 // 全局客户端实例
 AegisCoreClient &GlobalAegisCoreClient();
 
 // 后向兼容：保留旧的全局变量名
-extern DWORD G_LastAegisCoreError;
+extern thread_local DWORD G_LastAegisCoreError;
 
 } // namespace AegisNT

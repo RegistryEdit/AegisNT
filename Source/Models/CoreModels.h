@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QString>
 #include <QVector>
 #include <windows.h>
@@ -140,7 +141,7 @@ public:
 
     // 静态工厂方法
     static Result<T> Ok() {
-        return Result<T>();
+        return Result<T>(T{});
     }
 
     static Result<T> Ok(const T &Value) {
@@ -169,7 +170,7 @@ private:
     bool Success;
     DWORD ErrorCode;
     QString ErrorMessage;
-    T Data;
+    T Data{};
 };
 
 /**

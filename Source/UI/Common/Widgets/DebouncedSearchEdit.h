@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QLineEdit>
+#include <QFluent/LineEdit.h>
 #include <QTimer>
 
 namespace AegisNT {
@@ -8,12 +8,12 @@ namespace AegisNT {
 /**
  * DebouncedSearchEdit - 带防抖的搜索框
  */
-class DebouncedSearchEdit : public QLineEdit {
+class DebouncedSearchEdit : public SearchLineEdit {
     Q_OBJECT
 
 public:
     explicit DebouncedSearchEdit(int delayMs = 300, QWidget *parent = nullptr)
-        : QLineEdit(parent), m_delayMs(delayMs) {
+        : SearchLineEdit(parent), m_delayMs(delayMs) {
 
         m_debounceTimer = new QTimer(this);
         m_debounceTimer->setSingleShot(true);

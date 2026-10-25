@@ -300,7 +300,7 @@ public:
               ShowErrorNotice(this, "Driver",
                               "No image path available for " + Name +
                                   "; enter a pattern manually.");
-              Pattern = QInputDialog::getText(
+              Pattern = FluentInputDialog::getText(
                   this, "Block Driver Load",
                   "Image path pattern (supports * and ?):");
               if (Pattern.trimmed().isEmpty())
@@ -396,7 +396,7 @@ private:
 
     QObject::connect(BrowseButton, &QPushButton::clicked, Dialog,
                      [Dialog, PathEdit, ServiceEdit] {
-                       const QString Path = QFileDialog::getOpenFileName(
+                       const QString Path = FluentFileDialog::getOpenFileName(
                            Dialog, "Select Driver", PathEdit->text(),
                            "Driver files (*.sys)");
                        if (Path.isEmpty())

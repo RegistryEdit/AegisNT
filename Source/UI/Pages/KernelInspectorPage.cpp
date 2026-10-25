@@ -21,8 +21,12 @@ QWidget *CreateKernelInspectorPage() {
     PushButton *DisableDse = nullptr;
     PushButton *RestoreDse = nullptr;
     PushButton *DisablePatchGuard = nullptr;
+    PushButton *HalInterception = nullptr;
+    PushButton *ClearKprcb = nullptr;
+    PushButton *CancelDpcApc = nullptr;
     PushButton *TriggerPatchGuard = nullptr;
     PushButton *EnablePpn = nullptr;
+    PushButton *DisablePpn = nullptr;
   };
   struct KernelControlState {
     bool Queried = false;
@@ -161,6 +165,7 @@ QWidget *CreateKernelInspectorPage() {
   auto State = std::make_shared<std::vector<InspectorTab>>();
   auto KernelControlsUi = std::make_shared<KernelControlWidgets>();
   auto KernelControlCache = std::make_shared<KernelControlState>();
+  auto LastDpcApcResult = std::make_shared<QString>();
   {
     auto *TabPage = new AegisNT::PageBase(nullptr);
     auto *TabLayout = TabPage->GetMainLayout();
@@ -188,6 +193,7 @@ QWidget *CreateKernelInspectorPage() {
 
     KernelControlsUi->Table = MakeTable({"Field", "Value", "Detail"});
     KernelControlsUi->Table->setSortingEnabled(false);
+    KernelControlsUi->Table->setWordWrap(true);
     KernelControlsUi->Table->setTextElideMode(Qt::ElideRight);
     KernelControlsUi->Table->verticalHeader()->setDefaultSectionSize(
         KCompactTableRowHeight);
@@ -204,8 +210,12 @@ QWidget *CreateKernelInspectorPage() {
     KernelControlsUi->DisableDse = new PushButton("DisableDse");
     KernelControlsUi->RestoreDse = new PushButton("RestoreDse");
     KernelControlsUi->DisablePatchGuard = new PushButton("DisablePatchGuard");
+    KernelControlsUi->HalInterception = new PushButton("HAL 拦截");
+    KernelControlsUi->ClearKprcb = new PushButton("KPRCB 清零");
+    KernelControlsUi->CancelDpcApc = new PushButton("DPC/APC 摘链");
     KernelControlsUi->TriggerPatchGuard = new PushButton("TriggerPatchGuard");
     KernelControlsUi->EnablePpn = new PushButton("EnablePPN");
+    KernelControlsUi->DisablePpn = new PushButton("Restore PPN");
 
     auto *ActionRow = new QHBoxLayout;
     ActionRow->setContentsMargins(0, 0, 0, 0);
@@ -224,8 +234,12 @@ QWidget *CreateKernelInspectorPage() {
         CreateActionGroup("PatchGuard",
                           "High-risk controls. Use only when necessary.",
                           {KernelControlsUi->DisablePatchGuard,
+                           KernelControlsUi->HalInterception,
+                           KernelControlsUi->ClearKprcb,
+                           KernelControlsUi->CancelDpcApc,
                            KernelControlsUi->TriggerPatchGuard,
-                           KernelControlsUi->EnablePpn}),
+                           KernelControlsUi->EnablePpn,
+                           KernelControlsUi->DisablePpn}),
         1);
     ControlLayout->addLayout(ActionRow);
     TabLayout->addWidget(ControlCard, 1);
@@ -362,19 +376,82 @@ QWidget *CreateKernelInspectorPage() {
     Table->clearContents();
     Table->setRowCount(0);
   };
-  const auto ApplyKernelControlView = [KernelControlsUi, KernelControlCache]() {
+  const auto ApplyKernelControlView = [KernelControlsUi, KernelControlCache,
+                                       LastDpcApcResult]() {
     if (!KernelControlsUi->Table)
       return;
     const auto Hex = [](qulonglong Value) {
       return QString("0x%1").arg(Value, 0, 16).toUpper();
     };
-    const auto SetRow = [KernelControlsUi](int Row, const QString &Field,
-                                           const QString &Value,
-                                           const QString &Detail = QString()) {
-      KernelControlsUi->Table->setItem(Row, 0, new QTableWidgetItem(Field));
-      KernelControlsUi->Table->setItem(Row, 1, new QTableWidgetItem(Value));
-      KernelControlsUi->Table->setItem(Row, 2, new QTableWidgetItem(Detail));
-      KernelControlsUi->Table->setRowHeight(Row, KCompactTableRowHeight);
+    const auto DisplayControlField = [](const QString &Field) {
+      static const QHash<QString, QString> Labels{
+          {"Debug Hook", "Debug hook"},
+          {"IsDebuggerEnabled", "Debugger presence"},
+          {"DSE.CiOptionsAddress", "CI options address"},
+          {"DSE.OriginalValue", "Original CI options"},
+          {"DSE.CurrentValue", "Current CI options"},
+          {"DSE.Status", "DSE state"},
+          {"PatchGuard.PgContextOffset", "PG context offset"},
+          {"PatchGuard.IsPatched", "PG protection mode"},
+          {"PatchGuard.Status", "PG overall status"},
+          {"PatchGuard.DpcsFound", "DPC suspects"},
+          {"PatchGuard.ApcsFound", "APC suspects"},
+          {"PatchGuard.Intercept", "Bugcheck interception"},
+          {"PatchGuard.Suppressed", "Suppressed checks"},
+          {"PatchGuard.KprcbContextOffset", "KPRCB.Context offset"},
+          {"PatchGuard.ClearOffset", "KPRCB clear offset"},
+          {"PatchGuard.PpnPageGuard", "PPN page guard"},
+          {"PatchGuard.CpuCoverage", "CPU coverage"},
+          {"PatchGuard.ContextConfidence", "Context confidence"},
+          {"PatchGuard.DpcConfidence", "DPC confidence"},
+          {"PatchGuard.ApcResolver", "APC resolver"},
+      };
+      return Labels.contains(Field) ? Labels.value(Field) : Field;
+    };
+    const auto StatusBrush = [](const QString &Value) {
+      const QString V = Value.toLower();
+      if (V.contains("unavailable") || V.contains("incomplete") ||
+          V.contains("unresolved") || V.contains("failed") ||
+          V.contains(" (!)"))
+        return QBrush(QColor(190, 65, 65));
+      if (V == "ok" || V == "restored" || V == "enabled" ||
+          V == "installed (blocking)" || V == "true" || V == "active" ||
+          V == "disabled" || V.startsWith("on "))
+        return QBrush(QColor(38, 145, 92));
+      return QBrush();
+    };
+    const auto SetRow = [KernelControlsUi, DisplayControlField, StatusBrush](
+                            int Row, const QString &Field, const QString &Value,
+                            const QString &Detail = QString()) {
+      const bool IsControlField =
+          Field.startsWith("PatchGuard.") || Field.startsWith("DSE.") ||
+          Field == "Debug Hook" || Field == "IsDebuggerEnabled";
+      const QString DisplayField =
+          IsControlField
+              ? DisplayControlField(Field)
+              : Field;
+      auto *FieldItem = new QTableWidgetItem(DisplayField);
+      auto *ValueItem = new QTableWidgetItem(Value);
+      auto *DetailItem = new QTableWidgetItem(Detail);
+      if (IsControlField) {
+        FieldItem->setData(Qt::UserRole, Field);
+        FieldItem->setToolTip(QString("Raw field: %1").arg(Field));
+        ValueItem->setToolTip(QString("Raw field: %1\nValue: %2\n%3")
+                                  .arg(Field, Value, Detail));
+        DetailItem->setToolTip(Detail);
+        QFont FieldFont = FieldItem->font();
+        FieldFont.setBold(true);
+        FieldItem->setFont(FieldFont);
+        const QBrush Brush = StatusBrush(Value);
+        if (Brush.style() != Qt::NoBrush)
+          ValueItem->setForeground(Brush);
+      }
+      KernelControlsUi->Table->setItem(Row, 0, FieldItem);
+      KernelControlsUi->Table->setItem(Row, 1, ValueItem);
+      KernelControlsUi->Table->setItem(Row, 2, DetailItem);
+      KernelControlsUi->Table->setRowHeight(
+          Row, Detail.contains('\n') ? KCompactTableRowHeight * 2
+                                      : KCompactTableRowHeight);
     };
     KernelControlsUi->Table->setUpdatesEnabled(false);
     KernelControlsUi->Table->clearContents();
@@ -397,7 +474,11 @@ QWidget *CreateKernelInspectorPage() {
         SetRow(Row, "Debug Hook",
                KernelControlCache->Debug.HookInstalled
                    ? "Installed (blocking)"
-                   : "Not installed");
+                   : "Not installed",
+               QString("query status %1\ndebugger flag %2")
+                   .arg(Hex(KernelControlCache->Debug.Status))
+                   .arg(KernelControlCache->Debug.IsDebuggerEnabled ? "on"
+                                                                      : "off"));
       }
       {
         const int Row = KernelControlsUi->Table->rowCount();
@@ -409,7 +490,8 @@ QWidget *CreateKernelInspectorPage() {
                        : "0 (no debugger)")
                 : QString("Query error %1")
                       .arg(KernelControlCache->Debug.Status);
-        SetRow(Row, "IsDebuggerEnabled", DebuggerValueText);
+        SetRow(Row, "IsDebuggerEnabled", DebuggerValueText,
+               "Runtime debugger presence reported by the kernel query.");
       }
     } else {
       const int Row = KernelControlsUi->Table->rowCount();
@@ -446,9 +528,12 @@ QWidget *CreateKernelInspectorPage() {
                  : "-");
       const int Row3 = KernelControlsUi->Table->rowCount();
       KernelControlsUi->Table->insertRow(Row3);
-      SetRow(Row3, "DSE.Status", DseStateText,
+       SetRow(Row3, "DSE.Status", DseStateText,
              KernelControlCache->DseOk
-                 ? QString()
+                  ? QString("address %1\noriginal %2\ncurrent %3")
+                        .arg(Hex(KernelControlCache->Dse.CiOptionsAddress))
+                        .arg(Hex(KernelControlCache->Dse.OriginalValue))
+                        .arg(Hex(KernelControlCache->Dse.CurrentValue))
                  : QString("Win32 error %1").arg(KernelControlCache->DseError));
     }
 
@@ -468,13 +553,19 @@ QWidget *CreateKernelInspectorPage() {
       KernelControlsUi->Table->insertRow(Row1);
       SetRow(Row1, "PatchGuard.IsPatched",
              KernelControlCache->PatchGuardOk
-                 ? (KernelControlCache->PatchGuard.IsPatched ? "TRUE" : "FALSE")
+                  ? (KernelControlCache->PatchGuard.IsPatched ? "DISABLED"
+                                                               : "ACTIVE")
                  : "-");
       const int Row2 = KernelControlsUi->Table->rowCount();
       KernelControlsUi->Table->insertRow(Row2);
       SetRow(Row2, "PatchGuard.Status", PgStateText,
              KernelControlCache->PatchGuardOk
-                 ? QString()
+                  ? QString("IOCTL status %1 | resolve %2 | intercept %3")
+                        .arg(Hex(KernelControlCache->PatchGuard.Status))
+                        .arg(Hex(KernelControlCache->PatchGuard.ResolveStage))
+                        .arg(KernelControlCache->PatchGuard.InterceptEnabled
+                                 ? "enabled"
+                                 : "off")
                  : QString("Win32 error %1")
                        .arg(KernelControlCache->PatchGuardError));
 
@@ -650,8 +741,8 @@ QWidget *CreateKernelInspectorPage() {
                  ? (KernelControlCache->PatchGuard.PpnActive ? "Active" : "Off")
                  : "-",
              KernelControlCache->PatchGuardOk
-                 ? QString("pages %1, nx-faults %2, passthrough %3, "
-                           "status 0x%4 | p0 %5 p1 %6 p2 %7 p3 %8")
+                  ? QString("%1 pages | %2 NX faults | %3 passthrough | status 0x%4\n"
+                            "targets: %5, %6, %7, %8")
                        .arg(KernelControlCache->PatchGuard.PpnTargetCount)
                        .arg(KernelControlCache->PatchGuard.PpnNxFaults)
                        .arg(KernelControlCache->PatchGuard.PpnPassthrough)
@@ -700,7 +791,7 @@ QWidget *CreateKernelInspectorPage() {
                        .arg(KernelControlCache->PatchGuard.DpcHighConfidenceCount)
                        .arg(KernelControlCache->PatchGuard.DpcLowConfidenceCount)
                  : "-",
-             "Scores >= 70 are high confidence.");
+              "H = high confidence, L = low confidence; score threshold >= 70.");
 
       const int RowApcConfidence = KernelControlsUi->Table->rowCount();
       KernelControlsUi->Table->insertRow(RowApcConfidence);
@@ -754,10 +845,12 @@ QWidget *CreateKernelInspectorPage() {
         !KernelControlCache->PatchGuardOk
             ? QString("Unavailable")
             : (KernelControlCache->PatchGuard.PpnActive
-                   ? QString("on (%1 pg, %2 nx)")
+                   ? QString("ACTIVE · %1 pages · %2 NX faults · %3 pass")
                          .arg(KernelControlCache->PatchGuard.PpnTargetCount)
-                         .arg(KernelControlCache->PatchGuard.PpnNxFaults)
-                    : QString("off"));
+                          .arg(KernelControlCache->PatchGuard.PpnNxFaults)
+                          .arg(KernelControlCache->PatchGuard.PpnPassthrough)
+                     : QString("OFF · status %1")
+                           .arg(Hex(KernelControlCache->PatchGuard.PpnStatus)));
     /* PG APC 摘要：与 DPC 对称，未查询成功时不显示数量。 */
     const QString PgApcText =
         !KernelControlCache->PatchGuardOk
@@ -791,8 +884,8 @@ QWidget *CreateKernelInspectorPage() {
                   .arg(KernelControlCache->PatchGuard.ApcHighConfidenceCount)
                   .arg(KernelControlCache->PatchGuard.ApcLowConfidenceCount);
     KernelControlsUi->Detail->setText(
-        QString("Dbg %1/%2 | DSE %3 | PG %4\n"
-                "CPU %5 | DPC %6 | APC %7 | Ctx %8 | PPN %9")
+        QString("Dbg %1/%2  ·  DSE %3  ·  PG %4\n"
+                "CPU %5  ·  DPC %6  ·  APC %7  ·  Ctx %8  ·  PPN %9")
             .arg(DebugStateText)
             .arg(DbgEnabledText)
             .arg(DseStateText)
@@ -801,7 +894,10 @@ QWidget *CreateKernelInspectorPage() {
             .arg(PgDpcSummary)
             .arg(PgApcSummary)
             .arg(PgContextText)
-            .arg(PgPpnText));
+            .arg(PgPpnText) +
+         (LastDpcApcResult->isEmpty()
+              ? QString()
+              : QString("\nLast DPC/APC action: %1").arg(*LastDpcApcResult)));
     KernelControlsUi->Table->setUpdatesEnabled(true);
   };
   const auto ApplyFilter = [Search, State, KernelControlsUi, SyncTable,
@@ -882,8 +978,12 @@ QWidget *CreateKernelInspectorPage() {
         KernelControlsUi->DisableDse->setEnabled(false);
         KernelControlsUi->RestoreDse->setEnabled(false);
         KernelControlsUi->DisablePatchGuard->setEnabled(false);
+        KernelControlsUi->HalInterception->setEnabled(false);
+        KernelControlsUi->ClearKprcb->setEnabled(false);
+        KernelControlsUi->CancelDpcApc->setEnabled(false);
         KernelControlsUi->TriggerPatchGuard->setEnabled(false);
         KernelControlsUi->EnablePpn->setEnabled(false);
+        KernelControlsUi->DisablePpn->setEnabled(false);
         SessLogoffBtn->setEnabled(false);
         SessDisconnectBtn->setEnabled(false);
         SessMessageBtn->setEnabled(false);
@@ -1134,8 +1234,12 @@ QWidget *CreateKernelInspectorPage() {
                 KernelControlsUi->DisableDse->setEnabled(true);
                 KernelControlsUi->RestoreDse->setEnabled(true);
                 KernelControlsUi->DisablePatchGuard->setEnabled(true);
+                KernelControlsUi->HalInterception->setEnabled(true);
+                KernelControlsUi->ClearKprcb->setEnabled(true);
+                KernelControlsUi->CancelDpcApc->setEnabled(true);
                 KernelControlsUi->TriggerPatchGuard->setEnabled(true);
                 KernelControlsUi->EnablePpn->setEnabled(true);
+                KernelControlsUi->DisablePpn->setEnabled(true);
                 Refresh->setText("Refresh");
                 Status->setText(QString("%1 records").arg(TotalRecords));
                 const bool Incomplete = !KernelState.DebugOk ||
@@ -1385,7 +1489,7 @@ QWidget *CreateKernelInspectorPage() {
         Dialog->cancelButton()->setText("Cancel");
         QObject::connect(BrowseButton, &QPushButton::clicked, Dialog,
                          [Dialog, ExecutableEdit] {
-                           const QString Path = QFileDialog::getOpenFileName(
+                           const QString Path = FluentFileDialog::getOpenFileName(
                                Dialog, "Select executable", QString(),
                                "Executable files (*.exe);;All files (*.*)");
                            if (!Path.isEmpty())
@@ -1433,8 +1537,12 @@ QWidget *CreateKernelInspectorPage() {
     KernelControlsUi->DisableDse->setEnabled(Enabled);
     KernelControlsUi->RestoreDse->setEnabled(Enabled);
     KernelControlsUi->DisablePatchGuard->setEnabled(Enabled);
+    KernelControlsUi->HalInterception->setEnabled(Enabled);
+    KernelControlsUi->ClearKprcb->setEnabled(Enabled);
+    KernelControlsUi->CancelDpcApc->setEnabled(Enabled);
     KernelControlsUi->TriggerPatchGuard->setEnabled(Enabled);
     KernelControlsUi->EnablePpn->setEnabled(Enabled);
+    KernelControlsUi->DisablePpn->setEnabled(Enabled);
   };
   const auto RunKernelControlAction = [Page, Refresh, Status, LoadStatus,
                                        Loading, SetKernelControlButtonsEnabled](
@@ -1466,12 +1574,27 @@ QWidget *CreateKernelInspectorPage() {
             SetKernelControlButtonsEnabled(true);
             if (!Success) {
               Status->setText(QString("%1 failed").arg(ActionName));
-              LoadStatus->setText("Kernel control action failed. Review the "
-                                  "error and retry if appropriate.");
-              ShowErrorNotice(SafePage, "Kernel Inspector",
-                              QString("%1 failed (error %2).")
-                                  .arg(ActionName)
-                                  .arg(ErrorCode));
+              const bool PpnTargetNotFound =
+                  ActionName == "EnablePPN" &&
+                  (ErrorCode == ERROR_NOT_FOUND ||
+                   ErrorCode == ERROR_FILE_NOT_FOUND);
+              const QString FailureDetail =
+                  PpnTargetNotFound
+                      ? QString("No verified PatchGuard code page was found. "
+                                "The operation aborted without changing page "
+                                "permissions or IDT entries. Inspect the "
+                                "Ring0Core driver log for [PPN-DPC], [PPN-CTX], "
+                                "and [PPN-TGT] diagnostics.")
+                      : QString("Kernel control action failed. Review the "
+                                "driver error and retry if appropriate.");
+              LoadStatus->setText(FailureDetail);
+              ShowErrorNotice(
+                  SafePage, "Kernel Inspector",
+                  PpnTargetNotFound
+                      ? FailureDetail
+                      : QString("%1 failed (error %2).")
+                            .arg(ActionName)
+                            .arg(ErrorCode));
             } else {
               LoadStatus->setText(
                   "Kernel control action completed. Refreshing inventory...");
@@ -1483,6 +1606,77 @@ QWidget *CreateKernelInspectorPage() {
           Qt::QueuedConnection);
     }).detach();
   };
+  const auto RunPatchGuardDpcApc =
+      [Page, Refresh, Status, LoadStatus, Loading,
+       SetKernelControlButtonsEnabled, LastDpcApcResult,
+       ApplyKernelControlView]() {
+        SetKernelControlButtonsEnabled(false);
+        Refresh->setEnabled(false);
+        Status->setText("Unlinking PatchGuard DPC/APC...");
+        LoadStatus->setText("Running DPC first, then APC; both results are retained.");
+        Loading->show();
+        Loading->start();
+        QPointer<QWidget> SafePage(Page);
+        std::thread([SafePage, Refresh, Status, LoadStatus, Loading,
+                     SetKernelControlButtonsEnabled, LastDpcApcResult,
+                     ApplyKernelControlView] {
+          DPC_CANCEL_OUTPUT DpcOutput{};
+          const bool DpcSuccess = CancelPatchGuardDpcs(&DpcOutput);
+          const DWORD DpcError = DpcSuccess ? ERROR_SUCCESS : G_LastAegisCoreError;
+
+          APC_CANCEL_OUTPUT ApcOutput{};
+          const bool ApcSuccess = CancelPatchGuardApcs(&ApcOutput);
+          const DWORD ApcError = ApcSuccess ? ERROR_SUCCESS : G_LastAegisCoreError;
+
+          const QString DpcLine =
+              QString("DPC %1: scanned %2, suspects %3, unlinked %4, "
+                      "NTSTATUS 0x%5, error %6")
+                  .arg(DpcSuccess ? "OK" : "failed")
+                  .arg(DpcOutput.Scanned)
+                  .arg(DpcOutput.Suspects)
+                  .arg(DpcOutput.Cancelled)
+                  .arg(QString::number(DpcOutput.Status, 16)
+                           .rightJustified(8, '0')
+                           .toUpper())
+                  .arg(DpcError);
+          const QString ApcLine =
+              QString("APC %1: scanned %2, suspects %3, unlinked %4, "
+                      "NTSTATUS 0x%5, error %6")
+                  .arg(ApcSuccess ? "OK" : "failed")
+                  .arg(ApcOutput.Scanned)
+                  .arg(ApcOutput.Suspects)
+                  .arg(ApcOutput.Cancelled)
+                  .arg(QString::number(ApcOutput.Status, 16)
+                           .rightJustified(8, '0')
+                           .toUpper())
+                  .arg(ApcError);
+          const QString ResultText = DpcLine + '\n' + ApcLine;
+          QMetaObject::invokeMethod(
+              qApp,
+              [SafePage, Refresh, Status, LoadStatus, Loading,
+               SetKernelControlButtonsEnabled, LastDpcApcResult,
+               ApplyKernelControlView, DpcSuccess, ApcSuccess, ResultText] {
+                if (!SafePage)
+                  return;
+                Loading->stop();
+                Loading->hide();
+                Refresh->setEnabled(true);
+                SetKernelControlButtonsEnabled(true);
+                *LastDpcApcResult = ResultText;
+                ApplyKernelControlView();
+                Status->setText(DpcSuccess && ApcSuccess
+                                    ? "DPC/APC unlink completed"
+                                    : "DPC/APC unlink partially failed");
+                LoadStatus->setText(ResultText);
+                if (DpcSuccess && ApcSuccess)
+                  ShowSuccessNotice(SafePage, "Kernel Inspector", ResultText);
+                else
+                  ShowErrorNotice(SafePage, "Kernel Inspector", ResultText);
+                QTimer::singleShot(0, Refresh, &QPushButton::click);
+              },
+              Qt::QueuedConnection);
+        }).detach();
+      };
   const auto RunPatchGuardTrigger = [Page, Refresh, Status, LoadStatus, Loading,
                                      SetKernelControlButtonsEnabled]() {
     SetKernelControlButtonsEnabled(false);
@@ -1554,6 +1748,22 @@ QWidget *CreateKernelInspectorPage() {
                                             "DisablePatchGuard",
                                             [] { return DisablePatchGuard(); });
                    });
+  QObject::connect(KernelControlsUi->HalInterception, &QPushButton::clicked,
+                   Page, [RunKernelControlAction] {
+                     RunKernelControlAction(
+                         "Enabling PatchGuard HAL interception...",
+                         "HAL interception",
+                         [] { return EnablePatchGuardInterception(); });
+                   });
+  QObject::connect(KernelControlsUi->ClearKprcb, &QPushButton::clicked,
+                   Page, [RunKernelControlAction] {
+                     RunKernelControlAction(
+                         "Clearing PatchGuard KPRCB contexts...",
+                         "KPRCB clear",
+                         [] { return ClearPatchGuardKprcbContexts(); });
+                   });
+  QObject::connect(KernelControlsUi->CancelDpcApc, &QPushButton::clicked,
+                   Page, [RunPatchGuardDpcApc] { RunPatchGuardDpcApc(); });
   QObject::connect(KernelControlsUi->TriggerPatchGuard, &QPushButton::clicked,
                    Page, [RunPatchGuardTrigger] { RunPatchGuardTrigger(); });
   QObject::connect(KernelControlsUi->EnablePpn, &QPushButton::clicked, Page,
@@ -1561,6 +1771,12 @@ QWidget *CreateKernelInspectorPage() {
                      RunKernelControlAction("Enabling PPN page guard...",
                                             "EnablePPN",
                                             [] { return EnablePPN(); });
+                   });
+  QObject::connect(KernelControlsUi->DisablePpn, &QPushButton::clicked, Page,
+                   [RunKernelControlAction] {
+                     RunKernelControlAction("Restoring PPN IDT/PTE state...",
+                                            "DisablePPN",
+                                            [] { return DisablePPN(); });
                    });
   QObject::connect(
       SessTable, &QWidget::customContextMenuRequested, Page,

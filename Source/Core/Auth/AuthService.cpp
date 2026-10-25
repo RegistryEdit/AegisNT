@@ -5,7 +5,7 @@
 #include <QDateTime>
 #include <QEventLoop>
 #include <QJsonDocument>
-#include <QMessageBox>
+#include "../../UI/Common/Widgets/FluentCompatibility.h"
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -19,12 +19,12 @@ namespace AegisNT {
 // 前向声明辅助函数
 void ShowSuccessNotice(QWidget *Parent, const QString &Title,
                        const QString &Content) {
-    QMessageBox::information(Parent, Title, Content);
+    ShowFluentMessage(Parent, Title, Content);
 }
 
 void ShowErrorNotice(QWidget *Parent, const QString &Title,
                      const QString &Content) {
-    QMessageBox::critical(Parent, Title, Content);
+    ShowFluentMessage(Parent, Title, Content);
 }
 
 AuthService::AuthService() = default;

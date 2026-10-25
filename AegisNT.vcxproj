@@ -129,7 +129,8 @@
     <ClCompile Include="Platform\AegisCoreClient.cpp" />
     <!-- Services 层 -->
     <ClCompile Include="Source\Services\DriverService.cpp" />
-    <!-- UI 层 -->
+    <ClCompile Include="Source\Services\DriverServiceEnumImpl.cpp" />
+    <!-- Implementations required by the QtMoc headers below. -->
     <ClCompile Include="Source\UI\Common\Base\PageBase.cpp" />
     <ClCompile Include="Source\UI\Common\Widgets\RefreshControl.cpp" />
   </ItemGroup>
@@ -146,10 +147,8 @@
     <ClInclude Include="Platform\AegisCoreClient.h" />
     <!-- Services 层 -->
     <ClInclude Include="Source\Services\IDriverService.h" />
+    <ClInclude Include="Source\Services\DriverServiceEnumImpl.h" />
     <!-- UI 层 -->
-    <ClInclude Include="Source\UI\Common\Base\PageBase.h" />
-    <ClInclude Include="Source\UI\Common\Widgets\RefreshControl.h" />
-    <ClInclude Include="Source\UI\Common\Widgets\DebouncedSearchEdit.h" />
     <ClInclude Include="Source\UI\Pages\ChatPage.h" />
     <ClInclude Include="Source\UI\Pages\AccountPage.h" />
     <ClInclude Include="Server\ChatProtocol.h" />

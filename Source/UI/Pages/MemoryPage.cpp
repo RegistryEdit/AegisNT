@@ -1,4 +1,4 @@
-// 进程内存扩展功能(AOB 扫描 / 模块转储)的辅助定义�?
+// 进程内存扩展功能(AOB 扫描 / 模块转储)的辅助定义�?
 namespace {
 
 struct PatternByte {
@@ -26,11 +26,11 @@ bool MemoryProtectReadable(ULONG Protect) {
   case PAGE_EXECUTE_WRITECOPY:
     return true;
   default:
-    return false;  // �?PAGE_NOACCESS / PAGE_EXECUTE(不可�?
+    return false;  // �?PAGE_NOACCESS / PAGE_EXECUTE(不可�?
   }
 }
 
-// 在缓冲区内按通配符模式查�?返回匹配起始下标,无匹配返�?npos�?
+// 在缓冲区内按通配符模式查�?返回匹配起始下标,无匹配返�?npos�?
 size_t MemoryPatternFind(const unsigned char *Data, size_t Size,
                          const std::vector<PatternByte> &Pattern) {
   if (Pattern.empty() || Size < Pattern.size())
@@ -532,7 +532,7 @@ QWidget *CreateMemoryPage() {
   };
   QObject::connect(DumpBrowse, &QPushButton::clicked, Page,
                    [Page, DumpFileEdit] {
-                     const QString Path = QFileDialog::getSaveFileName(
+                     const QString Path = FluentFileDialog::getSaveFileName(
                          Page, "Dump output file", QString(),
                          "Binary files (*.bin);;All files (*)");
                      if (!Path.isEmpty())
@@ -822,7 +822,7 @@ QWidget *CreateMemoryPage() {
     return true;
   };
   // PID 0 时走专用内核读写 IOCTL(0x83C/0x83D,支持 MDL/CR0/直写方式),
-  // 否则保持普通进程内存读写�?
+  // 否则保持普通进程内存读写�?
   const auto ReadTarget = [MethodBox](ULONG ProcessId, ULONG_PTR Address,
                                       void *Buffer, ULONG Size,
                                       ULONG *BytesRead) {

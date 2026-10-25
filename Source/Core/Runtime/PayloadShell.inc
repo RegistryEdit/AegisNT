@@ -876,7 +876,7 @@ void ShowPayloadShellCommandDialog(
           PayloadShellLog(Session, "Not connected!", QColor("#FF5F56"));
           return;
         }
-        const QString Path = QFileDialog::getOpenFileName(
+        const QString Path = FluentFileDialog::getOpenFileName(
             Session->CommandDialog ? Session->CommandDialog->window() : nullptr,
             "Select file to upload", QString(), "All files (*.*)");
         if (Path.isEmpty())
@@ -951,7 +951,7 @@ void PayloadShellShowScreenshot(
   auto *Layout = new QVBoxLayout(Dialog);
   Layout->setContentsMargins(16, 16, 16, 16);
   Layout->setSpacing(10);
-  auto *Image = new QLabel;
+  auto *Image = new BodyLabel;
   Image->setAlignment(Qt::AlignCenter);
   Image->setScaledContents(true);
   Image->setPixmap(Pixmap);
@@ -968,7 +968,7 @@ void PayloadShellShowScreenshot(
   Layout->addLayout(Buttons);
   QObject::connect(Save, &QPushButton::clicked, Dialog,
                    [Dialog, Session, PngBytes] {
-    const QString Path = QFileDialog::getSaveFileName(
+    const QString Path = FluentFileDialog::getSaveFileName(
         Dialog, "Save screenshot", "screenshot.png", "PNG Image (*.png)");
     if (Path.isEmpty())
       return;
@@ -1022,7 +1022,7 @@ void PayloadShellHandleResponse(
       FileName = "download.bin";
     const std::shared_ptr<PayloadShellState> State =
         Session ? Session->State.lock() : nullptr;
-    const QString Path = QFileDialog::getSaveFileName(
+    const QString Path = FluentFileDialog::getSaveFileName(
         State && State->Page ? State->Page->window() : nullptr,
         "Save downloaded file", FileName, "All files (*.*)");
     if (Path.isEmpty())

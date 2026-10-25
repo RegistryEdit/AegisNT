@@ -139,7 +139,7 @@ QWidget *CreateSnapshotLabPage() {
       BaselineTimer = new QTimer(this);
       QObject::connect(
           BaselineButton, &QPushButton::clicked, this, [this] {
-            const QString Path = QFileDialog::getOpenFileName(
+            const QString Path = FluentFileDialog::getOpenFileName(
                 this, "Load baseline snapshot", {}, "JSON (*.json)");
             if (Path.isEmpty())
               return;
@@ -1440,7 +1440,7 @@ QWidget *CreateSnapshotLabPage() {
     void LoadSnapshotFromJson() {
       if (Busy)
         return;
-      const QString Path = QFileDialog::getOpenFileName(
+      const QString Path = FluentFileDialog::getOpenFileName(
           this, "Load Snapshot JSON", QString(),
           "Aegis Snapshot (*.aegis-snapshot.json);;JSON (*.json)");
       if (Path.isEmpty())
@@ -1477,7 +1477,7 @@ QWidget *CreateSnapshotLabPage() {
       const QString DefaultName =
           QString("snapshot-%1.aegis-snapshot.json")
               .arg(QDateTime::currentDateTimeUtc().toString("yyyyMMdd-hhmmss"));
-      const QString Path = QFileDialog::getSaveFileName(
+      const QString Path = FluentFileDialog::getSaveFileName(
           this, "Save Snapshot JSON", DefaultName,
           "Aegis Snapshot (*.aegis-snapshot.json)");
       if (Path.isEmpty())

@@ -128,7 +128,7 @@ QWidget *CreateModuleManagerPage() {
   });
   QObject::connect(
       AddModule, &QPushButton::clicked, Page, [Page, Kind, Populate] {
-        const QString Path = QFileDialog::getOpenFileName(
+        const QString Path = FluentFileDialog::getOpenFileName(
             Page, "Select DLL", QString(), "DLL files (*.dll)");
         if (Path.isEmpty())
           return;

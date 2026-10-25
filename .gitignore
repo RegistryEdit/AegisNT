@@ -8,8 +8,10 @@
 /out/
 /Server/
 /LicenseServer/
-/Tests/
+/Tests/*
 *.cmd
+!/Tests/DriverServiceEnumTests.cpp
+!/Tests/run_driver_service_enum_tests.cmd
 *.ps1
 /.agents/
 .idea/modules.xml

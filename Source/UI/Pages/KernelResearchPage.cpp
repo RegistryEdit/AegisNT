@@ -52,7 +52,7 @@ QWidget *CreateKernelResearchPage() {
       {"Kind", "Index", "Address", "Baseline", "Module/Symbol", "State"});
   auto *BigPool = MakeResearchTable(
       {"Tag", "Allocations", "Bytes", "Largest", "Paged", "Status"});
-  auto *Objects = new QTreeWidget;
+  auto *Objects = new FluentTreeWidget;
   Objects->setHeaderLabels({"Object", "Type", "Address", "Detail"});
   Objects->header()->setSectionResizeMode(0, QHeaderView::Stretch);
   Objects->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
@@ -460,7 +460,7 @@ QWidget *CreateKernelResearchPage() {
 
   QObject::connect(Refresh, &QPushButton::clicked, Page, RefreshAll);
   QObject::connect(SaveBaseline, &QPushButton::clicked, Page, [=] {
-    const QString Path = QFileDialog::getSaveFileName(
+    const QString Path = FluentFileDialog::getSaveFileName(
         Page, "Save Kernel Baseline", "kernel-baseline.aegis-kernel-baseline.json",
         "Aegis Kernel Baseline (*.json)");
     if (Path.isEmpty()) return;
@@ -479,7 +479,7 @@ QWidget *CreateKernelResearchPage() {
                       "Failed to save baseline: " + File.errorString());
   });
   QObject::connect(LoadBaseline, &QPushButton::clicked, Page, [=] {
-    const QString Path = QFileDialog::getOpenFileName(Page, "Load Kernel Baseline", {}, "JSON (*.json)");
+    const QString Path = FluentFileDialog::getOpenFileName(Page, "Load Kernel Baseline", {}, "JSON (*.json)");
     if (Path.isEmpty()) return;
     QFile File(Path);
     if (!File.open(QIODevice::ReadOnly)) {

@@ -212,7 +212,7 @@ QWidget *CreateSettingsPage() {
   QObject::connect(
       SelectWallpaper, &QPushButton::clicked, Content,
       [Content, WallpaperPath, ClearWallpaper] {
-        const QString Path = QFileDialog::getOpenFileName(
+        const QString Path = FluentFileDialog::getOpenFileName(
             Content->window(), "Select wallpaper", WallpaperPath->text(),
             "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*.*)");
         if (Path.isEmpty())
@@ -621,7 +621,7 @@ QWidget *CreateSettingsPage() {
   AddSetting("Modules", "Select the DLL module directory.", ModulePathControl);
   QObject::connect(
       BrowseModules, &QPushButton::clicked, Content, [Content, ModulePath] {
-        const QString Directory = QFileDialog::getExistingDirectory(
+        const QString Directory = FluentFileDialog::getExistingDirectory(
             Content->window(), "Select module directory",
             ConfigurationPaths("Modules", "./Modules").first());
         if (Directory.isEmpty())
@@ -658,7 +658,7 @@ QWidget *CreateSettingsPage() {
              DriverPathControl);
   QObject::connect(
       BrowseDrivers, &QPushButton::clicked, Content, [Content, DriverPath] {
-        const QString Directory = QFileDialog::getExistingDirectory(
+        const QString Directory = FluentFileDialog::getExistingDirectory(
             Content->window(), "Select driver directory",
             ConfigurationPaths("Drivers", "./Drivers").first());
         if (Directory.isEmpty())
@@ -699,7 +699,7 @@ QWidget *CreateSettingsPage() {
   auto *HotkeyLayout = new QHBoxLayout(HotkeyControl);
   HotkeyLayout->setContentsMargins(0, 0, 0, 0);
   HotkeyLayout->setSpacing(8);
-  auto *HotkeyEdit = new QKeySequenceEdit;
+  auto *HotkeyEdit = new FluentKeySequenceEdit;
   HotkeyEdit->setMaximumSequenceLength(1);
   HotkeyEdit->setMinimumWidth(180);
   HotkeyEdit->setKeySequence(QKeySequence(

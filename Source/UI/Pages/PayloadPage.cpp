@@ -552,7 +552,7 @@ QWidget *CreatePayloadPage() {
         ShowSuccessNotice(Page, "Payload", "Payload module list refreshed.");
       });
   QObject::connect(Browse, &QPushButton::clicked, Page, [Page, OutputPath] {
-    const QString Path = QFileDialog::getSaveFileName(
+    const QString Path = FluentFileDialog::getSaveFileName(
         Page, "Select output file", OutputPath->text(), "All files (*.*)");
     if (!Path.isEmpty())
       OutputPath->setText(Path);

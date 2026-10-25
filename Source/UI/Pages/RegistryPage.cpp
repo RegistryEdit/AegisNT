@@ -376,7 +376,7 @@ private:
 
     auto *ViewSplitter = new Splitter;
     ViewSplitter->setChildrenCollapsible(false);
-    auto *KeyTree = new QTreeWidget;
+    auto *KeyTree = new FluentTreeWidget;
     KeyTree->setHeaderLabel("Computer");
     KeyTree->setAnimated(true);
     KeyTree->setMinimumWidth(330);

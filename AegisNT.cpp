@@ -168,6 +168,8 @@
 #include "Source/UI/Common/Base/PageBase.h"
 #include "Source/UI/Common/Widgets/RefreshControl.h"
 #include "Source/UI/Common/Widgets/DebouncedSearchEdit.h"
+#include "Source/UI/Common/Widgets/FluentCompatibility.h"
+#include "Source/UI/Common/Widgets/FluentTitleBar.h"
 #include "Source/UI/Pages/KernelResearch.h"
 #include "Source/UI/Pages/PageFactory.h"
 #include "Source/UI/Pages/PageRegistry.h"
@@ -202,6 +204,12 @@
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Windowscodecs.lib")
 #pragma comment(lib, "Dbghelp.lib")
+
+using AegisNT::FluentFileDialog;
+using AegisNT::FluentInputDialog;
+using AegisNT::FluentKeySequenceEdit;
+using AegisNT::FluentTreeView;
+using AegisNT::FluentTreeWidget;
 
 namespace {
 
@@ -1196,7 +1204,7 @@ QWidget *MakeApplicationIconWidget(const QSize &IconSize) {
     return MakeGlyph(Fluent::IconType::APPLICATION,
                      std::max(IconSize.width(), IconSize.height()));
 
-  auto *Label = new QLabel;
+  auto *Label = new BodyLabel;
   Label->setFixedSize(IconSize);
   Label->setAlignment(Qt::AlignCenter);
   Label->setScaledContents(true);
@@ -1214,7 +1222,7 @@ QWidget *MakeApplicationIconFitWidget(const QSize &IconSize) {
     return MakeGlyph(Fluent::IconType::APPLICATION,
                      std::max(IconSize.width(), IconSize.height()));
 
-  auto *Label = new QLabel;
+  auto *Label = new BodyLabel;
   Label->setFixedSize(IconSize);
   Label->setAlignment(Qt::AlignCenter);
   Label->setPixmap(Pixmap);
@@ -1223,6 +1231,11 @@ QWidget *MakeApplicationIconFitWidget(const QSize &IconSize) {
 
 void InstallFluentScrollBar(QAbstractScrollArea *Area,
                             Qt::Orientation Orientation) {
+  const char *Key = Orientation == Qt::Vertical ? "FluentScrollBarVertical"
+                                               : "FluentScrollBarHorizontal";
+  if (Area->property(Key).toBool())
+    return;
+  Area->setProperty(Key, true);
   QScrollBar *OriginalScrollBar = Orientation == Qt::Vertical
                                       ? Area->verticalScrollBar()
                                       : Area->horizontalScrollBar();
@@ -2083,8 +2096,7 @@ void ApplyDialogTheme(QWidget *Dialog) {
   }
 }
 
-// 无边框对话框标题栏:复用主窗口标题栏的 QSS( QFrame#TitleBar /
-// QPushButton#TitleBarClose ),支持按住拖动,右侧为关闭按钮。
+// 无边框对话框标题栏:支持按住拖动,右侧为 Fluent 图标关闭按钮。
 class DialogTitleBarFrame : public QFrame {
 public:
   explicit DialogTitleBarFrame(QWidget *Parent) : QFrame(Parent) {}
@@ -2110,18 +2122,10 @@ QFrame *CreateDialogTitleBar(QDialog *Dialog, const QString &Title) {
   TitleLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
   Layout->addWidget(TitleLabel);
   Layout->addStretch();
-  auto *CloseButton = new QPushButton(TitleBar);
-  CloseButton->setObjectName("TitleBarClose");
-  CloseButton->setFixedSize(40, 36);
-  QFont CaptionFont;
-  CaptionFont.setFamilies({"Segoe Fluent Icons", "Segoe MDL2 Assets"});
-  CaptionFont.setPixelSize(10);
-  CloseButton->setFont(CaptionFont);
-  CloseButton->setText(QChar(0xE8BB));
-  CloseButton->setToolTip("Close");
-  CloseButton->setCursor(Qt::PointingHandCursor);
+  auto *CloseButton = MakeTitleBarButton("TitleBarClose", "Close", 36, TitleBar);
+  CloseButton->setSystemIcon(QStyle::SP_TitleBarCloseButton);
   Layout->addWidget(CloseButton);
-  QObject::connect(CloseButton, &QPushButton::clicked, Dialog,
+  QObject::connect(CloseButton, &QAbstractButton::clicked, Dialog,
                    &QDialog::reject);
   return TitleBar;
 }
@@ -2277,7 +2281,7 @@ void ShowLaunchAsDialog(QWidget *Parent) {
   Dialog->cancelButton()->setText("Cancel");
 
   QObject::connect(Browse, &QPushButton::clicked, Dialog, [Dialog, Executable] {
-    const QString Path = QFileDialog::getOpenFileName(
+    const QString Path = FluentFileDialog::getOpenFileName(
         Dialog, "Select executable", QString(),
         "Executable files (*.exe);;All files (*.*)");
     if (!Path.isEmpty())
@@ -2367,7 +2371,7 @@ public:
     HeroLayout->setSpacing(18);
 
     auto *Avatar =
-        new QLabel(QString(User.isEmpty() ? "U" : User.left(1).toUpper()));
+        new BodyLabel(QString(User.isEmpty() ? "U" : User.left(1).toUpper()));
     Avatar->setFixedSize(82, 82);
     Avatar->setAlignment(Qt::AlignCenter);
     Avatar->setStyleSheet(
@@ -3098,9 +3102,6 @@ public:
           (ConfigurationValue("Drivers", "AutoLoad", true).toBool() ||
            ConfigurationValue("Modules", "AutoLoad", true).toBool()))
         ScanRuntimeModules();
-		if (TryOpenDevice()) {
-			ProtectProcess(GetCurrentProcessId());
-		}
     });
   }
 
@@ -3238,37 +3239,27 @@ private:
     Layout->setContentsMargins(0, 0, 0, 0);
     Layout->setSpacing(0);
 
-    auto *IconButton = new QPushButton;
-    IconButton->setObjectName("TitleBarIcon");
-    IconButton->setFixedSize(40, NativeTitleBarHeight);
+    auto *IconButton = MakeTitleBarButton("TitleBarIcon", "System menu",
+                                         NativeTitleBarHeight, TitleBar);
     IconButton->setIcon(windowIcon());
-    IconButton->setIconSize(QSize(16, 16));
-    IconButton->setToolTip("System menu");
-    IconButton->setCursor(Qt::PointingHandCursor);
     auto *WindowTitle =
         MakeLabel(windowTitle(), 11, KTextPrimary, QFont::Normal);
     WindowTitle->setContentsMargins(2, 0, 12, 0);
     WindowTitle->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
     const auto CreateSystemButton =
-        [NativeTitleBarHeight](const QString &ObjectName, const wchar_t *Glyph,
+        [NativeTitleBarHeight, TitleBar](const QString &ObjectName, QStyle::StandardPixmap Icon,
                                const QString &ToolTip) {
-          auto *Button = new QPushButton;
-          Button->setObjectName(ObjectName);
-          Button->setFixedSize(40, NativeTitleBarHeight);
-          QFont CaptionFont;
-          CaptionFont.setFamilies({"Segoe Fluent Icons", "Segoe MDL2 Assets"});
-          CaptionFont.setPixelSize(10);
-          Button->setFont(CaptionFont);
-          Button->setText(QString::fromWCharArray(Glyph));
-          Button->setToolTip(ToolTip);
+          auto *Button = MakeTitleBarButton(ObjectName, ToolTip,
+                                            NativeTitleBarHeight, TitleBar);
+          Button->setSystemIcon(Icon);
           return Button;
         };
     auto *MinimizeButton =
-        CreateSystemButton("TitleBarMinimize", L"\xE921", "Minimize");
+        CreateSystemButton("TitleBarMinimize", QStyle::SP_TitleBarMinButton, "Minimize");
     MaximizeButton =
-        CreateSystemButton("TitleBarMaximize", L"\xE922", "Maximize");
-    auto *CloseButton = CreateSystemButton("TitleBarClose", L"\xE8BB", "Close");
+        CreateSystemButton("TitleBarMaximize", QStyle::SP_TitleBarMaxButton, "Maximize");
+    auto *CloseButton = CreateSystemButton("TitleBarClose", QStyle::SP_TitleBarCloseButton, "Close");
 
     Layout->addWidget(IconButton);
     Layout->addWidget(WindowTitle);
@@ -3286,16 +3277,16 @@ private:
     WindowAgent->setSystemButton(QWK::WindowAgentBase::Close, CloseButton);
 
     QObject::connect(
-        IconButton, &QPushButton::clicked, this, [this, IconButton] {
+        IconButton, &QAbstractButton::clicked, this, [this, IconButton] {
           WindowAgent->showSystemMenu(
               IconButton->mapToGlobal(QPoint(0, IconButton->height())));
         });
-    QObject::connect(MinimizeButton, &QPushButton::clicked, this,
+    QObject::connect(MinimizeButton, &QAbstractButton::clicked, this,
                      &QWidget::showMinimized);
-    QObject::connect(MaximizeButton, &QPushButton::clicked, this, [this] {
+    QObject::connect(MaximizeButton, &QAbstractButton::clicked, this, [this] {
       isMaximized() ? showNormal() : showMaximized();
     });
-    QObject::connect(CloseButton, &QPushButton::clicked, this, &QWidget::close);
+    QObject::connect(CloseButton, &QAbstractButton::clicked, this, &QWidget::close);
     UpdateMaximizeButton();
     return TitleBar;
   }
@@ -3304,8 +3295,8 @@ private:
     if (!MaximizeButton)
       return;
     const bool Maximized = isMaximized();
-    MaximizeButton->setText(
-        QString::fromWCharArray(Maximized ? L"\xE923" : L"\xE922"));
+    MaximizeButton->setSystemIcon(Maximized ? QStyle::SP_TitleBarNormalButton
+                                           : QStyle::SP_TitleBarMaxButton);
     MaximizeButton->setToolTip(Maximized ? "Restore" : "Maximize");
   }
 
@@ -3486,6 +3477,10 @@ private:
     TrayIcon->setIcon(Icon);
     TrayIcon->setToolTip("AegisNT");
 
+    // QSystemTrayIcon 在 Windows 上会把上下文菜单交给 Shell 原生弹出。
+    // RoundMenu 是 QFluent 的自绘菜单，依赖普通 QWidget 的 popup/动画流程；
+    // 绑定到托盘后 Shell 只会保留首项并把列表裁成一行（见托盘右键截图）。
+    // 托盘菜单必须使用原生 QMenu，应用内的 RoundMenu 不受影响。
     auto *TrayMenu = new QMenu(this);
     TrayMenu->setTitle("AegisNT");
     auto *RestoreAction = new QAction("Restore", TrayMenu);
@@ -3590,7 +3585,7 @@ private:
 
   NavigationPanel *NavigationPanelWidget = nullptr;
   QWK::WidgetWindowAgent *WindowAgent = nullptr;
-  QPushButton *MaximizeButton = nullptr;
+  FluentTitleBarButton *MaximizeButton = nullptr;
   FluentLabelBase *TitleLabelWidget = nullptr;
   FluentLabelBase *SubtitleLabelWidget = nullptr;
   StackedWidget *PageStack = nullptr;
@@ -3636,6 +3631,7 @@ int main(int Argc, char *Argv[]) {
 
   QGuiApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
   QApplication Application(Argc, Argv);
+  AegisNT::InstallFluentCompatibility(Application);
   Application.setApplicationName("AegisNT");
   Application.setApplicationDisplayName("AegisNT");
   Application.setOrganizationName("AegisNT");

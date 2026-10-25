@@ -1,236 +1,259 @@
-#include "../Services/DriverService.cpp"
+#include "DriverServiceEnumImpl.h"
 
-// 补充完善关键的枚举方法实现
+#include "../../Platform/AegisCoreCall.h"
 
-namespace AegisNT {
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <vector>
 
-// ============================================================
-// 进程枚举实现
-// ============================================================
+namespace AegisNT::DriverServiceEnum {
+namespace {
 
-Result<QVector<ProcessInfo>> DriverService::EnumProcesses() {
-    // 分配输出缓冲区（假设最多 1024 个进程）
-    constexpr DWORD MaxProcesses = 1024;
-    constexpr DWORD BufferSize = MaxProcesses * 512; // 每个进程约 512 字节
+constexpr DWORD kInvalidData = ERROR_INVALID_DATA;
+constexpr ULONG kMaxRecords = 1024 * 1024;
 
-    std::vector<BYTE> buffer(BufferSize);
-    DWORD bytesReturned = 0;
-
-    AegisCoreClient &client = GlobalAegisCoreClient();
-
-    if (!client.EnumProcesses(buffer.data(), BufferSize, &bytesReturned)) {
-        return Result<QVector<ProcessInfo>>(
-            client.GetLastError(),
-            QString("Failed to enumerate processes: %1").arg(FormatError(client.GetLastError()))
-        );
-    }
-
-    // 解析返回的数据结构
-    QVector<ProcessInfo> processes;
-
-    // TODO: 根据驱动返回的实际结构解析
-    // 这里需要匹配 Protocol 头文件中定义的结构
-
-    // 示例占位符
-    struct PROCESS_ENTRY {
-        DWORD Pid;
-        DWORD ParentPid;
-        DWORD ThreadCount;
-        DWORD HandleCount;
-        WCHAR Name[260];
-        WCHAR ImagePath[520];
-        ULONG64 Eprocess;
-        UCHAR Protected;
-        UCHAR Ppl;
-    };
-
-    const DWORD entryCount = bytesReturned / sizeof(PROCESS_ENTRY);
-    const PROCESS_ENTRY *entries = reinterpret_cast<const PROCESS_ENTRY *>(buffer.data());
-
-    for (DWORD i = 0; i < entryCount; ++i) {
-        ProcessInfo info;
-        info.Pid = entries[i].Pid;
-        info.ParentPid = entries[i].ParentPid;
-        info.ThreadCount = entries[i].ThreadCount;
-        info.HandleCount = entries[i].HandleCount;
-        info.Name = QString::fromWCharArray(entries[i].Name);
-        info.ImagePath = QString::fromWCharArray(entries[i].ImagePath);
-        info.Eprocess = entries[i].Eprocess;
-        info.Protected = entries[i].Protected != 0;
-        info.Ppl = entries[i].Ppl != 0;
-
-        processes.append(info);
-    }
-
-    return Result<QVector<ProcessInfo>>(processes);
+template <typename T>
+Result<T> InvalidData(const char *Message) {
+    return Result<T>::Error(kInvalidData, QString::fromLatin1(Message));
 }
 
-// ============================================================
-// 线程枚举实现
-// ============================================================
-
-Result<QVector<ThreadInfo>> DriverService::EnumThreads(DWORD Pid) {
-    constexpr DWORD MaxThreads = 512;
-    constexpr DWORD BufferSize = MaxThreads * 128;
-
-    std::vector<BYTE> buffer(BufferSize);
-    DWORD bytesReturned = 0;
-
-    AegisCoreClient &client = GlobalAegisCoreClient();
-
-    if (!client.EnumThreads(Pid, buffer.data(), BufferSize, &bytesReturned)) {
-        return Result<QVector<ThreadInfo>>(
-            client.GetLastError(),
-            QString("Failed to enumerate threads: %1").arg(FormatError(client.GetLastError()))
-        );
-    }
-
-    QVector<ThreadInfo> threads;
-
-    // TODO: 解析驱动返回的线程结构
-
-    return Result<QVector<ThreadInfo>>(threads);
+template <typename T>
+Result<T> NtError(NTSTATUS Status, const char *Message) {
+    DWORD Code = AegisCoreNtStatusToWin32(Status);
+    if (Code == ERROR_SUCCESS)
+        Code = ERROR_GEN_FAILURE;
+    return Result<T>::Error(Code, QString::fromLatin1(Message));
 }
 
-// ============================================================
-// 驱动枚举实现
-// ============================================================
-
-Result<QVector<DriverInfo>> DriverService::EnumDrivers() {
-    constexpr DWORD MaxDrivers = 512;
-    constexpr DWORD BufferSize = MaxDrivers * 512;
-
-    std::vector<BYTE> buffer(BufferSize);
-    DWORD bytesReturned = 0;
-
-    AegisCoreClient &client = GlobalAegisCoreClient();
-
-    if (!client.EnumDrivers(buffer.data(), BufferSize, &bytesReturned)) {
-        return Result<QVector<DriverInfo>>(
-            client.GetLastError(),
-            QString("Failed to enumerate drivers: %1").arg(FormatError(client.GetLastError()))
-        );
-    }
-
-    QVector<DriverInfo> drivers;
-
-    // TODO: 解析驱动返回的驱动结构
-
-    return Result<QVector<DriverInfo>>(drivers);
+template <size_t N>
+QString WireString(const WCHAR (&Text)[N]) {
+    size_t Length = 0;
+    while (Length < N && Text[Length] != L'\0')
+        ++Length;
+    return QString::fromWCharArray(Text, static_cast<qsizetype>(Length));
 }
 
-// ============================================================
-// 内存操作实现
-// ============================================================
-
-Result<QByteArray> DriverService::ReadProcessMemory(DWORD Pid, quint64 Address, size_t Size) {
-    QByteArray data(static_cast<int>(Size), 0);
-
-    AegisCoreClient &client = GlobalAegisCoreClient();
-
-    if (!client.ReadProcessMemory(Pid, Address, data.data(), Size)) {
-        return Result<QByteArray>(
-            client.GetLastError(),
-            QString("Failed to read memory: %1").arg(FormatError(client.GetLastError()))
-        );
-    }
-
-    return Result<QByteArray>(data);
+template <typename T>
+bool ReadRecord(const BYTE *Buffer, size_t Bytes, size_t Offset, T &Record) {
+    if (Buffer == nullptr || Offset > Bytes || sizeof(T) > Bytes - Offset)
+        return false;
+    std::memcpy(&Record, Buffer + Offset, sizeof(T));
+    return true;
 }
 
-Result<void> DriverService::WriteProcessMemory(DWORD Pid, quint64 Address, const QByteArray &Data) {
-    AegisCoreClient &client = GlobalAegisCoreClient();
-
-    if (!client.WriteProcessMemory(Pid, Address, Data.constData(), Data.size())) {
-        return Result<void>::Error(
-            client.GetLastError(),
-            QString("Failed to write memory: %1").arg(FormatError(client.GetLastError()))
-        );
-    }
-
-    return Result<void>::Ok();
+template <typename Model>
+Result<QVector<Model>> InvalidList(const char *Message) {
+    return InvalidData<QVector<Model>>(Message);
 }
 
-Result<QByteArray> DriverService::ReadKernelMemory(quint64 Address, size_t Size) {
-    QByteArray data(static_cast<int>(Size), 0);
+} // namespace
 
-    AegisCoreClient &client = GlobalAegisCoreClient();
+Result<QVector<ProcessInfo>> ParseProcesses(const void *RawBuffer, size_t Bytes) {
+    constexpr size_t HeaderBytes = offsetof(PROCESS_ENUM_OUTPUT, Entries);
+    if (RawBuffer == nullptr || Bytes < sizeof(ULONG))
+        return InvalidList<ProcessInfo>("Truncated process enumeration header");
 
-    if (!client.ReadKernelMemory(Address, data.data(), Size)) {
-        return Result<QByteArray>(
-            client.GetLastError(),
-            QString("Failed to read kernel memory: %1").arg(FormatError(client.GetLastError()))
-        );
+    const auto *Buffer = static_cast<const BYTE *>(RawBuffer);
+    ULONG Count = 0;
+    std::memcpy(&Count, Buffer, sizeof(Count));
+    if (Count == 0 && Bytes < HeaderBytes)
+        return Result<QVector<ProcessInfo>>::Ok({});
+    if (Bytes < HeaderBytes)
+        return InvalidList<ProcessInfo>("Truncated process enumeration header");
+
+    const size_t Available = (Bytes - HeaderBytes) / sizeof(PROCESS_ENUM_ENTRY);
+    if (Count > kMaxRecords || Count > Available)
+        return InvalidList<ProcessInfo>("Process count exceeds returned data");
+
+    QVector<ProcessInfo> Items;
+    Items.reserve(static_cast<qsizetype>(Count));
+    for (ULONG Index = 0; Index < Count; ++Index) {
+        PROCESS_ENUM_ENTRY Entry{};
+        const size_t Offset = HeaderBytes + static_cast<size_t>(Index) * sizeof(Entry);
+        if (!ReadRecord(Buffer, Bytes, Offset, Entry))
+            return InvalidList<ProcessInfo>("Truncated process entry");
+
+        ProcessInfo Info;
+        Info.Pid = Entry.ProcessId;
+        Info.ParentPid = Entry.ParentPid;
+        Info.ThreadCount = Entry.ThreadCount;
+        Info.SessionId = Entry.SessionId;
+        Info.Eprocess = static_cast<quint64>(Entry.ObjectAddress);
+        Info.Name = WireString(Entry.ImageName);
+        Info.Ppl = Entry.IsPplProtected != FALSE;
+        Info.PplRaw = Entry.PplRawLevel;
+        Info.Critical = Entry.IsCritical != FALSE;
+        Info.Hidden = Entry.IsHidden != FALSE;
+        Items.append(std::move(Info));
     }
-
-    return Result<QByteArray>(data);
+    return Result<QVector<ProcessInfo>>::Ok(Items);
 }
 
-Result<void> DriverService::WriteKernelMemory(quint64 Address, const QByteArray &Data) {
-    AegisCoreClient &client = GlobalAegisCoreClient();
+Result<QVector<ThreadInfo>> ParseThreadInventoryPage(
+    const void *RawBuffer, size_t Bytes, DWORD ExpectedProcessId,
+    ULONG64 RequestedCursor, ULONG64 *NextCursor) {
+    if (NextCursor == nullptr)
+        return InvalidList<ThreadInfo>("Missing thread cursor output");
+    *NextCursor = 0;
 
-    if (!client.WriteKernelMemory(Address, Data.constData(), Data.size())) {
-        return Result<void>::Error(
-            client.GetLastError(),
-            QString("Failed to write kernel memory: %1").arg(FormatError(client.GetLastError()))
-        );
+    if (RawBuffer == nullptr || Bytes < sizeof(INVENTORY_LIST_HEADER))
+        return InvalidList<ThreadInfo>("Truncated thread inventory header");
+
+    const auto *Buffer = static_cast<const BYTE *>(RawBuffer);
+    INVENTORY_LIST_HEADER Header{};
+    std::memcpy(&Header, Buffer, sizeof(Header));
+    if (Header.Size != sizeof(Header) || Header.Version != INVENTORY_PROTOCOL_VERSION ||
+        Header.ReturnedCount > INVENTORY_MAX_PAGE_RECORDS ||
+        Header.ReturnedCount > (Bytes - sizeof(Header)) / sizeof(INVENTORY_RECORD))
+        return InvalidList<ThreadInfo>("Invalid thread inventory header or count");
+    if (Header.Status < 0)
+        return NtError<QVector<ThreadInfo>>(Header.Status, "Thread inventory query failed");
+    if (Header.NextCursor != 0 &&
+        (Header.NextCursor <= RequestedCursor || Header.ReturnedCount == 0))
+        return InvalidList<ThreadInfo>("Thread inventory cursor did not advance");
+
+    QVector<ThreadInfo> Items;
+    Items.reserve(static_cast<qsizetype>(Header.ReturnedCount));
+    for (ULONG Index = 0; Index < Header.ReturnedCount; ++Index) {
+        INVENTORY_RECORD Entry{};
+        const size_t Offset = sizeof(Header) + static_cast<size_t>(Index) * sizeof(Entry);
+        if (!ReadRecord(Buffer, Bytes, Offset, Entry) || Entry.Size != sizeof(Entry) ||
+            Entry.Kind != 2 || Entry.ProcessId != ExpectedProcessId)
+            return InvalidList<ThreadInfo>("Invalid thread inventory record");
+        if (Entry.Status < 0)
+            return NtError<QVector<ThreadInfo>>(Entry.Status, "Thread inventory record failed");
+
+        ThreadInfo Info;
+        Info.Tid = Entry.ThreadId;
+        Info.ProcessId = Entry.ProcessId;
+        Info.StartAddress = Entry.Address;
+        Info.Priority = static_cast<DWORD>(Entry.Value[0]);
+        Info.State = static_cast<DWORD>(Entry.Value[2]);
+        Info.ProcessName = WireString(Entry.Name);
+        Items.append(std::move(Info));
     }
-
-    return Result<void>::Ok();
+    *NextCursor = Header.NextCursor;
+    return Result<QVector<ThreadInfo>>::Ok(Items);
 }
 
-// ============================================================
-// 窗口枚举实现
-// ============================================================
+Result<QVector<DriverInfo>> ParseDrivers(const void *RawBuffer, size_t Bytes) {
+    constexpr size_t HeaderBytes = offsetof(DRIVER_ENUM_OUTPUT, Entries);
+    if (RawBuffer == nullptr || Bytes < HeaderBytes)
+        return InvalidList<DriverInfo>("Truncated driver enumeration header");
 
-Result<QVector<WindowInfo>> DriverService::EnumWindows() {
-    constexpr DWORD MaxWindows = 2048;
-    constexpr DWORD BufferSize = MaxWindows * 256;
+    const auto *Buffer = static_cast<const BYTE *>(RawBuffer);
+    DRIVER_ENUM_HEADER Header{};
+    std::memcpy(&Header, Buffer, sizeof(Header));
+    if (Header.NtStatus < 0)
+        return NtError<QVector<DriverInfo>>(Header.NtStatus, "Driver enumeration failed");
 
-    std::vector<BYTE> buffer(BufferSize);
-    DWORD bytesReturned = 0;
+    const size_t Available = (Bytes - HeaderBytes) / sizeof(DRIVER_ENUM_ENTRY);
+    if (Header.Count > kMaxRecords || Header.Count > Available)
+        return InvalidList<DriverInfo>("Driver count exceeds returned data");
 
-    AegisCoreClient &client = GlobalAegisCoreClient();
+    QVector<DriverInfo> Items;
+    Items.reserve(static_cast<qsizetype>(Header.Count));
+    for (ULONG Index = 0; Index < Header.Count; ++Index) {
+        DRIVER_ENUM_ENTRY Entry{};
+        const size_t Offset = HeaderBytes + static_cast<size_t>(Index) * sizeof(Entry);
+        if (!ReadRecord(Buffer, Bytes, Offset, Entry))
+            return InvalidList<DriverInfo>("Truncated driver entry");
 
-    if (!client.EnumWindows(buffer.data(), BufferSize, &bytesReturned)) {
-        return Result<QVector<WindowInfo>>(
-            client.GetLastError(),
-            QString("Failed to enumerate windows: %1").arg(FormatError(client.GetLastError()))
-        );
+        DriverInfo Info;
+        Info.Name = WireString(Entry.ServiceName);
+        Info.Path = WireString(Entry.ImagePath);
+        Info.BaseAddress = static_cast<quint64>(Entry.ImageBase);
+        Info.Size = Entry.ImageSize;
+        Info.DriverObject = static_cast<quint64>(Entry.DriverObject);
+        Info.Loaded = Entry.State == SERVICE_RUNNING;
+        Items.append(std::move(Info));
     }
-
-    QVector<WindowInfo> windows;
-
-    // TODO: 解析驱动返回的窗口结构
-
-    return Result<QVector<WindowInfo>>(windows);
+    return Result<QVector<DriverInfo>>::Ok(Items);
 }
 
-// ============================================================
-// 回调枚举实现
-// ============================================================
+Result<QVector<WindowInfo>> ParseKernelWindows(const void *RawBuffer, size_t Bytes) {
+    // EnumerateWindowsKernel currently emits the count followed immediately by
+    // entries (4-byte header); don't use sizeof(KERNEL_WINDOW_ENUM_OUTPUT), whose
+    // naturally aligned Entries member starts at byte 8 on x64.
+    constexpr size_t HeaderBytes = sizeof(ULONG);
+    if (RawBuffer == nullptr || Bytes < HeaderBytes)
+        return InvalidList<WindowInfo>("Truncated window enumeration header");
 
-Result<QVector<CallbackInfo>> DriverService::EnumCallbacks() {
-    constexpr DWORD MaxCallbacks = 1024;
-    constexpr DWORD BufferSize = MaxCallbacks * 128;
+    const auto *Buffer = static_cast<const BYTE *>(RawBuffer);
+    ULONG Count = 0;
+    std::memcpy(&Count, Buffer, sizeof(Count));
+    if (Count > kMaxRecords || Count > (Bytes - HeaderBytes) / sizeof(KERNEL_WINDOW_ENUM_ENTRY))
+        return InvalidList<WindowInfo>("Window count exceeds returned data");
 
-    std::vector<BYTE> buffer(BufferSize);
-    DWORD bytesReturned = 0;
+    QVector<WindowInfo> Items;
+    Items.reserve(static_cast<qsizetype>(Count));
+    size_t Offset = HeaderBytes;
+    for (ULONG Index = 0; Index < Count; ++Index) {
+        KERNEL_WINDOW_ENUM_ENTRY Entry{};
+        if (!ReadRecord(Buffer, Bytes, Offset, Entry))
+            return InvalidList<WindowInfo>("Truncated window entry");
+        if ((Entry.TitleLength % sizeof(WCHAR)) != 0 || Entry.TitleLength > 510)
+            return InvalidList<WindowInfo>("Invalid window title length");
 
-    AegisCoreClient &client = GlobalAegisCoreClient();
+        const size_t TitleStorage = (static_cast<size_t>(Entry.TitleLength) + 1u) & ~size_t(1u);
+        const size_t RecordBytes = sizeof(Entry) + TitleStorage;
+        if (RecordBytes > Bytes - Offset)
+            return InvalidList<WindowInfo>("Truncated window title");
 
-    if (!client.EnumCallbacks(buffer.data(), BufferSize, &bytesReturned)) {
-        return Result<QVector<CallbackInfo>>(
-            client.GetLastError(),
-            QString("Failed to enumerate callbacks: %1").arg(FormatError(client.GetLastError()))
-        );
+        WindowInfo Info;
+        Info.Hwnd = reinterpret_cast<HWND>(static_cast<ULONG_PTR>(Entry.Hwnd));
+        Info.ProcessId = Entry.ProcessId;
+        Info.ThreadId = Entry.ThreadId;
+        Info.Visible = (Entry.Flags & WINDOW_FLAG_VISIBLE) != 0;
+        if (Entry.TitleLength != 0) {
+            const size_t TitleCharacters = Entry.TitleLength / sizeof(WCHAR);
+            std::vector<WCHAR> Title(TitleCharacters);
+            std::memcpy(Title.data(), Buffer + Offset + sizeof(Entry), Entry.TitleLength);
+            Info.Title = QString::fromWCharArray(
+                Title.data(), static_cast<qsizetype>(TitleCharacters));
+        }
+        Items.append(std::move(Info));
+        Offset += RecordBytes;
     }
-
-    QVector<CallbackInfo> callbacks;
-
-    // TODO: 解析驱动返回的回调结构
-
-    return Result<QVector<CallbackInfo>>(callbacks);
+    return Result<QVector<WindowInfo>>::Ok(Items);
 }
 
-} // namespace AegisNT
+Result<QVector<CallbackInfo>> ParseCallbacks(const void *RawBuffer, size_t Bytes) {
+    constexpr size_t HeaderBytes = offsetof(CALLBACK_ENUM_OUTPUT, Entries);
+    if (RawBuffer == nullptr || Bytes < sizeof(ULONG))
+        return InvalidList<CallbackInfo>("Truncated callback enumeration header");
+
+    const auto *Buffer = static_cast<const BYTE *>(RawBuffer);
+    ULONG Count = 0;
+    std::memcpy(&Count, Buffer, sizeof(Count));
+    if (Count == 0 && Bytes < HeaderBytes)
+        return Result<QVector<CallbackInfo>>::Ok({});
+    if (Bytes < HeaderBytes)
+        return InvalidList<CallbackInfo>("Truncated callback enumeration header");
+
+    const size_t Available = (Bytes - HeaderBytes) / sizeof(CALLBACK_ENTRY);
+    if (Count > kMaxRecords || Count > Available)
+        return InvalidList<CallbackInfo>("Callback count exceeds returned data");
+
+    QVector<CallbackInfo> Items;
+    Items.reserve(static_cast<qsizetype>(Count));
+    for (ULONG Index = 0; Index < Count; ++Index) {
+        CALLBACK_ENTRY Entry{};
+        const size_t Offset = HeaderBytes + static_cast<size_t>(Index) * sizeof(Entry);
+        if (!ReadRecord(Buffer, Bytes, Offset, Entry))
+            return InvalidList<CallbackInfo>("Truncated callback entry");
+
+        CallbackInfo Info;
+        Info.Type = QString::number(Entry.Type);
+        Info.Address = static_cast<quint64>(Entry.Address);
+        Info.Module = WireString(Entry.ModuleName);
+        Info.Index = static_cast<int>(Index);
+        Items.append(std::move(Info));
+    }
+    return Result<QVector<CallbackInfo>>::Ok(Items);
+}
+
+} // namespace AegisNT::DriverServiceEnum

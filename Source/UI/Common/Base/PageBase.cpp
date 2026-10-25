@@ -1,20 +1,20 @@
 #include "PageBase.h"
-#include <QMessageBox>
+#include "../Widgets/FluentCompatibility.h"
 #include <QMetaObject>
 #include <thread>
 
 namespace AegisNT {
 
 void PageBase::ShowError(const QString &message) {
-    QMessageBox::critical(this, tr("Error"), message);
+    ShowFluentMessage(this, tr("Error"), message);
 }
 
 void PageBase::ShowSuccess(const QString &message) {
-    QMessageBox::information(this, tr("Success"), message);
+    ShowFluentMessage(this, tr("Success"), message);
 }
 
 void PageBase::ShowWarning(const QString &message) {
-    QMessageBox::warning(this, tr("Warning"), message);
+    ShowFluentMessage(this, tr("Warning"), message);
 }
 
 void RefreshablePageBase::StartRefresh() {

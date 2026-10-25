@@ -1155,12 +1155,21 @@ private:
                 continue;
               }
 
+              // 隐藏进程不在驱动枚举结果中，只能凭"是否存活"决定去留。
+              // 内核查询基于 PsLookupProcessByProcessId：普通隐藏（保留 CID）
+              // 存活期间可查到、退出后查不到；CID 隐藏因 PspCidTable 被清恒不可查。
+              // 查询失败时回退到用户态 OpenProcess 判定。
               bool ProcessExited = false;
-              HANDLE Process = OpenProcess(SYNCHRONIZE, FALSE, Pid);
-              if (Process) {
-                ProcessExited =
-                    WaitForSingleObject(Process, 0) == WAIT_OBJECT_0;
-                CloseHandle(Process);
+              BOOLEAN Alive = FALSE;
+              if (QueryProcessAliveKernel(Pid, &Alive)) {
+                ProcessExited = (Alive == FALSE);
+              } else {
+                HANDLE Process = OpenProcess(SYNCHRONIZE, FALSE, Pid);
+                if (Process) {
+                  ProcessExited =
+                      WaitForSingleObject(Process, 0) == WAIT_OBJECT_0;
+                  CloseHandle(Process);
+                }
               }
               if (ProcessExited) {
                 Retained = Page->RetainedProcesses.erase(Retained);
@@ -1590,12 +1599,6 @@ private:
     const ThreadRow *Found = FindThread(Tid);
     if (!Found)
       return;
-    if (Found->ProcessId == GetCurrentProcessId()) {
-      ShowWarningNotice(
-          this, "Task",
-          "Thread operations on AegisNT itself are disabled.");
-      return;
-    }
     // 多选时若当前行在选中集中则应用到全部选中行，否则视为单选。
     std::vector<DWORD> SelectedTids;
     const auto SelectedRows =
@@ -1612,8 +1615,7 @@ private:
         if (Item) {
           const DWORD SelectedTid =
               Item->data(Qt::UserRole).toUInt();
-          if (SelectedTid != 0 &&
-              SelectedTid != GetCurrentProcessId())
+          if (SelectedTid != 0)
             SelectedTids.push_back(SelectedTid);
         }
       }
@@ -2140,18 +2142,13 @@ private:
     const ProcessRow *Process = FindProcess(Pid);
     if (!Process || Pid == 0)
       return;
-    if (Pid == GetCurrentProcessId()) {
-      ShowWarningNotice(this, "Task",
-                        "Operations on AegisNT itself are disabled.");
-      return;
-    }
     const QString Name = Process->Name;
     std::vector<DWORD> SelectedPids;
     for (const QModelIndex &Selected :
          ProcessTable->selectionModel()->selectedRows(0)) {
       const DWORD SelectedPid =
           ProcessTable->item(Selected.row(), 0)->data(Qt::UserRole).toUInt();
-      if (SelectedPid != 0 && SelectedPid != GetCurrentProcessId())
+      if (SelectedPid != 0)
         SelectedPids.push_back(SelectedPid);
     }
     if (SelectedPids.empty())
@@ -3038,7 +3035,7 @@ private:
 
   void ShowInjectShellcodeDialog(DWORD Pid) {
     bool Ok = false;
-    QString Text = QInputDialog::getMultiLineText(
+    QString Text = FluentInputDialog::getMultiLineText(
         this, "InjectShellcode",
         QString("Paste shellcode bytes in hex for PID %1.").arg(Pid),
         "48 31 C0 C3", &Ok);
@@ -3076,15 +3073,9 @@ private:
 
   void ShowThreadHijackDialog(DWORD Pid, const std::vector<DWORD> &Tids,
                               bool UseTrapFrame, const QString &Action) {
-    if (Pid == GetCurrentProcessId()) {
-      ShowWarningNotice(this, Action,
-                        "Thread operations on AegisNT itself are disabled.");
-      return;
-    }
-
     bool Ok = false;
     QString Text =
-        QInputDialog::getText(this, Action, "Target RIP:", QLineEdit::Normal,
+        FluentInputDialog::getText(this, Action, "Target RIP:", QLineEdit::Normal,
                               "0x", &Ok);
     if (!Ok)
       return;
@@ -3129,17 +3120,11 @@ private:
   }
 
   void ShowRemoteCallDialog(DWORD Pid, const std::vector<DWORD> &Tids) {
-    if (Pid == GetCurrentProcessId()) {
-      ShowWarningNotice(this, "RemoteCall",
-                        "Thread operations on AegisNT itself are disabled.");
-      return;
-    }
-
     const auto ReadValue = [this](const QString &Title,
                                   const QString &Label,
                                   ULONG_PTR &Value) -> bool {
       bool Ok = false;
-      const QString Text = QInputDialog::getText(
+      const QString Text = FluentInputDialog::getText(
           this, Title, Label, QLineEdit::Normal, "0x0", &Ok);
       if (!Ok)
         return false;
@@ -3212,14 +3197,8 @@ private:
   }
 
   void ShowInjectAndHijackDialog(DWORD Pid, const std::vector<DWORD> &Tids) {
-    if (Pid == GetCurrentProcessId()) {
-      ShowWarningNotice(this, "InjectAndHijack",
-                        "Thread operations on AegisNT itself are disabled.");
-      return;
-    }
-
     bool Ok = false;
-    QString Text = QInputDialog::getMultiLineText(
+    QString Text = FluentInputDialog::getMultiLineText(
         this, "InjectAndHijack",
         QString("Paste shellcode bytes in hex for PID %1.").arg(Pid),
         "48 31 C0 C3", &Ok);
@@ -3713,7 +3692,7 @@ private:
                TypeName] {
                 bool TargetOk = false;
                 const QString TargetText =
-                    QInputDialog::getText(Dialog, "Duplicate Handle",
+                    FluentInputDialog::getText(Dialog, "Duplicate Handle",
                                           "Target PID:", QLineEdit::Normal,
                                           QString::number(Pid), &TargetOk);
                 if (!TargetOk || TargetText.trimmed().isEmpty())
@@ -3766,16 +3745,6 @@ private:
                         .arg(CurrentAccess, 0, 16);
                 qApp->clipboard()->setText(Text);
                 ShowSuccessNotice(this, "Handle", "Handle information copied.");
-              });
-          AddMenuAction(
-              Menu, "Open in Handle",
-              [this, OwnerPid, HandleValue] {
-                AegisNT::ApplicationContext().HandleLabPresetPid = OwnerPid;
-                AegisNT::ApplicationContext().HandleLabPresetSearch =
-                    QString("0x%1").arg(HandleValue, 0, 16).toUpper();
-                ShowSuccessNotice(
-                    this, "Handle",
-                    "Handle preset prepared. Open Handle to inspect it.");
               });
           ReleaseMenuAfterClose(Menu);
           Menu->exec(Handles->viewport()->mapToGlobal(Position));
@@ -4464,7 +4433,7 @@ private:
     Dialog->cancelButton()->setText("Cancel");
     QObject::connect(
         BrowseButton, &QPushButton::clicked, Dialog, [Dialog, PathEdit] {
-          QFileDialog FileDialog(Dialog, "Select DLL", PathEdit->text(),
+          FluentFileDialog FileDialog(Dialog, "Select DLL", PathEdit->text(),
                                   "DLL files (*.dll);;All files (*.*)");
           FileDialog.setFileMode(QFileDialog::ExistingFile);
           FileDialog.setAcceptMode(QFileDialog::AcceptOpen);

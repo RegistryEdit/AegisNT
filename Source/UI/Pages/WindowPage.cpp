@@ -73,7 +73,7 @@ public:
     KernelModeCheck->setChecked(true);
     Toolbar->addWidget(KernelModeCheck);
     WinLayout->addLayout(Toolbar);
-    WindowTree = new QTreeWidget;
+    WindowTree = new FluentTreeWidget;
     WindowTree->setColumnCount(13);
     WindowTree->setHeaderLabels({"HWND", "Z", "Band", "Title", "Class",
                                  "Process", "PID", "Style", "State", "Flags",
@@ -678,7 +678,6 @@ private:
       return;
     DWORD TargetPid = 0;
     GetWindowThreadProcessId(Handle, &TargetPid);
-    const bool IsOwnWindow = TargetPid == GetCurrentProcessId();
     const bool IsProtected =
         IsTrackedProtectedWindow((ULONG64)(ULONG_PTR)Handle);
     auto *Menu = new RoundMenu(QString(), this);
@@ -717,11 +716,10 @@ private:
       ShowWindow(H, SW_SHOW);
       return SetForegroundWindow(H) != FALSE;
     }, [TargetPid, Handle] { return WindowShow(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
-    if (!IsOwnWindow)
-      AddAction("Hide", [](HWND H) {
-        ShowWindow(H, SW_HIDE);
-        return IsWindow(H) != FALSE;
-      }, [TargetPid, Handle] { return WindowHide(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
+    AddAction("Hide", [](HWND H) {
+      ShowWindow(H, SW_HIDE);
+      return IsWindow(H) != FALSE;
+    }, [TargetPid, Handle] { return WindowHide(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     AddAction("Minimize", [](HWND H) {
       ShowWindow(H, SW_MINIMIZE);
       return IsWindow(H) != FALSE;
@@ -739,11 +737,10 @@ private:
     AddAction("Enable", [](HWND H) {
       return EnableWindow(H, TRUE) != FALSE || GetLastError() == ERROR_SUCCESS;
     }, [TargetPid, Handle] { return WindowEnable(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
-    if (!IsOwnWindow)
-      AddAction("Disable", [](HWND H) {
-        return EnableWindow(H, FALSE) != FALSE ||
-               GetLastError() == ERROR_SUCCESS;
-      }, [TargetPid, Handle] { return WindowDisable(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
+    AddAction("Disable", [](HWND H) {
+      return EnableWindow(H, FALSE) != FALSE ||
+             GetLastError() == ERROR_SUCCESS;
+    }, [TargetPid, Handle] { return WindowDisable(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
     AddAction("Topmost", [](HWND H) {
       return SetWindowPos(H, HWND_TOPMOST, 0, 0, 0, 0,
                           SWP_NOMOVE | SWP_NOSIZE) != FALSE;
@@ -756,7 +753,7 @@ private:
         "Set Title...",
         [this](HWND H) {
           bool Ok = false;
-          const QString NewTitle = QInputDialog::getText(
+          const QString NewTitle = FluentInputDialog::getText(
               WindowTree, "Set Window Title", "New title:",
               QLineEdit::Normal, QString(), &Ok);
           if (!Ok || NewTitle.isEmpty())
@@ -767,7 +764,7 @@ private:
         },
         [this, TargetPid, Handle] {
           bool Ok = false;
-          const QString NewTitle = QInputDialog::getText(
+          const QString NewTitle = FluentInputDialog::getText(
               WindowTree, "Set Window Title", "New title:",
               QLineEdit::Normal, QString(), &Ok);
           if (!Ok || NewTitle.isEmpty())
@@ -785,18 +782,16 @@ private:
       return WindowPing(TargetPid, (ULONG64)(ULONG_PTR)Handle);
     });
     Menu->addSeparator();
-    if (!IsOwnWindow) {
-      AddAction("Post WM_CLOSE", [](HWND H) {
-        return PostMessageW(H, WM_CLOSE, 0, 0) != FALSE;
-      }, [TargetPid, Handle] { return WindowKill(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
-      AddAction("Send SC_CLOSE", [](HWND H) {
-        DWORD_PTR Result = 0;
-        return SendMessageTimeoutW(H, WM_SYSCOMMAND, SC_CLOSE, 0,
-                                   SMTO_ABORTIFHUNG, 1000, &Result) != 0;
-      }, [TargetPid, Handle] { return WindowKill(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
-    }
+    AddAction("Post WM_CLOSE", [](HWND H) {
+      return PostMessageW(H, WM_CLOSE, 0, 0) != FALSE;
+    }, [TargetPid, Handle] { return WindowKill(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
+    AddAction("Send SC_CLOSE", [](HWND H) {
+      DWORD_PTR Result = 0;
+      return SendMessageTimeoutW(H, WM_SYSCOMMAND, SC_CLOSE, 0,
+                                 SMTO_ABORTIFHUNG, 1000, &Result) != 0;
+    }, [TargetPid, Handle] { return WindowKill(TargetPid, (ULONG64)(ULONG_PTR)Handle); });
 
-    if (!IsOwnWindow && KernelModeCheck->isChecked()) {
+    if (KernelModeCheck->isChecked()) {
       Menu->addSeparator();
       auto *KernelMenu = new RoundMenu("Kernel Operations", Menu);
 
@@ -900,7 +895,7 @@ private:
       Menu->addMenu(KernelMenu);
     }
 
-    if (!IsOwnWindow && TargetPid != 0) {
+    if (TargetPid != 0) {
       Menu->addSeparator();
       auto *ProtectAction = new QAction("Protect Window", Menu);
       Menu->addAction(ProtectAction);

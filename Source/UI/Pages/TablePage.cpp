@@ -4,6 +4,8 @@
 // ============================================================
 #include "../../../Platform/AegisCoreCall.h"
 #include <QDateTime>
+#include <QScrollBar>
+#include <QTimer>
 
 QWidget *CreateTablePage() {
   struct TableQueryResult {
@@ -37,6 +39,16 @@ QWidget *CreateTablePage() {
     // 与表格显示行同步的可移除目标；0 表示该行不可移除
     QVector<quintptr> RemoveTargets;
   };
+  // APC 实时捕获（500ms 增量刷新）的共享状态。
+  struct ApcLiveState {
+    QTimer *Timer = nullptr;
+    quint64 LastSeq = 0;       // 已追加的最大序号
+    bool FollowTail = true;    // 是否自动追加（用户上滚时暂停）
+    bool InFlight = false;     // 后台读取进行中
+    int RowsInTable = 0;       // 当前捕获条目占用的表格行数
+    bool CaptureEnabled = false;
+  };
+  const auto ApcLive = std::make_shared<ApcLiveState>();
   const auto ApcScanSummary = [](const TableQueryResult &Result) -> QString {
     if (!Result.ApcAvailable)
       return QString("APC query failed (Win32 error %1); scan completeness unknown.")
@@ -101,11 +113,82 @@ QWidget *CreateTablePage() {
   Table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
   Layout->addWidget(Table, 1);
   const auto State = std::make_shared<TablePageState>();
-  const auto Populate = [Kind, Search, Table, State, Status, ApcScanSummary] {
+
+  /* 把一批捕获条目插入表格顶部（最新在上），维护 2048 行上限与搜索过滤。
+     供首次填充（Populate）与 500ms 增量刷新共用。 */
+  const auto AppendCaptureRows =
+      [Table, State, Search, ApcLive](const APC_CAPTURE_ENTRY *Entries,
+                                      ULONG Count) {
+        const QString SearchText = Search->text().trimmed();
+        const auto Hex = [](ULONG_PTR Value) {
+          return QString("0x%1")
+              .arg(Value, sizeof(ULONG_PTR) * 2, 16, QLatin1Char('0'))
+              .toUpper();
+        };
+        for (ULONG i = 0; i < Count; ++i) {
+          const APC_CAPTURE_ENTRY &E = Entries[i];
+          const bool Blocked = (E.Flags & APC_CANCEL_REASON_BLOCKED) != 0;
+          const bool Test = (E.Flags & APC_CANCEL_REASON_TEST_APC) != 0;
+          const QString Name = Blocked ? QString("BLOCKED")
+                                       : (Test ? QString("TEST-APC")
+                                               : QString("hooked insert"));
+          QString TimeText = "-";
+          if (E.TimeStamp != 0) {
+            const qint64 UnixSecs =
+                static_cast<qint64>(E.TimeStamp / 10000000ULL) - 11644473600LL;
+            TimeText =
+                QDateTime::fromSecsSinceEpoch(UnixSecs).toString("HH:mm:ss.zzz");
+          }
+          const QString Meta =
+              QString("Time %1 | seq %2 | TID %3 | mode %4 | Kernel %5 | "
+                      "Rundown %6 | Normal %7 | Arg1 %8 | Arg2 %9 | flags 0x%10")
+                  .arg(TimeText)
+                  .arg(E.Sequence)
+                  .arg(E.TargetThreadId)
+                  .arg(E.ApcMode == 0 ? "kernel" : "user")
+                  .arg(Hex(E.KernelRoutine))
+                  .arg(Hex(E.RundownRoutine))
+                  .arg(Hex(E.NormalRoutine))
+                  .arg(Hex(E.SystemArgument1))
+                  .arg(Hex(E.SystemArgument2))
+                  .arg(E.Flags, 0, 16)
+                  .toUpper();
+          if (!SearchText.isEmpty() &&
+              !(Name + " " + Meta).contains(SearchText, Qt::CaseInsensitive))
+            continue;
+
+          Table->insertRow(0);
+          Table->setItem(0, 0, new QTableWidgetItem(QString("cap")));
+          Table->setItem(0, 1, new QTableWidgetItem(Name));
+          Table->setItem(0, 2, new QTableWidgetItem(Hex(E.ApcObject)));
+          Table->setItem(0, 3, new QTableWidgetItem(QString("-")));
+          Table->setItem(0, 4, new QTableWidgetItem(QString("-")));
+          Table->setItem(0, 5, new QTableWidgetItem(Meta));
+          Table->setRowHeight(0, KCompactTableRowHeight);
+          State->RemoveTargets.push_front(0);
+          if (E.Sequence > ApcLive->LastSeq)
+            ApcLive->LastSeq = E.Sequence;
+          ApcLive->RowsInTable++;
+        }
+        /* 上限：超出则从底部丢弃最老行。 */
+        while (ApcLive->RowsInTable > (int)APC_CAPTURE_UI_LIMIT) {
+          const int Last = Table->rowCount() - 1;
+          if (Last < 0)
+            break;
+          Table->removeRow(Last);
+          if (!State->RemoveTargets.isEmpty())
+            State->RemoveTargets.pop_back();
+          ApcLive->RowsInTable--;
+        }
+      };
+
+  const auto Populate = [Kind, Search, Table, State, Status, ApcScanSummary,
+                         ApcLive, AppendCaptureRows] {
     auto TableState = State;
     Table->clearContents();
     Table->setRowCount(0);
     State->RemoveTargets.clear();
+    ApcLive->RowsInTable = 0;
     const int Tab = Kind->currentIndex();
     const std::shared_ptr<TableQueryResult> Result = State->Result;
     const SYSTEM_TABLES_OUTPUT &Summary = Result->Summary;
@@ -392,26 +475,25 @@ QWidget *CreateTablePage() {
                "No kernel APCs are queued right now; the inventory is empty.");
 
       /* ---- 投递捕获（hook KeInsertQueueApc / KiInsertQueueApc）----
-         被动快照通常为空（内核 APC 生命周期极短），这里追加 hook 捕获到的
-         最近投递记录，作为真正能观测到 APC 的来源。 */
+         被动快照通常为空；这里展示 hook 捕获到的投递。进入页面时用 Drain
+         一次性填充，之后由 500ms 定时器增量追加（见 ApcLive）。 */
       {
-        const ULONG MaxShow = 1024;
+        const ULONG MaxShow = APC_CAPTURE_MAX_ENTRIES;
         std::vector<BYTE> CapBuf(sizeof(APC_CAPTURE_OUTPUT) +
                                  sizeof(APC_CAPTURE_ENTRY) * (MaxShow - 1));
         PAPC_CAPTURE_OUTPUT Cap = (PAPC_CAPTURE_OUTPUT)CapBuf.data();
         DWORD CapReturned = 0;
-        if (ApcCaptureRead(Cap, (DWORD)CapBuf.size(), &CapReturned)) {
-          const ULONG CapAvail =
-              (ULONG)((CapBuf.size() - sizeof(APC_CAPTURE_OUTPUT)) /
-                      sizeof(APC_CAPTURE_ENTRY) + 1);
-          const ULONG CapCount = std::min<ULONG>(Cap->EntryCount, CapAvail);
+        if (ApcCaptureDrain(Cap, (DWORD)CapBuf.size(), &CapReturned)) {
+          ApcLive->CaptureEnabled = Cap->Enabled != 0;
+          const ULONG CapCount =
+              std::min<ULONG>(Cap->EntryCount, MaxShow);
+          AppendCaptureRows(Cap->Entries, CapCount);
           AddRow("-", "Capture", "-",
-                 QString("enabled %1 | captured %2 | dropped %3 | pending %4 | "
-                         "blocked %5 | block PG %6 | hooks export %7 internal %8")
+                 QString("enabled %1 | captured %2 | dropped %3 | "
+                         "blocked %4 | block PG %5 | hooks export %6 internal %7")
                      .arg(Cap->Enabled ? "yes" : "no")
                      .arg(Cap->Captured)
                      .arg(Cap->Dropped)
-                     .arg(CapCount)
                      .arg(Cap->Blocked)
                      .arg(Cap->BlockPgEnabled ? "on" : "off")
                      .arg((Cap->Flags & APC_CAPTURE_FLAG_HOOK_EXPORT_OK) ? "ok"
@@ -419,40 +501,6 @@ QWidget *CreateTablePage() {
                      .arg((Cap->Flags & APC_CAPTURE_FLAG_HOOK_INTERNAL_OK)
                               ? "ok"
                               : "no"));
-          for (ULONG Index = 0; Index < CapCount; ++Index) {
-            const APC_CAPTURE_ENTRY &E = Cap->Entries[Index];
-            const bool Blocked = (E.Flags & APC_CANCEL_REASON_BLOCKED) != 0;
-            const bool Test = (E.Flags & APC_CANCEL_REASON_TEST_APC) != 0;
-            /* KeQuerySystemTime 为自 1601-01-01 UTC 的 100ns 计数；
-               转 Unix 秒（减 11644473600）后格式化。 */
-            QString TimeText = "-";
-            if (E.TimeStamp != 0) {
-              const qint64 UnixSecs =
-                  static_cast<qint64>(E.TimeStamp / 10000000ULL) -
-                  11644473600LL;
-              TimeText = QDateTime::fromSecsSinceEpoch(UnixSecs)
-                             .toString("HH:mm:ss.zzz");
-            }
-            AddRow(QString("cap %1").arg(Index),
-                   Blocked ? QString("BLOCKED")
-                           : (Test ? QString("TEST-APC")
-                                   : QString("hooked insert")),
-                   Hex(E.ApcObject),
-                   QString("Time %1 | TID %2 | mode %3 | Kernel %4 | "
-                           "Rundown %5 | Normal %6 | Arg1 %7 | Arg2 %8 | "
-                           "flags 0x%9")
-                       .arg(TimeText)
-                       .arg(E.TargetThreadId)
-                       .arg(E.ApcMode == 0 ? "kernel" : "user")
-                       .arg(Hex(E.KernelRoutine))
-                       .arg(Hex(E.RundownRoutine))
-                       .arg(Hex(E.NormalRoutine))
-                       .arg(Hex(E.SystemArgument1))
-                       .arg(Hex(E.SystemArgument2))
-                       .arg(E.Flags, 0, 16)
-                       .toUpper(),
-                   E.KernelRoutine, static_cast<quintptr>(E.ApcObject));
-          }
         }
       }
       return;
@@ -843,11 +891,21 @@ QWidget *CreateTablePage() {
       SetApcCaptureButton(Current.Enabled != 0);
   };
   QObject::connect(Kind, &ComboBox::currentIndexChanged, Page,
-                   [Populate, LoadTabAsync, SyncApcCaptureButton](int Index) {
-                     if (Index == 11)
+                   [Populate, LoadTabAsync, SyncApcCaptureButton,
+                    ApcLive](int Index) {
+                     if (Index == 11) {
                        SyncApcCaptureButton();
+                       /* 重置实时捕获光标与滚动跟随，进入后从头填充。 */
+                       ApcLive->LastSeq = 0;
+                       ApcLive->RowsInTable = 0;
+                       ApcLive->FollowTail = true;
+                     } else if (ApcLive->Timer != nullptr) {
+                       ApcLive->Timer->stop();
+                     }
                      Populate();
                      (*LoadTabAsync)(Index, false);
+                     if (Index == 11 && ApcLive->Timer != nullptr)
+                       ApcLive->Timer->start();
                    });
   QObject::connect(Search, &QLineEdit::textChanged, Page,
                    [Populate] { Populate(); });
@@ -890,20 +948,26 @@ QWidget *CreateTablePage() {
                                            .arg(G_LastAegisCoreError));
                        return;
                      }
-                     const bool Enable = Current.Enabled == 0;
-                     APC_CAPTURE_CTL_OUTPUT Result{};
-                     if (ApcCaptureCtl(Enable, false, &Result)) {
-                       SetApcCaptureButton(Result.Enabled != 0);
-                       ShowSuccessNotice(
-                           Page, "APC Capture",
-                           Result.Enabled
-                               ? QString("Capture enabled (export hook %1, "
-                                         "internal hook %2).")
-                                     .arg(Result.HookExportOk ? "yes" : "no")
-                                     .arg(Result.HookInternalOk ? "yes" : "no")
-                               : QString("Capture disabled."));
-                       (*LoadTabAsync)(11, false);
-                     } else {
+                      const bool Enable = Current.Enabled == 0;
+                      APC_CAPTURE_CTL_OUTPUT Result{};
+                      if (ApcCaptureCtl(Enable, false, &Result)) {
+                        SetApcCaptureButton(Result.Enabled != 0);
+                        if (ApcLive->Timer != nullptr) {
+                          if (Result.Enabled && Kind->currentIndex() == 11)
+                            ApcLive->Timer->start();
+                          else
+                            ApcLive->Timer->stop();
+                        }
+                        ShowSuccessNotice(
+                            Page, "APC Capture",
+                            Result.Enabled
+                                ? QString("Capture enabled (export hook %1, "
+                                          "internal hook %2).")
+                                      .arg(Result.HookExportOk ? "yes" : "no")
+                                      .arg(Result.HookInternalOk ? "yes" : "no")
+                                : QString("Capture disabled."));
+                        (*LoadTabAsync)(11, false);
+                      } else {
                        ShowErrorNotice(Page, "APC Capture",
                                        QString("Failed to toggle capture "
                                                "(error %1).")
@@ -928,6 +992,55 @@ QWidget *CreateTablePage() {
                                            .arg(G_LastAegisCoreError));
                      }
                    });
+  /* ---- APC 实时捕获：500ms 增量刷新（仅 APC 页 + 捕获启用时运行）----
+     驱动侧只保留最新 APC_CAPTURE_MAX_ENTRIES 条；这里用 Drain（读并清空）
+     拉取新增条目，插入表格顶部（最新在上），并维护 2048 行上限。 */
+  ApcLive->Timer = new QTimer(Page);
+  ApcLive->Timer->setInterval(500);
+  QObject::connect(ApcLive->Timer, &QTimer::timeout, Page,
+                   [Kind, ApcLive, AppendCaptureRows] {
+                     if (Kind->currentIndex() != 11)
+                       return;
+                     if (ApcLive->InFlight)
+                       return;
+                     ApcLive->InFlight = true;
+                     std::thread([ApcLive, AppendCaptureRows] {
+                       const ULONG MaxShow = APC_CAPTURE_MAX_ENTRIES;
+                       std::vector<BYTE> Buf(sizeof(APC_CAPTURE_OUTPUT) +
+                                             sizeof(APC_CAPTURE_ENTRY) *
+                                                 (MaxShow - 1));
+                       PAPC_CAPTURE_OUTPUT Cap = (PAPC_CAPTURE_OUTPUT)Buf.data();
+                       DWORD Returned = 0;
+                       const BOOLEAN Ok =
+                           ApcCaptureDrain(Cap, (DWORD)Buf.size(), &Returned);
+                       ULONG Count = 0;
+                       std::vector<APC_CAPTURE_ENTRY> Copy;
+                       if (Ok) {
+                         Count = Cap->EntryCount;
+                         if (Count > MaxShow)
+                           Count = MaxShow;
+                         Copy.assign(Cap->Entries, Cap->Entries + Count);
+                       }
+                       QMetaObject::invokeMethod(
+                           qApp,
+                           [ApcLive, AppendCaptureRows,
+                            Copy = std::move(Copy)]() mutable {
+                             ApcLive->InFlight = false;
+                             if (ApcLive->FollowTail && !Copy.empty())
+                               AppendCaptureRows(Copy.data(),
+                                                 (ULONG)Copy.size());
+                           },
+                           Qt::QueuedConnection);
+                     }).detach();
+                   });
+
+  /* 滚动到底部以外时暂停自动追加；回到底部恢复。 */
+  QObject::connect(Table->verticalScrollBar(), &QScrollBar::valueChanged, Page,
+                   [Table, ApcLive](int Value) {
+                     const QScrollBar *Sb = Table->verticalScrollBar();
+                     ApcLive->FollowTail = (Value >= Sb->maximum() - 4);
+                   });
+
   SyncApcCaptureButton();
   Query(false);
   return Page;

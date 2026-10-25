@@ -898,7 +898,7 @@ private:
     QObject::connect(HistorySearchEdit, &QLineEdit::textChanged, this,
                      [this] { HistorySearchDebounceTimer->start(); });
     QObject::connect(ExportBtn, &QPushButton::clicked, this, [this] {
-      QString Path = QFileDialog::getSaveFileName(this, "Export Events",
+      QString Path = FluentFileDialog::getSaveFileName(this, "Export Events",
                                                   "events.csv", "CSV (*.csv)");
       if (!Path.isEmpty()) {
         QFile File(Path);
@@ -1249,7 +1249,7 @@ private:
   }
 
   void ExportRules() {
-    const QString Path = QFileDialog::getSaveFileName(
+    const QString Path = FluentFileDialog::getSaveFileName(
         this, "Export monitor rules", "monitor-rules.json", "JSON (*.json)");
     if (Path.isEmpty())
       return;
@@ -1265,7 +1265,7 @@ private:
   }
 
   void ImportRules() {
-    const QString Path = QFileDialog::getOpenFileName(
+    const QString Path = FluentFileDialog::getOpenFileName(
         this, "Import monitor rules", {}, "JSON (*.json)");
     if (Path.isEmpty())
       return;

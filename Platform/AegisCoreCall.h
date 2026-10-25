@@ -213,6 +213,10 @@ typedef LONG NTSTATUS;
   CTL_CODE(0x8000, 0x856, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_QUERY_PATCHGUARD                                                 \
   CTL_CODE(0x8000, 0x858, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENABLE_PATCHGUARD_INTERCEPTION                                   \
+  CTL_CODE(0x8000, 0x894, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_CLEAR_PATCHGUARD_KPRCB                                           \
+  CTL_CODE(0x8000, 0x895, METHOD_BUFFERED, FILE_ANY_ACCESS)
 /* 0x857 原为 IOCTL_RESTORE_PATCHGUARD，该功能已移除。编号不复用�?*/
 #define IOCTL_QUERY_DSE                                                        \
   CTL_CODE(0x8000, 0x859, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -227,6 +231,9 @@ typedef LONG NTSTATUS;
    Output �?PG_CONTROL_OUTPUT�?*/
 #define IOCTL_ENABLE_PPN                                                       \
   CTL_CODE(0x8000, 0x88D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* PPN rollback: restore all IDT gates and target PTEs. */
+#define IOCTL_DISABLE_PPN                                                      \
+  CTL_CODE(0x8000, 0x896, METHOD_BUFFERED, FILE_ANY_ACCESS)
 /* 取消 PG 相关 APC：遍历所有内核线程的 KernelMode APC 队列，摘�?
    KernelRoutine == ntoskrnl!KiDispatchCallout �?RundownRoutine == NULL
    的条目。Output �?APC_CANCEL_OUTPUT�?*/
@@ -315,6 +322,8 @@ typedef LONG NTSTATUS;
   CTL_CODE(0x8000, 0x875, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_HIDE_PROCESS_CID                                                  \
   CTL_CODE(0x8000, 0x874, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_QUERY_PROCESS_ALIVE                                              \
+  CTL_CODE(0x8000, 0x893, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define HOOK_PROTOCOL_VERSION 1u
 #define HOOK_TARGET_DRIVER_DISPATCH 1u
@@ -729,6 +738,12 @@ typedef struct _CRITICAL_PROCESS_INPUT {
   UCHAR _Pad[3];
 } CRITICAL_PROCESS_INPUT;
 
+typedef struct _PROCESS_ALIVE_OUTPUT {
+  ULONG ProcessId;
+  BOOLEAN Alive;
+  UCHAR _Pad[3];
+} PROCESS_ALIVE_OUTPUT;
+
 typedef struct _FORCE_DELETE_INPUT {
   WCHAR FilePath[260];
 } FORCE_DELETE_INPUT;
@@ -1037,6 +1052,41 @@ typedef struct _DPC_CANCEL_OUTPUT {
   ULONG HighConfidenceCount;
   ULONG LowConfidenceCount;
 } DPC_CANCEL_OUTPUT, *PDPC_CANCEL_OUTPUT;
+
+/* 只读 PG routine 候选枚举：PPN 使用，不执行 DPC 摘除。 */
+#define DPC_PG_CANDIDATE_MAX_ENTRIES 64
+
+typedef struct _DPC_PG_CANDIDATE_ENTRY {
+  ULONG Cpu;
+  ULONG Flags;
+  ULONG_PTR DpcObject;
+  ULONG_PTR Routine;
+  ULONG_PTR Context;
+  ULONG_PTR QueueHead;
+  ULONG Confidence;
+  ULONG QueueSource;
+  ULONG PageExecutable;
+  ULONG ContextMatch;
+} DPC_PG_CANDIDATE_ENTRY, *PDPC_PG_CANDIDATE_ENTRY;
+
+static_assert(sizeof(DPC_PG_CANDIDATE_ENTRY) == 56,
+              "DPC_PG_CANDIDATE_ENTRY ABI mismatch");
+
+typedef struct _DPC_PG_CANDIDATE_OUTPUT {
+  ULONG Scanned;
+  ULONG RoutineInNtos;
+  ULONG CandidateCount;
+  ULONG CpuCount;
+  ULONG Flags;
+  ULONG NtoskrnlBaseLow;
+  ULONG NtoskrnlSize;
+  ULONG _Pad0;
+  DPC_PG_CANDIDATE_ENTRY Entries[DPC_PG_CANDIDATE_MAX_ENTRIES];
+  ULONG Status;
+} DPC_PG_CANDIDATE_OUTPUT, *PDPC_PG_CANDIDATE_OUTPUT;
+
+static_assert(sizeof(DPC_PG_CANDIDATE_OUTPUT) == 3624,
+              "DPC_PG_CANDIDATE_OUTPUT ABI mismatch");
 
 /* ============================================================
    PatchGuard APC 取消
@@ -1910,11 +1960,13 @@ typedef struct _INJECTION_PROTECT_INPUT {
 } INJECTION_PROTECT_INPUT, *PINJECTION_PROTECT_INPUT;
 
 /* ---- APC 投递捕获 / 测试注入（与驱动 Protect.h 对应）---- */
-#define APC_CAPTURE_MAX_ENTRIES 4096
+#define APC_CAPTURE_MAX_ENTRIES 512
+#define APC_CAPTURE_UI_LIMIT 2048
 #define APC_CAPTURE_FLAG_ENABLED 0x1u
 #define APC_CAPTURE_FLAG_TRUNCATED 0x2u
 #define APC_CAPTURE_FLAG_HOOK_EXPORT_OK 0x4u
 #define APC_CAPTURE_FLAG_HOOK_INTERNAL_OK 0x8u
+#define APC_CAPTURE_FLAG_DRAIN 0x10u
 
 typedef struct _APC_CAPTURE_ENTRY {
   ULONG TargetThreadId;
@@ -1928,13 +1980,19 @@ typedef struct _APC_CAPTURE_ENTRY {
   ULONG_PTR SystemArgument1;
   ULONG_PTR SystemArgument2;
   ULONG64 TimeStamp;
+  ULONG64 Sequence;
 } APC_CAPTURE_ENTRY, *PAPC_CAPTURE_ENTRY;
-static_assert(sizeof(APC_CAPTURE_ENTRY) == 72, "APC_CAPTURE_ENTRY ABI mismatch");
+static_assert(sizeof(APC_CAPTURE_ENTRY) == 80, "APC_CAPTURE_ENTRY ABI mismatch");
 
 typedef struct _APC_CAPTURE_CTL_INPUT {
   ULONG Enable;
   ULONG Clear;
 } APC_CAPTURE_CTL_INPUT, *PAPC_CAPTURE_CTL_INPUT;
+
+typedef struct _APC_CAPTURE_READ_INPUT {
+  ULONG Drain;
+  ULONG _Pad0;
+} APC_CAPTURE_READ_INPUT, *PAPC_CAPTURE_READ_INPUT;
 
 typedef struct _APC_CAPTURE_CTL_OUTPUT {
   ULONG Enabled;
@@ -2592,6 +2650,27 @@ inline VOID HideProcessCid(ULONG ProcessId) {
 
   if (SendIoctl(IOCTL_HIDE_PROCESS_CID, &Input, sizeof(Input)))
     wprintf(L"[+] PID=%u is now permanently hidden.\n", ProcessId);
+}
+
+// 查询进程是否仍存活。返回 TRUE 表示 IOCTL 成功且 Alive 已填充；
+// *Alive 为 TRUE 表示内核仍能定位该进程。对 CID 隐藏进程恒返回 FALSE。
+inline BOOLEAN QueryProcessAliveKernel(ULONG ProcessId, BOOLEAN *Alive) {
+  G_LastAegisCoreError = ERROR_SUCCESS;
+  if (Alive)
+    *Alive = FALSE;
+
+  CRITICAL_PROCESS_INPUT Input = {0};
+  Input.ProcessId = ProcessId;
+  PROCESS_ALIVE_OUTPUT Output = {0};
+
+  if (!SendIoctlWithOutput(IOCTL_QUERY_PROCESS_ALIVE, &Input, sizeof(Input),
+                           &Output, sizeof(Output), nullptr))
+    return FALSE;
+
+  if (Alive)
+    *Alive = Output.Alive;
+
+  return TRUE;
 }
 
 inline BOOLEAN ForceDeleteFile(const WCHAR *FilePath) {
@@ -4093,6 +4172,40 @@ inline BOOLEAN DisablePatchGuard(PPG_CONTROL_OUTPUT Output = NULL) {
   return Success;
 }
 
+inline BOOLEAN EnablePatchGuardInterception(PPG_CONTROL_OUTPUT Output = NULL) {
+  PG_CONTROL_OUTPUT Result = {};
+  DWORD BytesReturned = 0;
+  BOOLEAN Success = SendIoctlWithOutput(
+      IOCTL_ENABLE_PATCHGUARD_INTERCEPTION, NULL, 0, &Result,
+      sizeof(Result), &BytesReturned);
+
+  if (Output != NULL)
+    *Output = Result;
+
+  if (Success && Result.Status != 0) {
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
+    return FALSE;
+  }
+  return Success;
+}
+
+inline BOOLEAN ClearPatchGuardKprcbContexts(PPG_CONTROL_OUTPUT Output = NULL) {
+  PG_CONTROL_OUTPUT Result = {};
+  DWORD BytesReturned = 0;
+  BOOLEAN Success = SendIoctlWithOutput(
+      IOCTL_CLEAR_PATCHGUARD_KPRCB, NULL, 0, &Result,
+      sizeof(Result), &BytesReturned);
+
+  if (Output != NULL)
+    *Output = Result;
+
+  if (Success && Result.Status != 0) {
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
+    return FALSE;
+  }
+  return Success;
+}
+
 /* 启用 PPN 路径（第三路径）：把 PG 校验例程所在可执行页置 NX �?Hook #PF�?
    �?DisablePatchGuard 的主/辅路径独立，可单独调用�?*/
 inline BOOLEAN EnablePPN(PPG_CONTROL_OUTPUT Output = NULL) {
@@ -4110,6 +4223,19 @@ inline BOOLEAN EnablePPN(PPG_CONTROL_OUTPUT Output = NULL) {
     return FALSE;
   }
 
+  return Success;
+}
+
+inline BOOLEAN DisablePPN(PPG_CONTROL_OUTPUT Output = NULL) {
+  PG_CONTROL_OUTPUT Result = {};
+  DWORD BytesReturned = 0;
+  BOOLEAN Success = SendIoctlWithOutput(IOCTL_DISABLE_PPN, NULL, 0, &Result,
+                                        sizeof(Result), &BytesReturned);
+  if (Output != NULL) *Output = Result;
+  if (Success && Result.Status != 0) {
+    G_LastAegisCoreError = AegisCoreNtStatusToWin32(Result.Status);
+    return FALSE;
+  }
   return Success;
 }
 
@@ -4248,19 +4374,29 @@ inline BOOLEAN ApcCaptureCtl(BOOLEAN Enable, BOOLEAN Clear,
 }
 
 /* 读取 APC 捕获环形缓冲到调用方缓冲区（大小由 BufferSize 决定）。
+   Drain=true 表示"读并清空"：读取后驱动清空环形缓冲，配合 UI 增量追加。
    Output 指向的缓冲区至少应有 sizeof(APC_CAPTURE_OUTPUT) 大。 */
 inline BOOLEAN ApcCaptureRead(PAPC_CAPTURE_OUTPUT Output, DWORD BufferSize,
-                       PDWORD BytesReturned = NULL) {
+                       PDWORD BytesReturned = NULL, BOOLEAN Drain = FALSE) {
   if (Output == NULL || BufferSize < sizeof(APC_CAPTURE_OUTPUT)) {
     G_LastAegisCoreError = ERROR_INVALID_PARAMETER;
     return FALSE;
   }
+  APC_CAPTURE_READ_INPUT Input = {};
+  Input.Drain = Drain ? 1u : 0u;
   DWORD LocalReturned = 0;
-  BOOLEAN Success = SendIoctlWithOutput(IOCTL_APC_CAPTURE_READ, NULL, 0, Output,
-                                        BufferSize, &LocalReturned);
+  BOOLEAN Success = SendIoctlWithOutput(IOCTL_APC_CAPTURE_READ, &Input,
+                                        sizeof(Input), Output, BufferSize,
+                                        &LocalReturned);
   if (BytesReturned != NULL)
     *BytesReturned = LocalReturned;
   return Success;
+}
+
+/* 读并清空：用于实时增量刷新。 */
+inline BOOLEAN ApcCaptureDrain(PAPC_CAPTURE_OUTPUT Output, DWORD BufferSize,
+                        PDWORD BytesReturned = NULL) {
+  return ApcCaptureRead(Output, BufferSize, BytesReturned, TRUE);
 }
 
 /* 主动注入标记 APC（验证扫描器）。 */
@@ -4640,7 +4776,11 @@ inline BOOL DowngradeHandleKernel(ULONG ProcessId, ULONG HandleValue,
     *OutNewHandle = 0;
 
   HANDLE_DOWNGRADE_INPUT Input = {ProcessId, HandleValue, NewAccess, 0};
-  if (!SendIoctl(IOCTL_HANDLE_DOWNGRADE, &Input, sizeof(Input)))
+  // IOCTL_HANDLE_DOWNGRADE 为 METHOD_BUFFERED：输入输出共用 SystemBuffer，
+  // 驱动把新句柄写回 Input.NewHandleValue。必须用 SendIoctlWithOutput 并以
+  // Input 作为输出缓冲，否则读不回新句柄（此前用 SendIoctl 恒为 0）。
+  if (!SendIoctlWithOutput(IOCTL_HANDLE_DOWNGRADE, &Input, sizeof(Input), &Input,
+                           sizeof(Input), nullptr))
     return FALSE;
 
   if (OutNewHandle)

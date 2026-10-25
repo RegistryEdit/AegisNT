@@ -1,5 +1,6 @@
 #include "RefreshControl.h"
 #include <QProgressBar>
+#include <QFluent/PushButton.h>
 
 namespace AegisNT {
 
@@ -7,7 +8,7 @@ RefreshControl::RefreshControl(QWidget *parent) : QWidget(parent) {
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    m_refreshButton = new QPushButton(tr("Refresh"), this);
+    m_refreshButton = new PushButton(tr("Refresh"), this);
     layout->addWidget(m_refreshButton);
 
     connect(m_refreshButton, &QPushButton::clicked, this, [this]() {

@@ -708,7 +708,7 @@ QWidget *CreateNetworkControlPage() {
         const ConnRow Source = ConnRows->at(SourceIndex);
         auto *Menu = new RoundMenu(QString(), Page);
         AddMenuAction(Menu, "End Process", [Page, Source] {
-          if (Source.Pid == 0 || Source.Pid == GetCurrentProcessId())
+          if (Source.Pid == 0)
             return;
           if (!ShowConfirmDialog(Page, "End Process",
                                  QString("Kill %1 (PID %2)?")
