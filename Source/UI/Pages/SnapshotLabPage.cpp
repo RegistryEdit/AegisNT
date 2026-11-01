@@ -2,103 +2,954 @@
 // 快照实验室页：捕获/持久化/比对进程、驱动、回调三套快照，
 // 差异以表格与 JSON 展示，可导入导出。
 // ============================================================
-QWidget *CreateSnapshotLabPage() {
-  struct SnapshotLabPage final : public AegisNT::PageBase {
-    struct SnapshotDriverState {
-      bool AegisCoreAvailable = false;
-      bool AegisSentinelAvailable = false;
-    };
+namespace SnapshotModel {
+struct SnapshotDriverState {
+  bool AegisCoreAvailable = false;
+  bool AegisSentinelAvailable = false;
+};
 
-    struct SnapshotMeta {
-      int SchemaVersion = 1;
-      QString CapturedAtUtc;
-      QString MachineName;
-      QString WindowsVersion;
-      QString AppVersion;
-      SnapshotDriverState DriverState;
-    };
+struct SnapshotMeta {
+  int SchemaVersion = 1;
+  QString CapturedAtUtc;
+  QString MachineName;
+  QString WindowsVersion;
+  QString AppVersion;
+  SnapshotDriverState DriverState;
+};
 
-    struct ProcessSnapshotEntry {
-      quint32 Pid = 0;
-      quint32 ParentPid = 0;
-      QString ImageName;
-      QString ImagePath;
-      quint64 Eprocess = 0;
-      bool Ppl = false;
-      quint32 SessionId = 0;
-      quint32 ThreadCount = 0;
-      quint32 HandleCount = 0;
-      QString CreateTime;
-    };
+struct ProcessSnapshotEntry {
+  quint32 Pid = 0;
+  quint32 ParentPid = 0;
+  QString ImageName;
+  QString ImagePath;
+  quint64 Eprocess = 0;
+  bool Ppl = false;
+  quint32 SessionId = 0;
+  quint32 ThreadCount = 0;
+  quint32 HandleCount = 0;
+  QString CreateTime;
+};
 
-    struct DriverSnapshotEntry {
-      QString ServiceName;
-      QString DisplayName;
-      QString ImagePath;
-      quint64 Base = 0;
-      quint32 Size = 0;
-      quint32 StartType = 0;
-      quint32 State = 0;
-      quint64 DriverObject = 0;
-    };
+struct DriverSnapshotEntry {
+  QString ServiceName;
+  QString DisplayName;
+  QString ImagePath;
+  quint64 Base = 0;
+  quint32 Size = 0;
+  quint32 StartType = 0;
+  quint32 State = 0;
+  quint64 DriverObject = 0;
+};
 
-    struct CallbackSnapshotEntry {
-      QString Type;
-      quint32 Flags = 0;
-      quint64 Address = 0;
-      QString ModuleName;
-      QString SourceName;
-    };
+struct CallbackSnapshotEntry {
+  QString Type;
+  quint32 Flags = 0;
+  quint64 Address = 0;
+  QString ModuleName;
+  QString SourceName;
+};
 
-    struct SnapshotDocument {
+struct SnapshotDocument {
+  SnapshotMeta Meta;
+  std::vector<ProcessSnapshotEntry> Processes;
+  std::vector<DriverSnapshotEntry> Drivers;
+  std::vector<CallbackSnapshotEntry> Callbacks;
+  QString Source;
+  QString LoadPath;
+  QString WarningText;
+};
+
+struct DiffRow {
+  QString Category;
+  QString State;
+  QString Key;
+  QString PrimaryName;
+  QString Summary;
+  QStringList ChangedFields;
+  QJsonObject OldValue;
+  QJsonObject NewValue;
+};
+
+struct DiffStats {
+  int Added = 0;
+  int Removed = 0;
+  int Modified = 0;
+  int Warnings = 0;
+};
+
+struct SnapshotDiffResult {
+  std::vector<DiffRow> Processes;
+  std::vector<DiffRow> Drivers;
+  std::vector<DiffRow> Callbacks;
+  DiffStats ProcessStats;
+  DiffStats DriverStats;
+  DiffStats CallbackStats;
+  QStringList Warnings;
+};
+
+struct CaptureResult {
+  SnapshotDocument Document;
+  bool ProcessOk = false;
+  bool DriverOk = false;
+  bool CallbackOk = false;
+  QStringList Failures;
+};
+
+enum class SlotKind { A, B };
+enum class DiffCategory { Process, Driver, Callback };
+
+// 前置声明（保持源码顺序，以下函数互相调用）。
+QString BuildSummary(const QJsonObject &OldObject,
+                     const QJsonObject &NewObject,
+                     const QStringList &Preferred,
+                     QStringList *ChangedFields);
+QString JsonValueText(const QJsonValue &Value);
+
+    QString DescribeCallbackType(ULONG Type) {
+      switch (Type) {
+      case CALLBACK_TYPE_OB_PROCESS:
+        return "ObProcess";
+      case CALLBACK_TYPE_OB_THREAD:
+        return "ObThread";
+      case CALLBACK_TYPE_REGISTRY:
+        return "Registry";
+      case CALLBACK_TYPE_FLT_PRE_CREATE:
+        return "FltCreate";
+      case CALLBACK_TYPE_FLT_PRE_SET_INFORMATION:
+        return "FltSetInfo";
+      case CALLBACK_TYPE_FLT_PRE_WRITE:
+        return "FltWrite";
+      case CALLBACK_TYPE_FLT_PRE_READ:
+        return "FltRead";
+      case CALLBACK_TYPE_FLT_PRE_QUERY_INFORMATION:
+        return "FltQueryInfo";
+      case CALLBACK_TYPE_FLT_PRE_DIRECTORY_CONTROL:
+        return "FltDirCtrl";
+      case CALLBACK_TYPE_FLT_PRE_CLEANUP:
+        return "FltCleanup";
+      case CALLBACK_TYPE_FLT_PRE_CLOSE:
+        return "FltClose";
+      case CALLBACK_TYPE_FLT_POST_CREATE:
+        return "FltPostCreate";
+      case CALLBACK_TYPE_FLT_POST_READ:
+        return "FltPostRead";
+      case CALLBACK_TYPE_FLT_POST_QUERY_INFORMATION:
+        return "FltPostQuery";
+      case CALLBACK_TYPE_FLT_POST_SET_INFORMATION:
+        return "FltPostSet";
+      case CALLBACK_TYPE_FLT_POST_DIRECTORY_CONTROL:
+        return "FltPostDir";
+      case CALLBACK_TYPE_FLT_POST_WRITE:
+        return "FltPostWrite";
+      case CALLBACK_TYPE_FLT_POST_CLEANUP:
+        return "FltPostCleanup";
+      case CALLBACK_TYPE_FLT_POST_CLOSE:
+        return "FltPostClose";
+      case CALLBACK_TYPE_PS_PROCESS_NOTIFY:
+        return "PsProcess";
+      case CALLBACK_TYPE_PS_THREAD_NOTIFY:
+        return "PsThread";
+      case CALLBACK_TYPE_PS_IMAGE_NOTIFY:
+        return "PsImage";
+      case CALLBACK_TYPE_BUGCHECK:
+        return "BugCheck";
+      case CALLBACK_TYPE_BUGCHECK_REASON:
+        return "BugChkReason";
+      case CALLBACK_TYPE_SHUTDOWN:
+        return "Shutdown";
+      default:
+        return QString("Unknown(%1)").arg(Type);
+      }
+    }
+
+    QString FormatPointer(quint64 Value) {
+      if (Value == 0)
+        return "0x0";
+      return QString("0x%1")
+          .arg(Value, sizeof(quintptr) * 2, 16, QLatin1Char('0'))
+          .toUpper();
+    }
+
+    QString FormatFileTimeUtc(const FILETIME &FileTime) {
+      if (FileTime.dwLowDateTime == 0 && FileTime.dwHighDateTime == 0)
+        return {};
+      ULARGE_INTEGER Value{};
+      Value.LowPart = FileTime.dwLowDateTime;
+      Value.HighPart = FileTime.dwHighDateTime;
+      const qint64 UnixMs =
+          static_cast<qint64>((Value.QuadPart - 116444736000000000ULL) / 10000);
+      return QDateTime::fromMSecsSinceEpoch(UnixMs, Qt::UTC).toString(
+          Qt::ISODate);
+    }
+
+    bool QueryProcessHandleCountValue(DWORD Pid, quint32 &Value) {
+      Value = 0;
+      HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
+      if (!Process)
+        return false;
+      DWORD Count = 0;
+      const bool Ok = GetProcessHandleCount(Process, &Count) != FALSE;
+      CloseHandle(Process);
+      if (Ok)
+        Value = Count;
+      return Ok;
+    }
+
+    QString QueryProcessImagePath(DWORD Pid) {
+      QString Result;
+      HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
+      if (!Process)
+        return Result;
+      std::vector<WCHAR> Buffer(32768);
+      DWORD Length = static_cast<DWORD>(Buffer.size());
+      if (QueryFullProcessImageNameW(Process, 0, Buffer.data(), &Length))
+        Result = QDir::toNativeSeparators(
+            QString::fromWCharArray(Buffer.data(), Length));
+      CloseHandle(Process);
+      return Result;
+    }
+
+    QString QueryProcessCreateTime(DWORD Pid) {
+      HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
+      if (!Process)
+        return {};
+      FILETIME CreateTime{}, ExitTime{}, KernelTime{}, UserTime{};
+      const BOOL Ok = GetProcessTimes(Process, &CreateTime, &ExitTime,
+                                      &KernelTime, &UserTime);
+      CloseHandle(Process);
+      return Ok ? FormatFileTimeUtc(CreateTime) : QString();
+    }
+
+    SnapshotMeta BuildSnapshotMeta() {
       SnapshotMeta Meta;
-      std::vector<ProcessSnapshotEntry> Processes;
-      std::vector<DriverSnapshotEntry> Drivers;
-      std::vector<CallbackSnapshotEntry> Callbacks;
-      QString Source;
-      QString LoadPath;
-      QString WarningText;
-    };
+      Meta.SchemaVersion = 1;
+      Meta.CapturedAtUtc = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+      Meta.MachineName = QSysInfo::machineHostName();
+      Meta.WindowsVersion = QueryWindowsVersionText();
+      Meta.AppVersion = KApplicationVersion;
+      Meta.DriverState.AegisCoreAvailable =
+          G_DeviceHandle != INVALID_HANDLE_VALUE ||
+          IsDriverServiceRunning(L"Ring0Core");
+      Meta.DriverState.AegisSentinelAvailable =
+          IsDriverServiceRunning(L"Ring0Core");
+      return Meta;
+    }
 
-    struct DiffRow {
-      QString Category;
-      QString State;
-      QString Key;
-      QString PrimaryName;
-      QString Summary;
-      QStringList ChangedFields;
-      QJsonObject OldValue;
-      QJsonObject NewValue;
-    };
+    std::vector<ProcessSnapshotEntry>
+    CaptureProcesses(bool &Success, QStringList &Warnings) {
+      std::vector<ProcessSnapshotEntry> Entries;
+      std::vector<PROCESS_ENUM_ENTRY> DriverEntries;
+      Success = EnumProcessEntries(DriverEntries) && !DriverEntries.empty();
+      if (Success) {
+        for (const PROCESS_ENUM_ENTRY &Entry : DriverEntries) {
+          ProcessSnapshotEntry Row;
+          Row.Pid = Entry.ProcessId;
+          Row.ParentPid = Entry.ParentPid;
+          Row.ThreadCount = Entry.ThreadCount;
+          Row.SessionId = Entry.SessionId;
+          DWORD UserSessionId = 0;
+          if (ProcessIdToSessionId(Row.Pid, &UserSessionId))
+            Row.SessionId = UserSessionId;
+          Row.ImageName = Entry.ImageName[0]
+                              ? QString::fromWCharArray(Entry.ImageName)
+                              : "Unknown";
+          Row.ImagePath = QueryProcessImagePath(Row.Pid);
+          if (!Row.ImagePath.isEmpty()) {
+            const QString FileName = QFileInfo(Row.ImagePath).fileName();
+            if (!FileName.isEmpty())
+              Row.ImageName = FileName;
+          }
+          Row.Eprocess = Entry.ObjectAddress;
+          Row.Ppl = Entry.IsPplProtected != FALSE;
+          QueryProcessHandleCountValue(Row.Pid, Row.HandleCount);
+          Row.CreateTime = QueryProcessCreateTime(Row.Pid);
+          Entries.push_back(std::move(Row));
+        }
+      } else {
+        HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (Snapshot == INVALID_HANDLE_VALUE) {
+          Warnings.append("Process capture failed: Toolhelp snapshot unavailable.");
+          return Entries;
+        }
+        PROCESSENTRY32W Entry{sizeof(Entry)};
+        if (!Process32FirstW(Snapshot, &Entry)) {
+          CloseHandle(Snapshot);
+          Warnings.append(
+              "Process capture failed: Unable to enumerate Toolhelp processes.");
+          return Entries;
+        }
+        do {
+          ProcessSnapshotEntry Row;
+          Row.Pid = Entry.th32ProcessID;
+          Row.ParentPid = Entry.th32ParentProcessID;
+          Row.ThreadCount = Entry.cntThreads;
+          DWORD SessionId = 0;
+          ProcessIdToSessionId(Row.Pid, &SessionId);
+          Row.SessionId = SessionId;
+          Row.ImageName = QString::fromWCharArray(Entry.szExeFile);
+          Row.ImagePath = QueryProcessImagePath(Row.Pid);
+          QueryProcessHandleCountValue(Row.Pid, Row.HandleCount);
+          Row.CreateTime = QueryProcessCreateTime(Row.Pid);
+          Entries.push_back(std::move(Row));
+        } while (Process32NextW(Snapshot, &Entry));
+        CloseHandle(Snapshot);
+        Warnings.append(
+            "Process snapshot used Toolhelp fallback. EPROCESS and PPL may be unavailable.");
+      }
+      std::stable_sort(Entries.begin(), Entries.end(),
+                       [](const ProcessSnapshotEntry &Left,
+                          const ProcessSnapshotEntry &Right) {
+                         return Left.Pid < Right.Pid;
+                       });
+      return Entries;
+    }
 
-    struct DiffStats {
-      int Added = 0;
-      int Removed = 0;
-      int Modified = 0;
-      int Warnings = 0;
-    };
+    std::vector<DriverSnapshotEntry>
+    CaptureDrivers(bool &Success, QStringList &Warnings) {
+      std::vector<DriverSnapshotEntry> Result;
+      DRIVER_ENUM_HEADER Header{};
+      std::vector<DRIVER_ENUM_ENTRY> Entries;
+      Success = QueryDriverEntries(Entries, &Header);
+      if (!Success) {
+        if (Header.NtStatus != 0 || !Entries.empty())
+          Success = true;
+        else {
+          Warnings.append(QString("Driver capture failed: %1")
+                              .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
+          return Result;
+        }
+      }
+      for (const DRIVER_ENUM_ENTRY &Entry : Entries) {
+        DriverSnapshotEntry Row;
+        Row.ServiceName = QString::fromWCharArray(Entry.ServiceName);
+        Row.DisplayName = QString::fromWCharArray(Entry.DisplayName);
+        Row.ImagePath =
+            NormalizeUserDriverPath(QString::fromWCharArray(Entry.ImagePath));
+        Row.Base = Entry.ImageBase;
+        Row.Size = Entry.ImageSize;
+        Row.StartType = Entry.StartType;
+        Row.State = Entry.State;
+        Row.DriverObject = Entry.DriverObject;
+        Result.push_back(std::move(Row));
+      }
+      std::stable_sort(Result.begin(), Result.end(),
+                       [](const DriverSnapshotEntry &Left,
+                          const DriverSnapshotEntry &Right) {
+                         return Left.ServiceName.compare(Right.ServiceName,
+                                                         Qt::CaseInsensitive) < 0;
+                       });
+      return Result;
+    }
 
-    struct SnapshotDiffResult {
-      std::vector<DiffRow> Processes;
-      std::vector<DiffRow> Drivers;
-      std::vector<DiffRow> Callbacks;
-      DiffStats ProcessStats;
-      DiffStats DriverStats;
-      DiffStats CallbackStats;
-      QStringList Warnings;
-    };
+    std::vector<CallbackSnapshotEntry>
+    CaptureCallbacks(bool &Success, QStringList &Warnings) {
+      std::vector<CallbackSnapshotEntry> Rows;
+      DWORD BytesReturned = 0;
+      ULONG Count = 0;
+      Success = SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, &Count,
+                                    sizeof(Count), &BytesReturned) != FALSE;
+      if (!Success) {
+        Warnings.append(QString("Callback capture failed: %1")
+                            .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
+        return Rows;
+      }
+      if (Count == 0)
+        return Rows;
+      const DWORD Size =
+          sizeof(CALLBACK_ENUM_OUTPUT) + (Count - 1) * sizeof(CALLBACK_ENTRY);
+      std::vector<BYTE> Buffer(Size);
+      auto *Output = reinterpret_cast<PCALLBACK_ENUM_OUTPUT>(Buffer.data());
+      ZeroMemory(Output, Size);
+      Success = SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, Output,
+                                    Size, &BytesReturned) != FALSE;
+      if (!Success) {
+        Warnings.append(QString("Callback capture failed: %1")
+                            .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
+        return Rows;
+      }
+      for (ULONG Index = 0; Index < Output->Count; ++Index) {
+        const CALLBACK_ENTRY &Entry = Output->Entries[Index];
+        CallbackSnapshotEntry Row;
+        Row.Type = DescribeCallbackType(Entry.Type);
+        Row.Flags = Entry.Flags;
+        Row.Address = Entry.Address;
+        Row.ModuleName = Entry.ModuleName[0]
+                             ? QString::fromWCharArray(Entry.ModuleName)
+                             : QString();
+        Row.SourceName = Entry.SourceName[0]
+                             ? QString::fromWCharArray(Entry.SourceName)
+                             : QString();
+        Rows.push_back(std::move(Row));
+      }
+      std::stable_sort(Rows.begin(), Rows.end(),
+                       [](const CallbackSnapshotEntry &Left,
+                          const CallbackSnapshotEntry &Right) {
+                         if (Left.Type.compare(Right.Type, Qt::CaseInsensitive) !=
+                             0) {
+                           return Left.Type.compare(Right.Type,
+                                                    Qt::CaseInsensitive) < 0;
+                         }
+                         return Left.Address < Right.Address;
+                       });
+      return Rows;
+    }
 
-    struct CaptureResult {
-      SnapshotDocument Document;
-      bool ProcessOk = false;
-      bool DriverOk = false;
-      bool CallbackOk = false;
-      QStringList Failures;
-    };
+    CaptureResult CaptureSnapshotDocument() {
+      CaptureResult Result;
+      Result.Document.Meta = BuildSnapshotMeta();
+      Result.Document.Source = "live";
+      Result.Document.Processes =
+          CaptureProcesses(Result.ProcessOk, Result.Failures);
+      Result.Document.Drivers =
+          CaptureDrivers(Result.DriverOk, Result.Failures);
+      Result.Document.Callbacks =
+          CaptureCallbacks(Result.CallbackOk, Result.Failures);
+      Result.Document.WarningText = Result.Failures.join('\n');
+      return Result;
+    }
 
-    enum class SlotKind { A, B };
-    enum class DiffCategory { Process, Driver, Callback };
+    QJsonObject ToJson(const SnapshotMeta &Meta) {
+      QJsonObject Object;
+      Object.insert("SchemaVersion", Meta.SchemaVersion);
+      Object.insert("CapturedAtUtc", Meta.CapturedAtUtc);
+      Object.insert("MachineName", Meta.MachineName);
+      Object.insert("WindowsVersion", Meta.WindowsVersion);
+      Object.insert("AppVersion", Meta.AppVersion);
+      QJsonObject DriverState;
+      DriverState.insert("AegisCoreAvailable", Meta.DriverState.AegisCoreAvailable);
+      DriverState.insert("AegisSentinelAvailable",
+                         Meta.DriverState.AegisSentinelAvailable);
+      Object.insert("DriverState", DriverState);
+      return Object;
+    }
 
+    QJsonObject ToJson(const ProcessSnapshotEntry &Entry) {
+      QJsonObject Object;
+      Object.insert("Pid", static_cast<int>(Entry.Pid));
+      Object.insert("ParentPid", static_cast<int>(Entry.ParentPid));
+      Object.insert("ImageName", Entry.ImageName);
+      Object.insert("ImagePath", Entry.ImagePath);
+      Object.insert("Eprocess", FormatPointer(Entry.Eprocess));
+      Object.insert("Ppl", Entry.Ppl);
+      Object.insert("SessionId", static_cast<int>(Entry.SessionId));
+      Object.insert("ThreadCount", static_cast<int>(Entry.ThreadCount));
+      Object.insert("HandleCount", static_cast<int>(Entry.HandleCount));
+      Object.insert("CreateTime", Entry.CreateTime);
+      return Object;
+    }
+
+    QJsonObject ToJson(const DriverSnapshotEntry &Entry) {
+      QJsonObject Object;
+      Object.insert("ServiceName", Entry.ServiceName);
+      Object.insert("DisplayName", Entry.DisplayName);
+      Object.insert("ImagePath", Entry.ImagePath);
+      Object.insert("Base", FormatPointer(Entry.Base));
+      Object.insert("Size", static_cast<int>(Entry.Size));
+      Object.insert("StartType", static_cast<int>(Entry.StartType));
+      Object.insert("State", static_cast<int>(Entry.State));
+      Object.insert("DriverObject", FormatPointer(Entry.DriverObject));
+      return Object;
+    }
+
+    QJsonObject ToJson(const CallbackSnapshotEntry &Entry) {
+      QJsonObject Object;
+      Object.insert("Type", Entry.Type);
+      Object.insert("Flags", static_cast<int>(Entry.Flags));
+      Object.insert("Address", FormatPointer(Entry.Address));
+      Object.insert("ModuleName", Entry.ModuleName);
+      Object.insert("SourceName", Entry.SourceName);
+      return Object;
+    }
+
+    QString ProcessKey(const ProcessSnapshotEntry &Entry) {
+      return QString::number(Entry.Pid);
+    }
+
+    QString DriverKey(const DriverSnapshotEntry &Entry) {
+      const QString Name = Entry.ServiceName.trimmed();
+      if (!Name.isEmpty())
+        return Name.toCaseFolded();
+      return Entry.ImagePath.trimmed().toCaseFolded();
+    }
+
+    QString CallbackKey(const CallbackSnapshotEntry &Entry) {
+      return Entry.Type.toCaseFolded() + "|" + FormatPointer(Entry.Address);
+    }
+
+    QString ProcessSummary(const QJsonObject &OldObject,
+                                  const QJsonObject &NewObject,
+                                  QStringList *ChangedFields = nullptr) {
+      const QStringList Preferred{"ImagePath", "Ppl", "HandleCount",
+                                  "ThreadCount", "Eprocess"};
+      return BuildSummary(OldObject, NewObject, Preferred, ChangedFields);
+    }
+
+    QString DriverSummary(const QJsonObject &OldObject,
+                                 const QJsonObject &NewObject,
+                                 QStringList *ChangedFields = nullptr) {
+      const QStringList Preferred{"Base", "Size", "State", "ImagePath",
+                                  "DriverObject"};
+      return BuildSummary(OldObject, NewObject, Preferred, ChangedFields);
+    }
+
+    QString CallbackSummary(const QJsonObject &OldObject,
+                                   const QJsonObject &NewObject,
+                                   QStringList *ChangedFields = nullptr) {
+      const QStringList Preferred{"Flags", "ModuleName", "SourceName"};
+      return BuildSummary(OldObject, NewObject, Preferred, ChangedFields);
+    }
+
+    QString BuildSummary(const QJsonObject &OldObject,
+                                const QJsonObject &NewObject,
+                                const QStringList &Preferred,
+                                QStringList *ChangedFields = nullptr) {
+      QStringList Changes;
+      QStringList Changed;
+      for (const QString &Field : Preferred) {
+        const QJsonValue OldValue = OldObject.value(Field);
+        const QJsonValue NewValue = NewObject.value(Field);
+        if (OldValue != NewValue) {
+          Changed.append(Field);
+          Changes.append(QString("%1: %2 -> %3")
+                             .arg(Field, JsonValueText(OldValue),
+                                  JsonValueText(NewValue)));
+        }
+      }
+      for (auto It = NewObject.begin(); It != NewObject.end(); ++It) {
+        if (Preferred.contains(It.key()))
+          continue;
+        const QJsonValue OldValue = OldObject.value(It.key());
+        if (OldValue != It.value()) {
+          Changed.append(It.key());
+          Changes.append(QString("%1: %2 -> %3")
+                             .arg(It.key(), JsonValueText(OldValue),
+                                  JsonValueText(It.value())));
+        }
+      }
+      if (ChangedFields)
+        *ChangedFields = Changed;
+      return Changes.isEmpty() ? "No field changes" : Changes.join(" | ");
+    }
+
+    QString JsonValueText(const QJsonValue &Value) {
+      if (Value.isUndefined())
+        return "(missing)";
+      if (Value.isNull())
+        return "null";
+      if (Value.isBool())
+        return Value.toBool() ? "true" : "false";
+      if (Value.isDouble())
+        return QString::number(Value.toDouble());
+      if (Value.isString())
+        return Value.toString();
+      return QString::fromUtf8(QJsonDocument(Value.toObject()).toJson(
+                                   QJsonDocument::Compact))
+          .trimmed();
+    }
+
+    bool ParsePointerString(const QJsonObject &Object, const char *Key,
+                                   quint64 &Value, QString &Error) {
+      Value = 0;
+      const QJsonValue Json = Object.value(QLatin1String(Key));
+      if (!Json.isString()) {
+        Error = QString("Field `%1` must be a string pointer.").arg(Key);
+        return false;
+      }
+      bool Ok = false;
+      Value = Json.toString().trimmed().toULongLong(&Ok, 0);
+      if (!Ok) {
+        Error = QString("Field `%1` has invalid pointer text.").arg(Key);
+        return false;
+      }
+      return true;
+    }
+
+    bool ParseProcess(const QJsonObject &Object, ProcessSnapshotEntry &Out,
+                             QString &Error) {
+      if (!Object.contains("Pid") || !Object.value("Pid").isDouble()) {
+        Error = "Process entry missing numeric `Pid`.";
+        return false;
+      }
+      Out.Pid = static_cast<quint32>(Object.value("Pid").toInt());
+      Out.ParentPid = static_cast<quint32>(Object.value("ParentPid").toInt());
+      Out.ImageName = Object.value("ImageName").toString();
+      Out.ImagePath = Object.value("ImagePath").toString();
+      if (!ParsePointerString(Object, "Eprocess", Out.Eprocess, Error))
+        return false;
+      Out.Ppl = Object.value("Ppl").toBool(false);
+      Out.SessionId = static_cast<quint32>(Object.value("SessionId").toInt());
+      Out.ThreadCount = static_cast<quint32>(Object.value("ThreadCount").toInt());
+      Out.HandleCount = static_cast<quint32>(Object.value("HandleCount").toInt());
+      Out.CreateTime = Object.value("CreateTime").toString();
+      return true;
+    }
+
+    bool ParseDriver(const QJsonObject &Object, DriverSnapshotEntry &Out,
+                            QString &Error) {
+      Out.ServiceName = Object.value("ServiceName").toString();
+      Out.DisplayName = Object.value("DisplayName").toString();
+      Out.ImagePath = Object.value("ImagePath").toString();
+      if (!ParsePointerString(Object, "Base", Out.Base, Error))
+        return false;
+      Out.Size = static_cast<quint32>(Object.value("Size").toInt());
+      Out.StartType = static_cast<quint32>(Object.value("StartType").toInt());
+      Out.State = static_cast<quint32>(Object.value("State").toInt());
+      if (!ParsePointerString(Object, "DriverObject", Out.DriverObject, Error))
+        return false;
+      return true;
+    }
+
+    bool ParseCallback(const QJsonObject &Object,
+                              CallbackSnapshotEntry &Out, QString &Error) {
+      Out.Type = Object.value("Type").toString();
+      Out.Flags = static_cast<quint32>(Object.value("Flags").toInt());
+      if (!ParsePointerString(Object, "Address", Out.Address, Error))
+        return false;
+      Out.ModuleName = Object.value("ModuleName").toString();
+      Out.SourceName = Object.value("SourceName").toString();
+      return true;
+    }
+
+    bool ParseDocument(const QByteArray &Bytes, SnapshotDocument &Out,
+                              QString &Error) {
+      QJsonParseError ParseError{};
+      const QJsonDocument Document = QJsonDocument::fromJson(Bytes, &ParseError);
+      if (ParseError.error != QJsonParseError::NoError || !Document.isObject()) {
+        Error = QString("Invalid JSON: %1").arg(ParseError.errorString());
+        return false;
+      }
+      const QJsonObject Root = Document.object();
+      const QJsonObject Meta = Root.value("Meta").toObject();
+      if (Meta.isEmpty()) {
+        Error = "Snapshot JSON missing `Meta` object.";
+        return false;
+      }
+      const int Version = Meta.value("SchemaVersion").toInt(-1);
+      if (Version != 1) {
+        Error = QString("Unsupported schema version %1. Expected %2.")
+                    .arg(Version)
+                    .arg(1);
+        return false;
+      }
+      SnapshotDocument Parsed;
+      Parsed.Source = "json";
+      Parsed.Meta.SchemaVersion = Version;
+      Parsed.Meta.CapturedAtUtc = Meta.value("CapturedAtUtc").toString();
+      Parsed.Meta.MachineName = Meta.value("MachineName").toString();
+      Parsed.Meta.WindowsVersion = Meta.value("WindowsVersion").toString();
+      Parsed.Meta.AppVersion = Meta.value("AppVersion").toString();
+      const QJsonObject DriverState = Meta.value("DriverState").toObject();
+      Parsed.Meta.DriverState.AegisCoreAvailable =
+          DriverState.value("AegisCoreAvailable").toBool(false);
+      Parsed.Meta.DriverState.AegisSentinelAvailable =
+          DriverState.value("AegisSentinelAvailable").toBool(false);
+      const auto ParseArray = [&Error](const QJsonObject &RootObject,
+                                       const char *Name, auto Parser,
+                                       auto &Output) {
+        const QJsonValue Value = RootObject.value(QLatin1String(Name));
+        if (!Value.isArray()) {
+          Error = QString("Snapshot JSON missing `%1` array.").arg(Name);
+          return false;
+        }
+        for (const QJsonValue &Item : Value.toArray()) {
+          if (!Item.isObject()) {
+            Error = QString("Array `%1` contains a non-object item.").arg(Name);
+            return false;
+          }
+          typename std::decay_t<decltype(Output)>::value_type Entry;
+          if (!Parser(Item.toObject(), Entry, Error))
+            return false;
+          Output.push_back(std::move(Entry));
+        }
+        return true;
+      };
+      if (!ParseArray(Root, "Processes", ParseProcess, Parsed.Processes) ||
+          !ParseArray(Root, "Drivers", ParseDriver, Parsed.Drivers) ||
+          !ParseArray(Root, "Callbacks", ParseCallback, Parsed.Callbacks)) {
+        return false;
+      }
+      Out = std::move(Parsed);
+      return true;
+    }
+
+    QByteArray SerializeDocument(const SnapshotDocument &Document) {
+      QJsonObject Root;
+      Root.insert("Meta", ToJson(Document.Meta));
+      QJsonArray Processes;
+      for (const ProcessSnapshotEntry &Entry : Document.Processes)
+        Processes.append(ToJson(Entry));
+      QJsonArray Drivers;
+      for (const DriverSnapshotEntry &Entry : Document.Drivers)
+        Drivers.append(ToJson(Entry));
+      QJsonArray Callbacks;
+      for (const CallbackSnapshotEntry &Entry : Document.Callbacks)
+        Callbacks.append(ToJson(Entry));
+      Root.insert("Processes", Processes);
+      Root.insert("Drivers", Drivers);
+      Root.insert("Callbacks", Callbacks);
+      return QJsonDocument(Root).toJson(QJsonDocument::Indented);
+    }
+
+    void AddUniqueDiffEntry(QHash<QString, QJsonObject> &Map,
+                                   QHash<QString, QString> &Names,
+                                   const QString &Group, const QString &Key,
+                                   const QJsonObject &Object,
+                                   const QString &Name,
+                                   QStringList &Warnings) {
+      if (Map.contains(Key)) {
+        Warnings.append(QString("%1 duplicate key `%2` detected; kept first entry.")
+                            .arg(Group, Key));
+        return;
+      }
+      Map.insert(Key, Object);
+      Names.insert(Key, Name);
+    }
+
+    std::vector<DiffRow>
+    BuildProcessDiffRows(const std::vector<ProcessSnapshotEntry> &OldEntries,
+                         const std::vector<ProcessSnapshotEntry> &NewEntries,
+                         DiffStats &Stats, QStringList &Warnings) {
+      std::vector<DiffRow> Rows;
+      QHash<QString, QJsonObject> OldMap;
+      QHash<QString, QString> OldNames;
+      QHash<QString, QJsonObject> NewMap;
+      QHash<QString, QString> NewNames;
+      for (const ProcessSnapshotEntry &Entry : OldEntries)
+        AddUniqueDiffEntry(OldMap, OldNames, "Processes", ProcessKey(Entry),
+                           ToJson(Entry),
+                           Entry.ImageName.isEmpty() ? QString::number(Entry.Pid)
+                                                     : Entry.ImageName,
+                           Warnings);
+      for (const ProcessSnapshotEntry &Entry : NewEntries)
+        AddUniqueDiffEntry(NewMap, NewNames, "Processes", ProcessKey(Entry),
+                           ToJson(Entry),
+                           Entry.ImageName.isEmpty() ? QString::number(Entry.Pid)
+                                                     : Entry.ImageName,
+                           Warnings);
+      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
+        if (!OldMap.contains(It.key())) {
+          DiffRow Row;
+          Row.Category = "Processes";
+          Row.State = "Added";
+          Row.Key = It.key();
+          Row.PrimaryName = NewNames.value(It.key());
+          Row.Summary = "Present only in snapshot B";
+          Row.NewValue = It.value();
+          Rows.push_back(std::move(Row));
+          Stats.Added++;
+        }
+      }
+      for (auto It = OldMap.cbegin(); It != OldMap.cend(); ++It) {
+        if (!NewMap.contains(It.key())) {
+          DiffRow Row;
+          Row.Category = "Processes";
+          Row.State = "Removed";
+          Row.Key = It.key();
+          Row.PrimaryName = OldNames.value(It.key());
+          Row.Summary = "Present only in snapshot A";
+          Row.OldValue = It.value();
+          Rows.push_back(std::move(Row));
+          Stats.Removed++;
+        }
+      }
+      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
+        if (!OldMap.contains(It.key()))
+          continue;
+        const QJsonObject OldObject = OldMap.value(It.key());
+        const QJsonObject NewObject = It.value();
+        if (OldObject == NewObject)
+          continue;
+        DiffRow Row;
+        Row.Category = "Processes";
+        Row.State = "Modified";
+        Row.Key = It.key();
+        Row.PrimaryName = NewNames.value(It.key());
+        Row.Summary = ProcessSummary(OldObject, NewObject, &Row.ChangedFields);
+        Row.OldValue = OldObject;
+        Row.NewValue = NewObject;
+        Rows.push_back(std::move(Row));
+        Stats.Modified++;
+      }
+      Stats.Warnings = Warnings.size();
+      std::stable_sort(Rows.begin(), Rows.end(),
+                       [](const DiffRow &Left, const DiffRow &Right) {
+                         if (Left.State != Right.State)
+                           return Left.State < Right.State;
+                         return Left.Key < Right.Key;
+                       });
+      return Rows;
+    }
+
+    std::vector<DiffRow>
+    BuildDriverDiffRows(const std::vector<DriverSnapshotEntry> &OldEntries,
+                        const std::vector<DriverSnapshotEntry> &NewEntries,
+                        DiffStats &Stats, QStringList &Warnings) {
+      std::vector<DiffRow> Rows;
+      QHash<QString, QJsonObject> OldMap;
+      QHash<QString, QString> OldNames;
+      QHash<QString, QJsonObject> NewMap;
+      QHash<QString, QString> NewNames;
+      for (const DriverSnapshotEntry &Entry : OldEntries)
+        AddUniqueDiffEntry(OldMap, OldNames, "Drivers", DriverKey(Entry),
+                           ToJson(Entry),
+                           Entry.ServiceName.isEmpty() ? Entry.ImagePath
+                                                       : Entry.ServiceName,
+                           Warnings);
+      for (const DriverSnapshotEntry &Entry : NewEntries)
+        AddUniqueDiffEntry(NewMap, NewNames, "Drivers", DriverKey(Entry),
+                           ToJson(Entry),
+                           Entry.ServiceName.isEmpty() ? Entry.ImagePath
+                                                       : Entry.ServiceName,
+                           Warnings);
+      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
+        if (!OldMap.contains(It.key())) {
+          DiffRow Row;
+          Row.Category = "Drivers";
+          Row.State = "Added";
+          Row.Key = It.key();
+          Row.PrimaryName = NewNames.value(It.key());
+          Row.Summary = "Present only in snapshot B";
+          Row.NewValue = It.value();
+          Rows.push_back(std::move(Row));
+          Stats.Added++;
+        }
+      }
+      for (auto It = OldMap.cbegin(); It != OldMap.cend(); ++It) {
+        if (!NewMap.contains(It.key())) {
+          DiffRow Row;
+          Row.Category = "Drivers";
+          Row.State = "Removed";
+          Row.Key = It.key();
+          Row.PrimaryName = OldNames.value(It.key());
+          Row.Summary = "Present only in snapshot A";
+          Row.OldValue = It.value();
+          Rows.push_back(std::move(Row));
+          Stats.Removed++;
+        }
+      }
+      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
+        if (!OldMap.contains(It.key()))
+          continue;
+        const QJsonObject OldObject = OldMap.value(It.key());
+        const QJsonObject NewObject = It.value();
+        if (OldObject == NewObject)
+          continue;
+        DiffRow Row;
+        Row.Category = "Drivers";
+        Row.State = "Modified";
+        Row.Key = It.key();
+        Row.PrimaryName = NewNames.value(It.key());
+        Row.Summary = DriverSummary(OldObject, NewObject, &Row.ChangedFields);
+        Row.OldValue = OldObject;
+        Row.NewValue = NewObject;
+        Rows.push_back(std::move(Row));
+        Stats.Modified++;
+      }
+      Stats.Warnings = Warnings.size();
+      std::stable_sort(Rows.begin(), Rows.end(),
+                       [](const DiffRow &Left, const DiffRow &Right) {
+                         if (Left.State != Right.State)
+                           return Left.State < Right.State;
+                         return Left.Key < Right.Key;
+                       });
+      return Rows;
+    }
+
+    std::vector<DiffRow>
+    BuildCallbackDiffRows(const std::vector<CallbackSnapshotEntry> &OldEntries,
+                          const std::vector<CallbackSnapshotEntry> &NewEntries,
+                          DiffStats &Stats, QStringList &Warnings) {
+      std::vector<DiffRow> Rows;
+      QHash<QString, QJsonObject> OldMap;
+      QHash<QString, QString> OldNames;
+      QHash<QString, QJsonObject> NewMap;
+      QHash<QString, QString> NewNames;
+      for (const CallbackSnapshotEntry &Entry : OldEntries)
+        AddUniqueDiffEntry(OldMap, OldNames, "Callbacks", CallbackKey(Entry),
+                           ToJson(Entry),
+                           Entry.ModuleName.isEmpty() ? Entry.Type
+                                                      : Entry.ModuleName,
+                           Warnings);
+      for (const CallbackSnapshotEntry &Entry : NewEntries)
+        AddUniqueDiffEntry(NewMap, NewNames, "Callbacks", CallbackKey(Entry),
+                           ToJson(Entry),
+                           Entry.ModuleName.isEmpty() ? Entry.Type
+                                                      : Entry.ModuleName,
+                           Warnings);
+      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
+        if (!OldMap.contains(It.key())) {
+          DiffRow Row;
+          Row.Category = "Callbacks";
+          Row.State = "Added";
+          Row.Key = It.key();
+          Row.PrimaryName = NewNames.value(It.key());
+          Row.Summary = "Present only in snapshot B";
+          Row.NewValue = It.value();
+          Rows.push_back(std::move(Row));
+          Stats.Added++;
+        }
+      }
+      for (auto It = OldMap.cbegin(); It != OldMap.cend(); ++It) {
+        if (!NewMap.contains(It.key())) {
+          DiffRow Row;
+          Row.Category = "Callbacks";
+          Row.State = "Removed";
+          Row.Key = It.key();
+          Row.PrimaryName = OldNames.value(It.key());
+          Row.Summary = "Present only in snapshot A";
+          Row.OldValue = It.value();
+          Rows.push_back(std::move(Row));
+          Stats.Removed++;
+        }
+      }
+      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
+        if (!OldMap.contains(It.key()))
+          continue;
+        const QJsonObject OldObject = OldMap.value(It.key());
+        const QJsonObject NewObject = It.value();
+        if (OldObject == NewObject)
+          continue;
+        DiffRow Row;
+        Row.Category = "Callbacks";
+        Row.State = "Modified";
+        Row.Key = It.key();
+        Row.PrimaryName = NewNames.value(It.key());
+        Row.Summary = CallbackSummary(OldObject, NewObject, &Row.ChangedFields);
+        Row.OldValue = OldObject;
+        Row.NewValue = NewObject;
+        Rows.push_back(std::move(Row));
+        Stats.Modified++;
+      }
+      Stats.Warnings = Warnings.size();
+      std::stable_sort(Rows.begin(), Rows.end(),
+                       [](const DiffRow &Left, const DiffRow &Right) {
+                         if (Left.State != Right.State)
+                           return Left.State < Right.State;
+                         return Left.Key < Right.Key;
+                       });
+      return Rows;
+    }
+
+    SnapshotDiffResult BuildDiff(const SnapshotDocument &A,
+                                        const SnapshotDocument &B) {
+      SnapshotDiffResult Result;
+      Result.Processes =
+          BuildProcessDiffRows(A.Processes, B.Processes, Result.ProcessStats,
+                               Result.Warnings);
+      Result.Drivers =
+          BuildDriverDiffRows(A.Drivers, B.Drivers, Result.DriverStats,
+                              Result.Warnings);
+      Result.Callbacks =
+          BuildCallbackDiffRows(A.Callbacks, B.Callbacks, Result.CallbackStats,
+                                Result.Warnings);
+      return Result;
+    }
+} // namespace SnapshotModel
+
+QWidget *CreateSnapshotLabPage() {
+  // 模型已提取到 SnapshotModel 命名空间（供控制台前端复用）。
+  using namespace SnapshotModel;
+  struct SnapshotLabPage final : public AegisNT::PageBase {
     explicit SnapshotLabPage(QWidget *Parent = nullptr) : AegisNT::PageBase(nullptr, Parent) {
       auto *Layout = GetMainLayout();
       ConfigurePageLayout(Layout);
@@ -281,846 +1132,6 @@ QWidget *CreateSnapshotLabPage() {
     }
 
   private:
-    static QString DescribeCallbackType(ULONG Type) {
-      switch (Type) {
-      case CALLBACK_TYPE_OB_PROCESS:
-        return "ObProcess";
-      case CALLBACK_TYPE_OB_THREAD:
-        return "ObThread";
-      case CALLBACK_TYPE_REGISTRY:
-        return "Registry";
-      case CALLBACK_TYPE_FLT_PRE_CREATE:
-        return "FltCreate";
-      case CALLBACK_TYPE_FLT_PRE_SET_INFORMATION:
-        return "FltSetInfo";
-      case CALLBACK_TYPE_FLT_PRE_WRITE:
-        return "FltWrite";
-      case CALLBACK_TYPE_FLT_PRE_READ:
-        return "FltRead";
-      case CALLBACK_TYPE_FLT_PRE_QUERY_INFORMATION:
-        return "FltQueryInfo";
-      case CALLBACK_TYPE_FLT_PRE_DIRECTORY_CONTROL:
-        return "FltDirCtrl";
-      case CALLBACK_TYPE_FLT_PRE_CLEANUP:
-        return "FltCleanup";
-      case CALLBACK_TYPE_FLT_PRE_CLOSE:
-        return "FltClose";
-      case CALLBACK_TYPE_FLT_POST_CREATE:
-        return "FltPostCreate";
-      case CALLBACK_TYPE_FLT_POST_READ:
-        return "FltPostRead";
-      case CALLBACK_TYPE_FLT_POST_QUERY_INFORMATION:
-        return "FltPostQuery";
-      case CALLBACK_TYPE_FLT_POST_SET_INFORMATION:
-        return "FltPostSet";
-      case CALLBACK_TYPE_FLT_POST_DIRECTORY_CONTROL:
-        return "FltPostDir";
-      case CALLBACK_TYPE_FLT_POST_WRITE:
-        return "FltPostWrite";
-      case CALLBACK_TYPE_FLT_POST_CLEANUP:
-        return "FltPostCleanup";
-      case CALLBACK_TYPE_FLT_POST_CLOSE:
-        return "FltPostClose";
-      case CALLBACK_TYPE_PS_PROCESS_NOTIFY:
-        return "PsProcess";
-      case CALLBACK_TYPE_PS_THREAD_NOTIFY:
-        return "PsThread";
-      case CALLBACK_TYPE_PS_IMAGE_NOTIFY:
-        return "PsImage";
-      case CALLBACK_TYPE_BUGCHECK:
-        return "BugCheck";
-      case CALLBACK_TYPE_BUGCHECK_REASON:
-        return "BugChkReason";
-      case CALLBACK_TYPE_SHUTDOWN:
-        return "Shutdown";
-      default:
-        return QString("Unknown(%1)").arg(Type);
-      }
-    }
-
-    static QString FormatPointer(quint64 Value) {
-      if (Value == 0)
-        return "0x0";
-      return QString("0x%1")
-          .arg(Value, sizeof(quintptr) * 2, 16, QLatin1Char('0'))
-          .toUpper();
-    }
-
-    static QString FormatFileTimeUtc(const FILETIME &FileTime) {
-      if (FileTime.dwLowDateTime == 0 && FileTime.dwHighDateTime == 0)
-        return {};
-      ULARGE_INTEGER Value{};
-      Value.LowPart = FileTime.dwLowDateTime;
-      Value.HighPart = FileTime.dwHighDateTime;
-      const qint64 UnixMs =
-          static_cast<qint64>((Value.QuadPart - 116444736000000000ULL) / 10000);
-      return QDateTime::fromMSecsSinceEpoch(UnixMs, Qt::UTC).toString(
-          Qt::ISODate);
-    }
-
-    static bool QueryProcessHandleCountValue(DWORD Pid, quint32 &Value) {
-      Value = 0;
-      HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
-      if (!Process)
-        return false;
-      DWORD Count = 0;
-      const bool Ok = GetProcessHandleCount(Process, &Count) != FALSE;
-      CloseHandle(Process);
-      if (Ok)
-        Value = Count;
-      return Ok;
-    }
-
-    static QString QueryProcessImagePath(DWORD Pid) {
-      QString Result;
-      HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
-      if (!Process)
-        return Result;
-      std::vector<WCHAR> Buffer(32768);
-      DWORD Length = static_cast<DWORD>(Buffer.size());
-      if (QueryFullProcessImageNameW(Process, 0, Buffer.data(), &Length))
-        Result = QDir::toNativeSeparators(
-            QString::fromWCharArray(Buffer.data(), Length));
-      CloseHandle(Process);
-      return Result;
-    }
-
-    static QString QueryProcessCreateTime(DWORD Pid) {
-      HANDLE Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
-      if (!Process)
-        return {};
-      FILETIME CreateTime{}, ExitTime{}, KernelTime{}, UserTime{};
-      const BOOL Ok = GetProcessTimes(Process, &CreateTime, &ExitTime,
-                                      &KernelTime, &UserTime);
-      CloseHandle(Process);
-      return Ok ? FormatFileTimeUtc(CreateTime) : QString();
-    }
-
-    static SnapshotMeta BuildSnapshotMeta() {
-      SnapshotMeta Meta;
-      Meta.SchemaVersion = 1;
-      Meta.CapturedAtUtc = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-      Meta.MachineName = QSysInfo::machineHostName();
-      Meta.WindowsVersion = QueryWindowsVersionText();
-      Meta.AppVersion = KApplicationVersion;
-      Meta.DriverState.AegisCoreAvailable =
-          G_DeviceHandle != INVALID_HANDLE_VALUE ||
-          IsDriverServiceRunning(L"Ring0Core");
-      Meta.DriverState.AegisSentinelAvailable =
-          IsDriverServiceRunning(L"Ring0Core");
-      return Meta;
-    }
-
-    static std::vector<ProcessSnapshotEntry>
-    CaptureProcesses(bool &Success, QStringList &Warnings) {
-      std::vector<ProcessSnapshotEntry> Entries;
-      std::vector<PROCESS_ENUM_ENTRY> DriverEntries;
-      Success = EnumProcessEntries(DriverEntries) && !DriverEntries.empty();
-      if (Success) {
-        for (const PROCESS_ENUM_ENTRY &Entry : DriverEntries) {
-          ProcessSnapshotEntry Row;
-          Row.Pid = Entry.ProcessId;
-          Row.ParentPid = Entry.ParentPid;
-          Row.ThreadCount = Entry.ThreadCount;
-          Row.SessionId = Entry.SessionId;
-          DWORD UserSessionId = 0;
-          if (ProcessIdToSessionId(Row.Pid, &UserSessionId))
-            Row.SessionId = UserSessionId;
-          Row.ImageName = Entry.ImageName[0]
-                              ? QString::fromWCharArray(Entry.ImageName)
-                              : "Unknown";
-          Row.ImagePath = QueryProcessImagePath(Row.Pid);
-          if (!Row.ImagePath.isEmpty()) {
-            const QString FileName = QFileInfo(Row.ImagePath).fileName();
-            if (!FileName.isEmpty())
-              Row.ImageName = FileName;
-          }
-          Row.Eprocess = Entry.ObjectAddress;
-          Row.Ppl = Entry.IsPplProtected != FALSE;
-          QueryProcessHandleCountValue(Row.Pid, Row.HandleCount);
-          Row.CreateTime = QueryProcessCreateTime(Row.Pid);
-          Entries.push_back(std::move(Row));
-        }
-      } else {
-        HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (Snapshot == INVALID_HANDLE_VALUE) {
-          Warnings.append("Process capture failed: Toolhelp snapshot unavailable.");
-          return Entries;
-        }
-        PROCESSENTRY32W Entry{sizeof(Entry)};
-        if (!Process32FirstW(Snapshot, &Entry)) {
-          CloseHandle(Snapshot);
-          Warnings.append(
-              "Process capture failed: Unable to enumerate Toolhelp processes.");
-          return Entries;
-        }
-        do {
-          ProcessSnapshotEntry Row;
-          Row.Pid = Entry.th32ProcessID;
-          Row.ParentPid = Entry.th32ParentProcessID;
-          Row.ThreadCount = Entry.cntThreads;
-          DWORD SessionId = 0;
-          ProcessIdToSessionId(Row.Pid, &SessionId);
-          Row.SessionId = SessionId;
-          Row.ImageName = QString::fromWCharArray(Entry.szExeFile);
-          Row.ImagePath = QueryProcessImagePath(Row.Pid);
-          QueryProcessHandleCountValue(Row.Pid, Row.HandleCount);
-          Row.CreateTime = QueryProcessCreateTime(Row.Pid);
-          Entries.push_back(std::move(Row));
-        } while (Process32NextW(Snapshot, &Entry));
-        CloseHandle(Snapshot);
-        Warnings.append(
-            "Process snapshot used Toolhelp fallback. EPROCESS and PPL may be unavailable.");
-      }
-      std::stable_sort(Entries.begin(), Entries.end(),
-                       [](const ProcessSnapshotEntry &Left,
-                          const ProcessSnapshotEntry &Right) {
-                         return Left.Pid < Right.Pid;
-                       });
-      return Entries;
-    }
-
-    static std::vector<DriverSnapshotEntry>
-    CaptureDrivers(bool &Success, QStringList &Warnings) {
-      std::vector<DriverSnapshotEntry> Result;
-      DRIVER_ENUM_HEADER Header{};
-      std::vector<DRIVER_ENUM_ENTRY> Entries;
-      Success = QueryDriverEntries(Entries, &Header);
-      if (!Success) {
-        if (Header.NtStatus != 0 || !Entries.empty())
-          Success = true;
-        else {
-          Warnings.append(QString("Driver capture failed: %1")
-                              .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
-          return Result;
-        }
-      }
-      for (const DRIVER_ENUM_ENTRY &Entry : Entries) {
-        DriverSnapshotEntry Row;
-        Row.ServiceName = QString::fromWCharArray(Entry.ServiceName);
-        Row.DisplayName = QString::fromWCharArray(Entry.DisplayName);
-        Row.ImagePath =
-            NormalizeUserDriverPath(QString::fromWCharArray(Entry.ImagePath));
-        Row.Base = Entry.ImageBase;
-        Row.Size = Entry.ImageSize;
-        Row.StartType = Entry.StartType;
-        Row.State = Entry.State;
-        Row.DriverObject = Entry.DriverObject;
-        Result.push_back(std::move(Row));
-      }
-      std::stable_sort(Result.begin(), Result.end(),
-                       [](const DriverSnapshotEntry &Left,
-                          const DriverSnapshotEntry &Right) {
-                         return Left.ServiceName.compare(Right.ServiceName,
-                                                         Qt::CaseInsensitive) < 0;
-                       });
-      return Result;
-    }
-
-    static std::vector<CallbackSnapshotEntry>
-    CaptureCallbacks(bool &Success, QStringList &Warnings) {
-      std::vector<CallbackSnapshotEntry> Rows;
-      DWORD BytesReturned = 0;
-      ULONG Count = 0;
-      Success = SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, &Count,
-                                    sizeof(Count), &BytesReturned) != FALSE;
-      if (!Success) {
-        Warnings.append(QString("Callback capture failed: %1")
-                            .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
-        return Rows;
-      }
-      if (Count == 0)
-        return Rows;
-      const DWORD Size =
-          sizeof(CALLBACK_ENUM_OUTPUT) + (Count - 1) * sizeof(CALLBACK_ENTRY);
-      std::vector<BYTE> Buffer(Size);
-      auto *Output = reinterpret_cast<PCALLBACK_ENUM_OUTPUT>(Buffer.data());
-      ZeroMemory(Output, Size);
-      Success = SendIoctlWithOutput(IOCTL_ENUM_CALLBACKS, nullptr, 0, Output,
-                                    Size, &BytesReturned) != FALSE;
-      if (!Success) {
-        Warnings.append(QString("Callback capture failed: %1")
-                            .arg(DescribeWin32ErrorMessage(G_LastAegisCoreError)));
-        return Rows;
-      }
-      for (ULONG Index = 0; Index < Output->Count; ++Index) {
-        const CALLBACK_ENTRY &Entry = Output->Entries[Index];
-        CallbackSnapshotEntry Row;
-        Row.Type = DescribeCallbackType(Entry.Type);
-        Row.Flags = Entry.Flags;
-        Row.Address = Entry.Address;
-        Row.ModuleName = Entry.ModuleName[0]
-                             ? QString::fromWCharArray(Entry.ModuleName)
-                             : QString();
-        Row.SourceName = Entry.SourceName[0]
-                             ? QString::fromWCharArray(Entry.SourceName)
-                             : QString();
-        Rows.push_back(std::move(Row));
-      }
-      std::stable_sort(Rows.begin(), Rows.end(),
-                       [](const CallbackSnapshotEntry &Left,
-                          const CallbackSnapshotEntry &Right) {
-                         if (Left.Type.compare(Right.Type, Qt::CaseInsensitive) !=
-                             0) {
-                           return Left.Type.compare(Right.Type,
-                                                    Qt::CaseInsensitive) < 0;
-                         }
-                         return Left.Address < Right.Address;
-                       });
-      return Rows;
-    }
-
-    static CaptureResult CaptureSnapshotDocument() {
-      CaptureResult Result;
-      Result.Document.Meta = BuildSnapshotMeta();
-      Result.Document.Source = "live";
-      Result.Document.Processes =
-          CaptureProcesses(Result.ProcessOk, Result.Failures);
-      Result.Document.Drivers =
-          CaptureDrivers(Result.DriverOk, Result.Failures);
-      Result.Document.Callbacks =
-          CaptureCallbacks(Result.CallbackOk, Result.Failures);
-      Result.Document.WarningText = Result.Failures.join('\n');
-      return Result;
-    }
-
-    static QJsonObject ToJson(const SnapshotMeta &Meta) {
-      QJsonObject Object;
-      Object.insert("SchemaVersion", Meta.SchemaVersion);
-      Object.insert("CapturedAtUtc", Meta.CapturedAtUtc);
-      Object.insert("MachineName", Meta.MachineName);
-      Object.insert("WindowsVersion", Meta.WindowsVersion);
-      Object.insert("AppVersion", Meta.AppVersion);
-      QJsonObject DriverState;
-      DriverState.insert("AegisCoreAvailable", Meta.DriverState.AegisCoreAvailable);
-      DriverState.insert("AegisSentinelAvailable",
-                         Meta.DriverState.AegisSentinelAvailable);
-      Object.insert("DriverState", DriverState);
-      return Object;
-    }
-
-    static QJsonObject ToJson(const ProcessSnapshotEntry &Entry) {
-      QJsonObject Object;
-      Object.insert("Pid", static_cast<int>(Entry.Pid));
-      Object.insert("ParentPid", static_cast<int>(Entry.ParentPid));
-      Object.insert("ImageName", Entry.ImageName);
-      Object.insert("ImagePath", Entry.ImagePath);
-      Object.insert("Eprocess", FormatPointer(Entry.Eprocess));
-      Object.insert("Ppl", Entry.Ppl);
-      Object.insert("SessionId", static_cast<int>(Entry.SessionId));
-      Object.insert("ThreadCount", static_cast<int>(Entry.ThreadCount));
-      Object.insert("HandleCount", static_cast<int>(Entry.HandleCount));
-      Object.insert("CreateTime", Entry.CreateTime);
-      return Object;
-    }
-
-    static QJsonObject ToJson(const DriverSnapshotEntry &Entry) {
-      QJsonObject Object;
-      Object.insert("ServiceName", Entry.ServiceName);
-      Object.insert("DisplayName", Entry.DisplayName);
-      Object.insert("ImagePath", Entry.ImagePath);
-      Object.insert("Base", FormatPointer(Entry.Base));
-      Object.insert("Size", static_cast<int>(Entry.Size));
-      Object.insert("StartType", static_cast<int>(Entry.StartType));
-      Object.insert("State", static_cast<int>(Entry.State));
-      Object.insert("DriverObject", FormatPointer(Entry.DriverObject));
-      return Object;
-    }
-
-    static QJsonObject ToJson(const CallbackSnapshotEntry &Entry) {
-      QJsonObject Object;
-      Object.insert("Type", Entry.Type);
-      Object.insert("Flags", static_cast<int>(Entry.Flags));
-      Object.insert("Address", FormatPointer(Entry.Address));
-      Object.insert("ModuleName", Entry.ModuleName);
-      Object.insert("SourceName", Entry.SourceName);
-      return Object;
-    }
-
-    static QString ProcessKey(const ProcessSnapshotEntry &Entry) {
-      return QString::number(Entry.Pid);
-    }
-
-    static QString DriverKey(const DriverSnapshotEntry &Entry) {
-      const QString Name = Entry.ServiceName.trimmed();
-      if (!Name.isEmpty())
-        return Name.toCaseFolded();
-      return Entry.ImagePath.trimmed().toCaseFolded();
-    }
-
-    static QString CallbackKey(const CallbackSnapshotEntry &Entry) {
-      return Entry.Type.toCaseFolded() + "|" + FormatPointer(Entry.Address);
-    }
-
-    static QString ProcessSummary(const QJsonObject &OldObject,
-                                  const QJsonObject &NewObject,
-                                  QStringList *ChangedFields = nullptr) {
-      const QStringList Preferred{"ImagePath", "Ppl", "HandleCount",
-                                  "ThreadCount", "Eprocess"};
-      return BuildSummary(OldObject, NewObject, Preferred, ChangedFields);
-    }
-
-    static QString DriverSummary(const QJsonObject &OldObject,
-                                 const QJsonObject &NewObject,
-                                 QStringList *ChangedFields = nullptr) {
-      const QStringList Preferred{"Base", "Size", "State", "ImagePath",
-                                  "DriverObject"};
-      return BuildSummary(OldObject, NewObject, Preferred, ChangedFields);
-    }
-
-    static QString CallbackSummary(const QJsonObject &OldObject,
-                                   const QJsonObject &NewObject,
-                                   QStringList *ChangedFields = nullptr) {
-      const QStringList Preferred{"Flags", "ModuleName", "SourceName"};
-      return BuildSummary(OldObject, NewObject, Preferred, ChangedFields);
-    }
-
-    static QString BuildSummary(const QJsonObject &OldObject,
-                                const QJsonObject &NewObject,
-                                const QStringList &Preferred,
-                                QStringList *ChangedFields = nullptr) {
-      QStringList Changes;
-      QStringList Changed;
-      for (const QString &Field : Preferred) {
-        const QJsonValue OldValue = OldObject.value(Field);
-        const QJsonValue NewValue = NewObject.value(Field);
-        if (OldValue != NewValue) {
-          Changed.append(Field);
-          Changes.append(QString("%1: %2 -> %3")
-                             .arg(Field, JsonValueText(OldValue),
-                                  JsonValueText(NewValue)));
-        }
-      }
-      for (auto It = NewObject.begin(); It != NewObject.end(); ++It) {
-        if (Preferred.contains(It.key()))
-          continue;
-        const QJsonValue OldValue = OldObject.value(It.key());
-        if (OldValue != It.value()) {
-          Changed.append(It.key());
-          Changes.append(QString("%1: %2 -> %3")
-                             .arg(It.key(), JsonValueText(OldValue),
-                                  JsonValueText(It.value())));
-        }
-      }
-      if (ChangedFields)
-        *ChangedFields = Changed;
-      return Changes.isEmpty() ? "No field changes" : Changes.join(" | ");
-    }
-
-    static QString JsonValueText(const QJsonValue &Value) {
-      if (Value.isUndefined())
-        return "(missing)";
-      if (Value.isNull())
-        return "null";
-      if (Value.isBool())
-        return Value.toBool() ? "true" : "false";
-      if (Value.isDouble())
-        return QString::number(Value.toDouble());
-      if (Value.isString())
-        return Value.toString();
-      return QString::fromUtf8(QJsonDocument(Value.toObject()).toJson(
-                                   QJsonDocument::Compact))
-          .trimmed();
-    }
-
-    static bool ParsePointerString(const QJsonObject &Object, const char *Key,
-                                   quint64 &Value, QString &Error) {
-      Value = 0;
-      const QJsonValue Json = Object.value(QLatin1String(Key));
-      if (!Json.isString()) {
-        Error = QString("Field `%1` must be a string pointer.").arg(Key);
-        return false;
-      }
-      bool Ok = false;
-      Value = Json.toString().trimmed().toULongLong(&Ok, 0);
-      if (!Ok) {
-        Error = QString("Field `%1` has invalid pointer text.").arg(Key);
-        return false;
-      }
-      return true;
-    }
-
-    static bool ParseProcess(const QJsonObject &Object, ProcessSnapshotEntry &Out,
-                             QString &Error) {
-      if (!Object.contains("Pid") || !Object.value("Pid").isDouble()) {
-        Error = "Process entry missing numeric `Pid`.";
-        return false;
-      }
-      Out.Pid = static_cast<quint32>(Object.value("Pid").toInt());
-      Out.ParentPid = static_cast<quint32>(Object.value("ParentPid").toInt());
-      Out.ImageName = Object.value("ImageName").toString();
-      Out.ImagePath = Object.value("ImagePath").toString();
-      if (!ParsePointerString(Object, "Eprocess", Out.Eprocess, Error))
-        return false;
-      Out.Ppl = Object.value("Ppl").toBool(false);
-      Out.SessionId = static_cast<quint32>(Object.value("SessionId").toInt());
-      Out.ThreadCount = static_cast<quint32>(Object.value("ThreadCount").toInt());
-      Out.HandleCount = static_cast<quint32>(Object.value("HandleCount").toInt());
-      Out.CreateTime = Object.value("CreateTime").toString();
-      return true;
-    }
-
-    static bool ParseDriver(const QJsonObject &Object, DriverSnapshotEntry &Out,
-                            QString &Error) {
-      Out.ServiceName = Object.value("ServiceName").toString();
-      Out.DisplayName = Object.value("DisplayName").toString();
-      Out.ImagePath = Object.value("ImagePath").toString();
-      if (!ParsePointerString(Object, "Base", Out.Base, Error))
-        return false;
-      Out.Size = static_cast<quint32>(Object.value("Size").toInt());
-      Out.StartType = static_cast<quint32>(Object.value("StartType").toInt());
-      Out.State = static_cast<quint32>(Object.value("State").toInt());
-      if (!ParsePointerString(Object, "DriverObject", Out.DriverObject, Error))
-        return false;
-      return true;
-    }
-
-    static bool ParseCallback(const QJsonObject &Object,
-                              CallbackSnapshotEntry &Out, QString &Error) {
-      Out.Type = Object.value("Type").toString();
-      Out.Flags = static_cast<quint32>(Object.value("Flags").toInt());
-      if (!ParsePointerString(Object, "Address", Out.Address, Error))
-        return false;
-      Out.ModuleName = Object.value("ModuleName").toString();
-      Out.SourceName = Object.value("SourceName").toString();
-      return true;
-    }
-
-    static bool ParseDocument(const QByteArray &Bytes, SnapshotDocument &Out,
-                              QString &Error) {
-      QJsonParseError ParseError{};
-      const QJsonDocument Document = QJsonDocument::fromJson(Bytes, &ParseError);
-      if (ParseError.error != QJsonParseError::NoError || !Document.isObject()) {
-        Error = QString("Invalid JSON: %1").arg(ParseError.errorString());
-        return false;
-      }
-      const QJsonObject Root = Document.object();
-      const QJsonObject Meta = Root.value("Meta").toObject();
-      if (Meta.isEmpty()) {
-        Error = "Snapshot JSON missing `Meta` object.";
-        return false;
-      }
-      const int Version = Meta.value("SchemaVersion").toInt(-1);
-      if (Version != 1) {
-        Error = QString("Unsupported schema version %1. Expected %2.")
-                    .arg(Version)
-                    .arg(1);
-        return false;
-      }
-      SnapshotDocument Parsed;
-      Parsed.Source = "json";
-      Parsed.Meta.SchemaVersion = Version;
-      Parsed.Meta.CapturedAtUtc = Meta.value("CapturedAtUtc").toString();
-      Parsed.Meta.MachineName = Meta.value("MachineName").toString();
-      Parsed.Meta.WindowsVersion = Meta.value("WindowsVersion").toString();
-      Parsed.Meta.AppVersion = Meta.value("AppVersion").toString();
-      const QJsonObject DriverState = Meta.value("DriverState").toObject();
-      Parsed.Meta.DriverState.AegisCoreAvailable =
-          DriverState.value("AegisCoreAvailable").toBool(false);
-      Parsed.Meta.DriverState.AegisSentinelAvailable =
-          DriverState.value("AegisSentinelAvailable").toBool(false);
-      const auto ParseArray = [&Error](const QJsonObject &RootObject,
-                                       const char *Name, auto Parser,
-                                       auto &Output) {
-        const QJsonValue Value = RootObject.value(QLatin1String(Name));
-        if (!Value.isArray()) {
-          Error = QString("Snapshot JSON missing `%1` array.").arg(Name);
-          return false;
-        }
-        for (const QJsonValue &Item : Value.toArray()) {
-          if (!Item.isObject()) {
-            Error = QString("Array `%1` contains a non-object item.").arg(Name);
-            return false;
-          }
-          typename std::decay_t<decltype(Output)>::value_type Entry;
-          if (!Parser(Item.toObject(), Entry, Error))
-            return false;
-          Output.push_back(std::move(Entry));
-        }
-        return true;
-      };
-      if (!ParseArray(Root, "Processes", ParseProcess, Parsed.Processes) ||
-          !ParseArray(Root, "Drivers", ParseDriver, Parsed.Drivers) ||
-          !ParseArray(Root, "Callbacks", ParseCallback, Parsed.Callbacks)) {
-        return false;
-      }
-      Out = std::move(Parsed);
-      return true;
-    }
-
-    static QByteArray SerializeDocument(const SnapshotDocument &Document) {
-      QJsonObject Root;
-      Root.insert("Meta", ToJson(Document.Meta));
-      QJsonArray Processes;
-      for (const ProcessSnapshotEntry &Entry : Document.Processes)
-        Processes.append(ToJson(Entry));
-      QJsonArray Drivers;
-      for (const DriverSnapshotEntry &Entry : Document.Drivers)
-        Drivers.append(ToJson(Entry));
-      QJsonArray Callbacks;
-      for (const CallbackSnapshotEntry &Entry : Document.Callbacks)
-        Callbacks.append(ToJson(Entry));
-      Root.insert("Processes", Processes);
-      Root.insert("Drivers", Drivers);
-      Root.insert("Callbacks", Callbacks);
-      return QJsonDocument(Root).toJson(QJsonDocument::Indented);
-    }
-
-    static void AddUniqueDiffEntry(QHash<QString, QJsonObject> &Map,
-                                   QHash<QString, QString> &Names,
-                                   const QString &Group, const QString &Key,
-                                   const QJsonObject &Object,
-                                   const QString &Name,
-                                   QStringList &Warnings) {
-      if (Map.contains(Key)) {
-        Warnings.append(QString("%1 duplicate key `%2` detected; kept first entry.")
-                            .arg(Group, Key));
-        return;
-      }
-      Map.insert(Key, Object);
-      Names.insert(Key, Name);
-    }
-
-    static std::vector<DiffRow>
-    BuildProcessDiffRows(const std::vector<ProcessSnapshotEntry> &OldEntries,
-                         const std::vector<ProcessSnapshotEntry> &NewEntries,
-                         DiffStats &Stats, QStringList &Warnings) {
-      std::vector<DiffRow> Rows;
-      QHash<QString, QJsonObject> OldMap;
-      QHash<QString, QString> OldNames;
-      QHash<QString, QJsonObject> NewMap;
-      QHash<QString, QString> NewNames;
-      for (const ProcessSnapshotEntry &Entry : OldEntries)
-        AddUniqueDiffEntry(OldMap, OldNames, "Processes", ProcessKey(Entry),
-                           ToJson(Entry),
-                           Entry.ImageName.isEmpty() ? QString::number(Entry.Pid)
-                                                     : Entry.ImageName,
-                           Warnings);
-      for (const ProcessSnapshotEntry &Entry : NewEntries)
-        AddUniqueDiffEntry(NewMap, NewNames, "Processes", ProcessKey(Entry),
-                           ToJson(Entry),
-                           Entry.ImageName.isEmpty() ? QString::number(Entry.Pid)
-                                                     : Entry.ImageName,
-                           Warnings);
-      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
-        if (!OldMap.contains(It.key())) {
-          DiffRow Row;
-          Row.Category = "Processes";
-          Row.State = "Added";
-          Row.Key = It.key();
-          Row.PrimaryName = NewNames.value(It.key());
-          Row.Summary = "Present only in snapshot B";
-          Row.NewValue = It.value();
-          Rows.push_back(std::move(Row));
-          Stats.Added++;
-        }
-      }
-      for (auto It = OldMap.cbegin(); It != OldMap.cend(); ++It) {
-        if (!NewMap.contains(It.key())) {
-          DiffRow Row;
-          Row.Category = "Processes";
-          Row.State = "Removed";
-          Row.Key = It.key();
-          Row.PrimaryName = OldNames.value(It.key());
-          Row.Summary = "Present only in snapshot A";
-          Row.OldValue = It.value();
-          Rows.push_back(std::move(Row));
-          Stats.Removed++;
-        }
-      }
-      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
-        if (!OldMap.contains(It.key()))
-          continue;
-        const QJsonObject OldObject = OldMap.value(It.key());
-        const QJsonObject NewObject = It.value();
-        if (OldObject == NewObject)
-          continue;
-        DiffRow Row;
-        Row.Category = "Processes";
-        Row.State = "Modified";
-        Row.Key = It.key();
-        Row.PrimaryName = NewNames.value(It.key());
-        Row.Summary = ProcessSummary(OldObject, NewObject, &Row.ChangedFields);
-        Row.OldValue = OldObject;
-        Row.NewValue = NewObject;
-        Rows.push_back(std::move(Row));
-        Stats.Modified++;
-      }
-      Stats.Warnings = Warnings.size();
-      std::stable_sort(Rows.begin(), Rows.end(),
-                       [](const DiffRow &Left, const DiffRow &Right) {
-                         if (Left.State != Right.State)
-                           return Left.State < Right.State;
-                         return Left.Key < Right.Key;
-                       });
-      return Rows;
-    }
-
-    static std::vector<DiffRow>
-    BuildDriverDiffRows(const std::vector<DriverSnapshotEntry> &OldEntries,
-                        const std::vector<DriverSnapshotEntry> &NewEntries,
-                        DiffStats &Stats, QStringList &Warnings) {
-      std::vector<DiffRow> Rows;
-      QHash<QString, QJsonObject> OldMap;
-      QHash<QString, QString> OldNames;
-      QHash<QString, QJsonObject> NewMap;
-      QHash<QString, QString> NewNames;
-      for (const DriverSnapshotEntry &Entry : OldEntries)
-        AddUniqueDiffEntry(OldMap, OldNames, "Drivers", DriverKey(Entry),
-                           ToJson(Entry),
-                           Entry.ServiceName.isEmpty() ? Entry.ImagePath
-                                                       : Entry.ServiceName,
-                           Warnings);
-      for (const DriverSnapshotEntry &Entry : NewEntries)
-        AddUniqueDiffEntry(NewMap, NewNames, "Drivers", DriverKey(Entry),
-                           ToJson(Entry),
-                           Entry.ServiceName.isEmpty() ? Entry.ImagePath
-                                                       : Entry.ServiceName,
-                           Warnings);
-      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
-        if (!OldMap.contains(It.key())) {
-          DiffRow Row;
-          Row.Category = "Drivers";
-          Row.State = "Added";
-          Row.Key = It.key();
-          Row.PrimaryName = NewNames.value(It.key());
-          Row.Summary = "Present only in snapshot B";
-          Row.NewValue = It.value();
-          Rows.push_back(std::move(Row));
-          Stats.Added++;
-        }
-      }
-      for (auto It = OldMap.cbegin(); It != OldMap.cend(); ++It) {
-        if (!NewMap.contains(It.key())) {
-          DiffRow Row;
-          Row.Category = "Drivers";
-          Row.State = "Removed";
-          Row.Key = It.key();
-          Row.PrimaryName = OldNames.value(It.key());
-          Row.Summary = "Present only in snapshot A";
-          Row.OldValue = It.value();
-          Rows.push_back(std::move(Row));
-          Stats.Removed++;
-        }
-      }
-      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
-        if (!OldMap.contains(It.key()))
-          continue;
-        const QJsonObject OldObject = OldMap.value(It.key());
-        const QJsonObject NewObject = It.value();
-        if (OldObject == NewObject)
-          continue;
-        DiffRow Row;
-        Row.Category = "Drivers";
-        Row.State = "Modified";
-        Row.Key = It.key();
-        Row.PrimaryName = NewNames.value(It.key());
-        Row.Summary = DriverSummary(OldObject, NewObject, &Row.ChangedFields);
-        Row.OldValue = OldObject;
-        Row.NewValue = NewObject;
-        Rows.push_back(std::move(Row));
-        Stats.Modified++;
-      }
-      Stats.Warnings = Warnings.size();
-      std::stable_sort(Rows.begin(), Rows.end(),
-                       [](const DiffRow &Left, const DiffRow &Right) {
-                         if (Left.State != Right.State)
-                           return Left.State < Right.State;
-                         return Left.Key < Right.Key;
-                       });
-      return Rows;
-    }
-
-    static std::vector<DiffRow>
-    BuildCallbackDiffRows(const std::vector<CallbackSnapshotEntry> &OldEntries,
-                          const std::vector<CallbackSnapshotEntry> &NewEntries,
-                          DiffStats &Stats, QStringList &Warnings) {
-      std::vector<DiffRow> Rows;
-      QHash<QString, QJsonObject> OldMap;
-      QHash<QString, QString> OldNames;
-      QHash<QString, QJsonObject> NewMap;
-      QHash<QString, QString> NewNames;
-      for (const CallbackSnapshotEntry &Entry : OldEntries)
-        AddUniqueDiffEntry(OldMap, OldNames, "Callbacks", CallbackKey(Entry),
-                           ToJson(Entry),
-                           Entry.ModuleName.isEmpty() ? Entry.Type
-                                                      : Entry.ModuleName,
-                           Warnings);
-      for (const CallbackSnapshotEntry &Entry : NewEntries)
-        AddUniqueDiffEntry(NewMap, NewNames, "Callbacks", CallbackKey(Entry),
-                           ToJson(Entry),
-                           Entry.ModuleName.isEmpty() ? Entry.Type
-                                                      : Entry.ModuleName,
-                           Warnings);
-      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
-        if (!OldMap.contains(It.key())) {
-          DiffRow Row;
-          Row.Category = "Callbacks";
-          Row.State = "Added";
-          Row.Key = It.key();
-          Row.PrimaryName = NewNames.value(It.key());
-          Row.Summary = "Present only in snapshot B";
-          Row.NewValue = It.value();
-          Rows.push_back(std::move(Row));
-          Stats.Added++;
-        }
-      }
-      for (auto It = OldMap.cbegin(); It != OldMap.cend(); ++It) {
-        if (!NewMap.contains(It.key())) {
-          DiffRow Row;
-          Row.Category = "Callbacks";
-          Row.State = "Removed";
-          Row.Key = It.key();
-          Row.PrimaryName = OldNames.value(It.key());
-          Row.Summary = "Present only in snapshot A";
-          Row.OldValue = It.value();
-          Rows.push_back(std::move(Row));
-          Stats.Removed++;
-        }
-      }
-      for (auto It = NewMap.cbegin(); It != NewMap.cend(); ++It) {
-        if (!OldMap.contains(It.key()))
-          continue;
-        const QJsonObject OldObject = OldMap.value(It.key());
-        const QJsonObject NewObject = It.value();
-        if (OldObject == NewObject)
-          continue;
-        DiffRow Row;
-        Row.Category = "Callbacks";
-        Row.State = "Modified";
-        Row.Key = It.key();
-        Row.PrimaryName = NewNames.value(It.key());
-        Row.Summary = CallbackSummary(OldObject, NewObject, &Row.ChangedFields);
-        Row.OldValue = OldObject;
-        Row.NewValue = NewObject;
-        Rows.push_back(std::move(Row));
-        Stats.Modified++;
-      }
-      Stats.Warnings = Warnings.size();
-      std::stable_sort(Rows.begin(), Rows.end(),
-                       [](const DiffRow &Left, const DiffRow &Right) {
-                         if (Left.State != Right.State)
-                           return Left.State < Right.State;
-                         return Left.Key < Right.Key;
-                       });
-      return Rows;
-    }
-
-    static SnapshotDiffResult BuildDiff(const SnapshotDocument &A,
-                                        const SnapshotDocument &B) {
-      SnapshotDiffResult Result;
-      Result.Processes =
-          BuildProcessDiffRows(A.Processes, B.Processes, Result.ProcessStats,
-                               Result.Warnings);
-      Result.Drivers =
-          BuildDriverDiffRows(A.Drivers, B.Drivers, Result.DriverStats,
-                              Result.Warnings);
-      Result.Callbacks =
-          BuildCallbackDiffRows(A.Callbacks, B.Callbacks, Result.CallbackStats,
-                                Result.Warnings);
-      return Result;
-    }
-
     TableWidget *CreateDiffTable(const QStringList &Headers) {
       auto *Table = MakeTable(Headers);
       Table->setSelectionMode(QAbstractItemView::SingleSelection);

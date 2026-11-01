@@ -681,6 +681,40 @@ QWidget *CreateSettingsPage() {
                                                : "Driver auto-load disabled.");
                    });
 
+  AddSection("Console");
+
+  // 控制台窗口：默认隐藏；此处可即时显隐。开关值存 Application/ConsoleVisible，
+  // 真正的显示/隐藏通过 TuiCore 的钩子完成（窗口未就绪时钩子为空）。
+  auto *ConsoleVisible = new SwitchButton;
+  ConsoleVisible->setChecked(
+      ConfigurationValue("Application", "ConsoleVisible", false).toBool());
+  AddSetting("Show console window",
+             "Reveal the integrated console front-end window.", ConsoleVisible);
+  QObject::connect(ConsoleVisible, &SwitchButton::checkedChanged, Content,
+                   [Content](bool Checked) {
+                     SetConfigurationValue("Application", "ConsoleVisible",
+                                           Checked);
+                     if (!AegisNT::Tui::G_ConsoleVisibilityApplier) {
+                       ShowWarningNotice(Content, "Console",
+                                         "The main window is not ready.");
+                       return;
+                     }
+                     AegisNT::Tui::G_ConsoleVisibilityApplier();
+                     ShowSuccessNotice(Content, "Console",
+                                       Checked ? "Console shown."
+                                               : "Console hidden.");
+                   });
+  // 用户直接点控制台窗口的关闭按钮时，主窗口会把它当成“隐藏”，
+  // 这里把开关同步回关闭状态（不重复触发上面的显隐逻辑）。
+  const QPointer<SwitchButton> ConsoleVisibleGuard(ConsoleVisible);
+  AegisNT::Tui::G_ConsoleVisibleChanged = [ConsoleVisibleGuard](bool Visible) {
+    if (!ConsoleVisibleGuard ||
+        ConsoleVisibleGuard->isChecked() == Visible)
+      return;
+    const QSignalBlocker Blocker(ConsoleVisibleGuard);
+    ConsoleVisibleGuard->setChecked(Visible);
+  };
+
   AddSection("Application");
 
   const int Width = ConfigurationValue("Application", "Width", 1600).toInt();

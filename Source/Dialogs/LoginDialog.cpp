@@ -1,6 +1,8 @@
 // 登录对话框:在主窗口创建之前弹出(以及登出后重新弹出)。
 // 含 Remember Me / Auto Login,Register 按钮打开注册对话框;
 // 登录成功即 accept,调用方据此决定是否创建主窗口。
+// Skip 按钮不清除会话校验:直接 accept 进入受限模式(AccountSkipped),
+// 主窗口中账号页与聊天页保持不可用。
 // 全部控件均为 QFluent;窗口本身应用主题样式表 + 无边框标题栏。
 
 static bool RunLoginDialog(QWidget *Parent, const QString &PresetError) {
@@ -20,9 +22,10 @@ static bool RunLoginDialog(QWidget *Parent, const QString &PresetError) {
 
   Content->addWidget(
       MakeLabel("Sign in to AegisNT", 16, KTextPrimary, QFont::DemiBold));
-  Content->addWidget(
-      MakeLabel("Sign in is required before the main window opens.", 11,
-                KTextMuted));
+  Content->addWidget(MakeLabel(
+      "Sign in to use account and chat features, or skip to continue without "
+      "them.",
+      11, KTextMuted));
 
   auto *UsernameEdit = new LineEdit;
   UsernameEdit->setPlaceholderText("Username");
@@ -63,9 +66,11 @@ static bool RunLoginDialog(QWidget *Parent, const QString &PresetError) {
   Content->addLayout(StatusLayout);
 
   auto *ButtonLayout = new QHBoxLayout;
-  ButtonLayout->addStretch();
+  auto *SkipButton = MakeButton("Skip");
   auto *RegisterButton = MakeButton("Register");
   auto *LoginButton = MakeButton("Login", true);
+  ButtonLayout->addWidget(SkipButton);
+  ButtonLayout->addStretch();
   ButtonLayout->addWidget(RegisterButton);
   ButtonLayout->addWidget(LoginButton);
   Content->addLayout(ButtonLayout);
@@ -79,6 +84,7 @@ static bool RunLoginDialog(QWidget *Parent, const QString &PresetError) {
     AutoLoginCheckbox->setEnabled(!Busy);
     RegisterButton->setEnabled(!Busy);
     LoginButton->setEnabled(!Busy);
+    SkipButton->setEnabled(!Busy);
     LoadingRing->setVisible(Busy);
   };
   const auto ShowError = [&](const QString &Message) {
@@ -136,6 +142,16 @@ static bool RunLoginDialog(QWidget *Parent, const QString &PresetError) {
   QObject::connect(RegisterButton, &QPushButton::clicked, &Dialog, [&]() {
     RunRegisterDialog(&Dialog, UsernameEdit);
   });
+  // Skip:不做任何账号验证,也不写入会话(清空预填的用户名),
+  // 主窗口仍会创建,但账号页与聊天页因为没有有效会话而不可用。
+  QObject::connect(SkipButton, &QPushButton::clicked, &Dialog, [&]() {
+    Account = {};
+    AppendConsoleOutput(
+        "[*] Account: sign-in skipped; account and chat pages are "
+        "unavailable.\n");
+    AegisNT::NotifyAccountSessionChanged();
+    Dialog.accept();
+  });
 
   ApplyDialogTheme(&Dialog);
   return Dialog.exec() == QDialog::Accepted;
@@ -144,10 +160,15 @@ static bool RunLoginDialog(QWidget *Parent, const QString &PresetError) {
 // 启动/登出后的完整登录流程:
 // 1. 勾选了 Auto Login 且保存了凭证时,先静默自动登录(阻塞等待,带超时);
 // 2. 失败或未勾选则弹出 Login Dialog(预填用户名,并展示自动登录失败原因)。
-// 返回 false 表示用户关闭了登录框,调用方应退出程序。
-static bool RunLoginFlow(QWidget *Parent, const QString &PresetError = {}) {
+// AllowAutoLogin = false 用于主动登出:此时必须由用户重新输入凭证,
+// 否则保存的自动登录凭证会立刻把刚清空的会话重建回来。
+// 返回 false 表示用户关闭了登录框,调用方应退出程序;返回 true 包含跳过登录
+// (受限模式)的情况,此时账号页与聊天页不可用。
+static bool RunLoginFlow(QWidget *Parent, const QString &PresetError = {},
+                         bool AllowAutoLogin = true) {
   QString Error = PresetError;
-  if (ConfigurationValue("Account", "AutoLogin", false).toBool() &&
+  if (AllowAutoLogin &&
+      ConfigurationValue("Account", "AutoLogin", false).toBool() &&
       ConfigurationValue("Account", "SaveCredentials", false).toBool()) {
     const QString SavedUsername =
         ConfigurationValue("Account", "UserName", "").toString().trimmed();

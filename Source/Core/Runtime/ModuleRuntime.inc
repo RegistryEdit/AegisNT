@@ -66,6 +66,7 @@ void DestroyModuleInstance(ModuleEntry &Module) {
   FreeLibrary(Module.Handle);
   Module.Handle = nullptr;
   Module.Loaded = false;
+  AegisNT::Tui::MarkMutated(); // 模块状态变化：另一前端刷新
 }
 
 bool LoadModuleInstance(ModuleEntry &Module, QString *Error = nullptr) {
@@ -104,6 +105,7 @@ bool LoadModuleInstance(ModuleEntry &Module, QString *Error = nullptr) {
       Instance->SetOption(Option.Name, Option.Value);
   }
   Module.Loaded = true;
+  AegisNT::Tui::MarkMutated(); // 模块状态变化：另一前端刷新
   return true;
 }
 
@@ -295,6 +297,7 @@ bool SetDriverLoaded(ModuleEntry &Module, bool Loaded, QString *Error) {
     return false;
   }
   Module.Loaded = QueryDriverLoadedState(Module);
+  AegisNT::Tui::MarkMutated(); // 驱动状态变化：另一前端刷新
   return true;
 }
 
@@ -374,6 +377,7 @@ bool StartModuleExecution(ModuleEntry *Entry, PlainTextEdit *Output) {
     AppendModuleOutput(QString("[*] Finished: %1\n").arg(Ok ? "OK" : "FAILED"));
     RunningModulePath.clear();
     ModuleRunning = false;
+    AegisNT::Tui::MarkMutated(); // 模块运行结束：另一前端刷新
   }).detach();
   return true;
 }

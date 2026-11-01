@@ -128,6 +128,8 @@ void LoadConfiguration() {
 std::atomic<int> G_ConfigurationGeneration{0};
 void BumpConfigurationGeneration() {
   G_ConfigurationGeneration.fetch_add(1, std::memory_order_relaxed);
+  // 配置变更同时是跨前端同步信号：GUI 改了设置，控制台需要刷新当前页。
+  AegisNT::Tui::MarkMutated();
 }
 int CurrentConfigurationGeneration() {
   return G_ConfigurationGeneration.load(std::memory_order_relaxed);

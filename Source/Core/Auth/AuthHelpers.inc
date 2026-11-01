@@ -60,23 +60,27 @@ static QString AuthServerAddress() {
   return Address;
 }
 
-// 登出:清空内存会话与持久化 Token;勾选 Remember Me 时保留本机凭证。
+// 登出:清空内存会话,并删除本机保存的全部凭证(记住的密码、Remember Me /
+// Auto Login 标记)。保留用户名仅用于登录框预填——它不是凭证,也不会让
+// 程序在未验证的情况下恢复登录态。
 
 static void HandleLogout() {
   SetConfigurationValue("Account", "IsLoggedIn", false);
   SetConfigurationValue("Account", "UserType", 0);
   SetConfigurationValue("Account", "Token", "");
+  SetConfigurationValue("Account", "Title", "");
+  // 凭证与自动登录标记:登出后必须重新输入密码,否则下次启动(以及登出后
+  // 点击 Skip)会被保存的凭证重新认证回登录态。
+  SetConfigurationValue("Account", "Password", "");
+  SetConfigurationValue("Account", "PasswordMD5", "");
+  SetConfigurationValue("Account", "SaveCredentials", false);
+  SetConfigurationValue("Account", "AutoLogin", false);
   Account.IsLoggedIn = false;
   Account.UserName.clear();
   Account.Title.clear();
   Account.UserType = 0;
   Account.Token.clear();
   AegisNT::NotifyAccountSessionChanged();
-
-  if (!ConfigurationValue("Account", "SaveCredentials", false).toBool()) {
-    SetConfigurationValue("Account", "UserName", "");
-    SetConfigurationValue("Account", "PasswordMD5", "");
-  }
 }
 
 // 登录成功:校验服务器返回的 data,写入内存会话并持久化

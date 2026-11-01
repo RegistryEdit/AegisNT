@@ -23,6 +23,13 @@ void AppendConsoleOutput(const QString &Text) {
     std::lock_guard<std::mutex> Lock(OutputMutex);
     AppendCappedTranscript(ConsoleTranscript, Text);
   }
+  // 同时写进控制台窗口（隐藏期间 WriteConsoleText 内部直接返回，
+  // 日志靠转录缓冲在显示时回放）。
+  if (AegisNT::Tui::TuiConsoleAttached()) {
+    const QByteArray Utf8 = Text.toUtf8();
+    AegisNT::Tui::WriteConsoleText(Utf8.constData(),
+                                   static_cast<size_t>(Utf8.size()));
+  }
   QMetaObject::invokeMethod(
       qApp,
       [Text] {
@@ -118,10 +125,14 @@ void StartStandardIoCapture() {
     _close(WriteDescriptor);
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
-    // 宽字符输出（wprintf）固定按 UTF-8 写入管道，避免 CRT 对非控制台目标
-    // 输出 UTF-16LE 被 4096 字节切块与文本模式 CR 插入打乱码元对齐。
-    _setmode(_fileno(stdout), _O_U8TEXT);
-    _setmode(_fileno(stderr), _O_U8TEXT);
+    // Both printf and wprintf share these streams (including Qt/library logs).
+    // _O_U8TEXT rejects narrow writes with FAST_FAIL_INVALID_ARG (0xC0000409);
+    // _O_BINARY instead emits raw UTF-16 for wprintf, corrupting mixed logs.
+    // Text mode + UTF-8 LC_CTYPE supports both. LC_NUMERIC stays unchanged,
+    // and DecodeConsoleChunk already removes translated CRLF bytes.
+    std::setlocale(LC_CTYPE, ".UTF8");
+    _setmode(_fileno(stdout), _O_TEXT);
+    _setmode(_fileno(stderr), _O_TEXT);
     SetStdHandle(STD_OUTPUT_HANDLE, reinterpret_cast<HANDLE>(
                                         _get_osfhandle(_fileno(stdout))));
     SetStdHandle(STD_ERROR_HANDLE, reinterpret_cast<HANDLE>(

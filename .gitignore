@@ -12,6 +12,16 @@
 *.cmd
 !/Tests/DriverServiceEnumTests.cpp
 !/Tests/run_driver_service_enum_tests.cmd
+!/Tests/TuiTerminalTests.cpp
+!/Tests/TuiColorTests.cpp
+!/Tests/terminal_color_smoke.py
+!/Tests/terminal_conpty_smoke.py
+!/Tests/run_terminal_tests.cmd
+!/Tests/terminal_smoke.py
+!/Tests/terminal_display_smoke.py
+!/Tests/terminal_modern_smoke.py
+!/Tests/gui_startup_smoke.py
+!/Tests/check_stdio_capture.py
 *.ps1
 /.agents/
 .idea/modules.xml

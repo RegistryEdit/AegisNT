@@ -107,13 +107,54 @@ AegisNT 将进程、线程、内存、文件、注册表、窗口、网络和内
 1. 准备客户端及运行时依赖；默认 Release 程序目录为 `Bin/`。
 2. 启动 `LicenseServer`，或准备已有的可访问账户服务。默认监听 HTTP `8888` 端口。
 3. 检查 **程序目录下** 的 `Data/Config.json`，将 `LicenseServer.Address` 设置为实际服务地址；默认值为 `http://localhost:8888`。
-4. 以管理员身份运行客户端，在登录对话框中注册或使用已有账户登录。当前启动流程在认证成功后才创建主窗口；自动登录也需要重新认证。
+4. 以管理员身份运行客户端，在登录对话框中登录，或点击 **Skip / 跳过** 进入访客模式。访客可使用本地工具，`Account` 与 `Chat` 需要登录；自动登录仍会重新认证。
 5. 使用内核功能时，将匹配版本的 `Ring0Core.sys` 放入配置的驱动目录，检查驱动加载状态。默认配置启用模块与驱动自动加载。
 6. 按需准备进程监控、网络捕获、HTTP(S) 或聊天组件。
 
 ```powershell
 .\Bin\AegisNT.exe
 ```
+
+### 独立终端（不是 GUI 的 Console 页）
+
+```powershell
+.\Bin\AegisNT.exe --console
+.\Bin\AegisNT.exe --console --skip-login
+```
+
+`--console` 默认使用独立终端，避免 GUI 子系统程序启动后父级 cmd/PowerShell 继续读取键盘，导致登录菜单混入 `More?` 或输入丢失。需要复用 PowerShell 当前窗口时，显式使用 `Start-Process .\Bin\AegisNT.exe -ArgumentList '--console --reuse-console --skip-login' -NoNewWindow -Wait`；`-Wait` 必须保留。
+
+- 登录选择页按 **Enter / S** 直接进入访客模式；无需先输入错误的账号密码。`--skip-login` 也会跳过自动登录，本次会话不读取已保存的登录状态作为认证结果。
+- 已保存的自动登录改为菜单中的 **A** 显式触发；启动时先显示可输入的菜单，不让不可用的登录服务器挡住本地工具。
+- `login` 随时登录，取消或再次跳过仍保留访客状态；`logout` 清理会话和保存的登录凭证。
+- `pages` 浏览工具，`use Task` 或根提示符下输入 `2` 切换页面；支持英文名、当前语言名称和唯一匹配的简称。`back` 返回，`help` 查看当前页命令。
+- 双行提示符：首行显示 `[HH:mm:ss] AegisNT > File > 访客 > 当前路径`，次行 `╰─ >` 专用于输入。青色突出品牌和页面，灰色显示时间与身份；窄窗口收紧间距，长路径省略中间部分，列表标题保留完整路径。每次新提示符更新本机时间。
+- 新建的独立窗口使用 Windows 自带 Consolas；`--reuse-console` 保留宿主字体。背景和调色板沿用宿主；不需要安装字体或终端框架。
+- 进入任意页面、切换视图或执行页面命令后自动显示数据，等待异步枚举完成再输出；`show` / `ls` / `list` / `dir` 在各页均可用，`refresh` 重新加载。加载超过 300 毫秒才显示提示，完成后报告耗时；等待上限仍为 10 秒。
+- File 页支持 `dir` / `ls [路径]` / `list [路径]` 重新列目录、`cd "C:\目录"`、相对路径 `cd 子目录`、`cd ..`、`pwd`、`up`、`prev` / `forward` 历史导航。`back` 始终返回主提示符，跨页面请用 `use`。
+- 活动表格默认每页 20 行：`show 2`、`next-page`、`prev-page` 翻页，`show all` 展示全部。分页读取最近快照，不重复枚举；刷新、筛选、进入页面或切换视图后回到第一页。File 的 `prev` 仍为目录历史。多表页只对活动表分页。
+- `find "文本"` 查找当前页面完整快照；也支持 `ls | find "文本"`、`show | grep -n "文本"`、`help | findstr "文本"`。字面匹配、忽略大小写，支持中文和空格，显示命中行号、命中数及黄色关键字高亮。`show | find a | find b` 表示同时包含 a 和 b；引号中的 `|` 是普通文本。
+- 表格管道搜索完整快照的所有可见行（包括其他分页），保留快照行号，可直接 `detail <行号>`；普通文本管道显示输出文本的逻辑行号。`find` 不改变筛选和分页，`filter "文本"` 才会筛选并重新编号。管道在程序内部处理，不调用系统 shell；来源支持 `show/ls/list/dir/pages/detail/help/search/pwd/version/whoami`。
+- `help` 按导航、查看、会话、页面操作分组；`help all` 展示全部，`help <命令>` 优先展示当前页用法。与全局命令重名的页面操作使用 `run <命令>`，例如 Window 页的 `run show`。
+- 输入时显示灰色补全预览，**Tab** 接受补全；多个候选会列出并支持继续 Tab 循环，管道后也能补全 `find/grep/findstr`。**↑/↓** 浏览本次会话的命令历史，**←/→、Home/End、Delete** 编辑，**Ctrl+U / Ctrl+W** 删除行前内容 / 上一个词，**Ctrl+L** 清屏并保留当前输入。
+- **Esc / Ctrl+C** 取消当前输入或整个表单，密码显示为星号且不进入历史；`exit` 退出，空行 **Ctrl+D / Ctrl+Z** 也可退出。
+- 表格按宿主实际显示列收缩；最小列宽仍放不下时使用逐条键值布局。目录用 `/` 与颜色区分；Settings 只显示分组表格。`filter` 清除筛选，`detail <行号>` 查看完整字段。公共文案跟随中英文设置，专业字段不批量翻译。
+- `NO_COLOR` 或 `AEGISNT_NO_COLOR` 非空时关闭颜色，仍保留编号、计数和 `[Tab: 候选]` 提示；不支持 VT 的宿主使用 ASCII 布局。密码及表单不显示补全或进入命令历史。
+- GUI 设置中打开的终端运行在独立子进程内，继承 GUI 当前会话。关闭终端不退出主窗口。
+
+示例：
+
+```text
+use File
+ls "D:\Logs" | find "error"
+show | grep -n ".log" | find "2026"
+detail 21
+show 2
+```
+
+终端回归：`Tests\run_terminal_tests.cmd`；Release x64 编译后依次运行 `python -X utf8 Tests/terminal_smoke.py`、`python -X utf8 Tests/terminal_display_smoke.py`、`python -X utf8 Tests/terminal_modern_smoke.py`。覆盖真实目录与 Settings/ServiceManager/Network、独立输入与登录超时、分页、管道、补全、密码及中英文 40/80/120 列、无色和 ASCII 模式。最后一项把真实原生窗口截图和结果写入 `out/terminal-modern/`。测试使用 `out/terminal-regression/app/` 隔离配置和合成文件，不加载驱动或真实账号。
+
+无参数 GUI 启动回归：`python -X utf8 Tests/gui_startup_smoke.py`，在隔离配置下确认不带 `--console` 的程序创建窗口并持续运行至少 5 秒。
 
 常见运行时目录如下；其中部分目录和文件按功能使用情况生成或部署：
 

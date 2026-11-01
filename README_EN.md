@@ -107,13 +107,54 @@ Some queries fall back to user-mode APIs when the driver is unavailable. This do
 1. Prepare the client and its runtime dependencies. The default desktop Release directory is `Bin/`.
 2. Start `LicenseServer` or make an existing account service available. Its default HTTP port is `8888`.
 3. Edit `Data/Config.json` **beside the executable** and set `LicenseServer.Address` to the service address. The default is `http://localhost:8888`.
-4. Run the client as an administrator. Register an account or log in through the startup dialog. The main window is created only after successful authentication; automatic login also reauthenticates.
+4. Run the client as an administrator. Sign in through the startup dialog or choose **Skip** for a guest session. Local tools remain available; `Account` and `Chat` require sign-in. Automatic login still reauthenticates.
 5. For kernel features, place a matching `Ring0Core.sys` in the configured driver directory and check its load status. Module and driver automatic loading are enabled in the default configuration.
 6. Prepare process monitoring, network capture, HTTP(S), and chat components as needed.
 
 ```powershell
 .\Bin\AegisNT.exe
 ```
+
+### Standalone terminal (separate from the GUI Console page)
+
+```powershell
+.\Bin\AegisNT.exe --console
+.\Bin\AegisNT.exe --console --skip-login
+```
+
+`--console` uses an independent terminal by default: a GUI-subsystem executable's parent cmd/PowerShell may otherwise keep reading the same keyboard buffer, corrupting login input with prompts such as `More?`. To explicitly reuse PowerShell, use `Start-Process .\Bin\AegisNT.exe -ArgumentList '--console --reuse-console --skip-login' -NoNewWindow -Wait`; keep `-Wait`.
+
+- Press **Enter / S** at the session menu to continue as guest immediately. `--skip-login` also skips automatic login; persisted account state is never treated as authentication.
+- Saved automatic credentials are offered as **A** at the menu. Startup presents usable input before making any login request, so an unavailable server does not block local tools.
+- Use `login` to sign in later; cancelling or skipping keeps guest access. `logout` clears the session and saved credentials.
+- `pages` lists tools without initializing them. `use Task` or `2` at the home prompt selects a page; English names, translated names and unambiguous abbreviations work. `back` returns home; `help` lists page commands.
+- Two-line prompts show `[HH:mm:ss] AegisNT > File > guest > current path`, followed by `╰─ >` for input. Cyan identifies the brand/page; time and session use muted gray. Narrow windows use tighter spacing; long prompt paths have a middle ellipsis while listing headings keep the full path. Each new prompt samples local time.
+- Independent classic-console windows use Windows' built-in Consolas. `--reuse-console` keeps the host font. Background and palette stay host-owned; no font installation or terminal framework is required.
+- Entering a page, switching views, or executing a page command displays its data after asynchronous enumeration completes. `show` / `ls` / `list` / `dir` work on every page; `refresh` reloads. Loading feedback appears only after 300 ms, with elapsed time on completion; the 10-second wait limit is unchanged.
+- File supports `dir`, `ls [path]`, `list [path]`, `cd "C:\folder"`, relative `cd child` / `cd ..`, `pwd`, `up`, and `prev` / `forward` history navigation. `back` always returns to the home prompt; use `use` for switching pages.
+- Active tables default to 20 rows per page: `show 2`, `next-page`, `prev-page`, or `show all`. Paging reads the last display snapshot without re-enumeration. Refresh, filtering, page entry and view changes reset to page one. File's `prev` still navigates directory history. Auxiliary tables keep their existing display behavior.
+- `find "text"` searches the current page snapshot. Pipes work too: `ls | find "text"`, `show | grep -n "text"`, `help | findstr "text"`. Literal, Unicode case-insensitive matching shows source row/line numbers, match counts and yellow highlights. Chain filters for AND matching: `show | find a | find b`. A quoted `|` is literal text.
+- Table pipelines search every visible row in the full snapshot, including other pages; result numbers map directly to `detail <n>`. Text pipelines show logical output line numbers. `find` preserves filtering/paging; `filter "text"` changes the view and renumbers rows. Pipes run in-process, without a system shell; supported sources are `show/ls/list/dir/pages/detail/help/search/pwd/version/whoami`.
+- `help` groups navigation, display, session and page actions. `help all` lists everything; `help <command>` prefers the current page's usage. Use `run <command>` for a page action that conflicts with a built-in, such as `run show` on Window.
+- Gray inline completion previews appear while typing; **Tab** accepts them. Multiple candidates are listed and subsequent Tab presses cycle them. Pipe stages complete `find/grep/findstr`. **Up/Down** recalls session-only history; **Left/Right, Home/End, Delete** edit. **Ctrl+U / Ctrl+W** remove preceding text / the previous word; **Ctrl+L** clears the screen and preserves the draft.
+- **Esc / Ctrl+C** cancels input or the entire form. Passwords are masked and excluded from history. Use `exit`, or **Ctrl+D / Ctrl+Z** on an empty line, to leave.
+- Tables use measured host display widths and fall back to per-record key/value layout when minimum columns do not fit. Directories have a trailing `/` and distinct color. Settings uses one grouped table. Common UI follows the existing language setting; specialized page fields are not batch-translated. `filter` clears filtering; `detail <row>` shows full fields.
+- Non-empty `NO_COLOR` or `AEGISNT_NO_COLOR` disables colors while retaining numbers, counts and `[Tab: candidate]` hints. Non-VT hosts use ASCII layout. Passwords and form fields never receive completion previews or command history.
+- The terminal opened from GUI settings runs in a child process and inherits the GUI session. Closing it leaves the main window running.
+
+Examples:
+
+```text
+use File
+ls "D:\Logs" | find "error"
+show | grep -n ".log" | find "2026"
+detail 21
+show 2
+```
+
+Regression checks: `Tests\run_terminal_tests.cmd`; after a Release x64 build, run `python -X utf8 Tests/terminal_smoke.py`, `python -X utf8 Tests/terminal_display_smoke.py`, then `python -X utf8 Tests/terminal_modern_smoke.py`. They cover real File/Settings/ServiceManager/Network displays, independent input and login timeout, snapshot pagination, pipelines, completion, passwords, and English/Chinese 40/80/120-column, no-color and ASCII modes. The last suite saves real native-window screenshots and results in `out/terminal-modern/`. Tests use isolated configuration under `out/terminal-regression/app/` and synthetic fixtures, without drivers or real accounts.
+
+No-argument GUI startup regression: `python -X utf8 Tests/gui_startup_smoke.py` verifies that the app creates native windows and remains alive for at least five seconds without `--console`, using the isolated configuration.
 
 A typical runtime layout is shown below. Some directories and files are deployed or created only when their features are used.
 

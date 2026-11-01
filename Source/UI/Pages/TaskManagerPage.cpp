@@ -470,308 +470,7 @@ private:
     QString ObjectName;
   };
 
-  struct HandleAccessEntry {
-    quint32 Mask = 0;
-    const char *Name = nullptr;
-  };
-
-  static constexpr quint32 KEventQueryState = 0x0001;
-  static constexpr quint32 KEventModifyState = 0x0002;
-  static constexpr quint32 KMutantQueryState = 0x0001;
   static constexpr long KStatusUnsuccessful = static_cast<long>(0xC0000001L);
-
-  static std::vector<HandleAccessEntry>
-  HandleAccessEntriesForType(const QString &TypeName) {
-    std::vector<HandleAccessEntry> Entries{
-        {DELETE, "DELETE"},
-        {READ_CONTROL, "READ_CONTROL"},
-        {WRITE_DAC, "WRITE_DAC"},
-        {WRITE_OWNER, "WRITE_OWNER"},
-        {SYNCHRONIZE, "SYNCHRONIZE"},
-        {ACCESS_SYSTEM_SECURITY, "ACCESS_SYSTEM_SECURITY"},
-        {GENERIC_READ, "GENERIC_READ"},
-        {GENERIC_WRITE, "GENERIC_WRITE"},
-        {GENERIC_EXECUTE, "GENERIC_EXECUTE"},
-        {GENERIC_ALL, "GENERIC_ALL"},
-    };
-
-    QString Type = TypeName.trimmed();
-    if (Type.startsWith("Type ", Qt::CaseInsensitive))
-      Type = Type.mid(5).trimmed();
-    if (Type.contains(QLatin1Char('\\')))
-      Type = Type.section(QLatin1Char('\\'), -1).trimmed();
-    if (Type.compare("Mutant", Qt::CaseInsensitive) == 0 ||
-        Type.compare("Mutex", Qt::CaseInsensitive) == 0)
-      Type = "Mutant";
-    else if (Type.compare("Registry", Qt::CaseInsensitive) == 0 ||
-             Type.compare("RegistryKey", Qt::CaseInsensitive) == 0)
-      Type = "Key";
-    if (Type.compare("Process", Qt::CaseInsensitive) == 0)
-      Entries.insert(
-          Entries.end(),
-          {
-              {PROCESS_TERMINATE, "PROCESS_TERMINATE"},
-              {PROCESS_CREATE_THREAD, "PROCESS_CREATE_THREAD"},
-              {PROCESS_SET_SESSIONID, "PROCESS_SET_SESSIONID"},
-              {PROCESS_VM_OPERATION, "PROCESS_VM_OPERATION"},
-              {PROCESS_VM_READ, "PROCESS_VM_READ"},
-              {PROCESS_VM_WRITE, "PROCESS_VM_WRITE"},
-              {PROCESS_DUP_HANDLE, "PROCESS_DUP_HANDLE"},
-              {PROCESS_CREATE_PROCESS, "PROCESS_CREATE_PROCESS"},
-              {PROCESS_SET_QUOTA, "PROCESS_SET_QUOTA"},
-              {PROCESS_SET_INFORMATION, "PROCESS_SET_INFORMATION"},
-              {PROCESS_QUERY_INFORMATION, "PROCESS_QUERY_INFORMATION"},
-              {PROCESS_SUSPEND_RESUME, "PROCESS_SUSPEND_RESUME"},
-              {PROCESS_QUERY_LIMITED_INFORMATION,
-               "PROCESS_QUERY_LIMITED_INFORMATION"},
-          });
-    else if (Type.compare("Thread", Qt::CaseInsensitive) == 0)
-      Entries.insert(
-          Entries.end(),
-          {
-              {THREAD_TERMINATE, "THREAD_TERMINATE"},
-              {THREAD_SUSPEND_RESUME, "THREAD_SUSPEND_RESUME"},
-              {THREAD_GET_CONTEXT, "THREAD_GET_CONTEXT"},
-              {THREAD_SET_CONTEXT, "THREAD_SET_CONTEXT"},
-              {THREAD_QUERY_INFORMATION, "THREAD_QUERY_INFORMATION"},
-              {THREAD_SET_INFORMATION, "THREAD_SET_INFORMATION"},
-              {THREAD_SET_THREAD_TOKEN, "THREAD_SET_THREAD_TOKEN"},
-              {THREAD_IMPERSONATE, "THREAD_IMPERSONATE"},
-              {THREAD_DIRECT_IMPERSONATION, "THREAD_DIRECT_IMPERSONATION"},
-              {THREAD_SET_LIMITED_INFORMATION,
-               "THREAD_SET_LIMITED_INFORMATION"},
-              {THREAD_QUERY_LIMITED_INFORMATION,
-               "THREAD_QUERY_LIMITED_INFORMATION"},
-          });
-    else if (Type.compare("File", Qt::CaseInsensitive) == 0)
-      Entries.insert(Entries.end(),
-                     {
-                         {FILE_READ_DATA, "FILE_READ_DATA"},
-                         {FILE_WRITE_DATA, "FILE_WRITE_DATA"},
-                         {FILE_APPEND_DATA, "FILE_APPEND_DATA"},
-                         {FILE_READ_EA, "FILE_READ_EA"},
-                         {FILE_WRITE_EA, "FILE_WRITE_EA"},
-                         {FILE_EXECUTE, "FILE_EXECUTE"},
-                         {FILE_DELETE_CHILD, "FILE_DELETE_CHILD"},
-                         {FILE_READ_ATTRIBUTES, "FILE_READ_ATTRIBUTES"},
-                         {FILE_WRITE_ATTRIBUTES, "FILE_WRITE_ATTRIBUTES"},
-                     });
-    else if (Type.compare("Key", Qt::CaseInsensitive) == 0)
-      Entries.insert(Entries.end(),
-                     {
-                         {KEY_QUERY_VALUE, "KEY_QUERY_VALUE"},
-                         {KEY_SET_VALUE, "KEY_SET_VALUE"},
-                         {KEY_CREATE_SUB_KEY, "KEY_CREATE_SUB_KEY"},
-                         {KEY_ENUMERATE_SUB_KEYS, "KEY_ENUMERATE_SUB_KEYS"},
-                         {KEY_NOTIFY, "KEY_NOTIFY"},
-                         {KEY_CREATE_LINK, "KEY_CREATE_LINK"},
-                         {KEY_WOW64_32KEY, "KEY_WOW64_32KEY"},
-                         {KEY_WOW64_64KEY, "KEY_WOW64_64KEY"},
-                     });
-    else if (Type.compare("Section", Qt::CaseInsensitive) == 0)
-      Entries.insert(
-          Entries.end(),
-          {
-              {SECTION_QUERY, "SECTION_QUERY"},
-              {SECTION_MAP_WRITE, "SECTION_MAP_WRITE"},
-              {SECTION_MAP_READ, "SECTION_MAP_READ"},
-              {SECTION_MAP_EXECUTE, "SECTION_MAP_EXECUTE"},
-              {SECTION_EXTEND_SIZE, "SECTION_EXTEND_SIZE"},
-              {SECTION_MAP_EXECUTE_EXPLICIT, "SECTION_MAP_EXECUTE_EXPLICIT"},
-          });
-    else if (Type.compare("Event", Qt::CaseInsensitive) == 0)
-      Entries.insert(Entries.end(),
-                     {
-                         {KEventQueryState, "EVENT_QUERY_STATE"},
-                         {KEventModifyState, "EVENT_MODIFY_STATE"},
-                     });
-    else if (Type.compare("Mutant", Qt::CaseInsensitive) == 0)
-      Entries.insert(Entries.end(),
-                     {
-                         {KMutantQueryState, "MUTANT_QUERY_STATE"},
-                     });
-    else if (Type.compare("Token", Qt::CaseInsensitive) == 0)
-      Entries.insert(Entries.end(),
-                     {
-                         {TOKEN_ASSIGN_PRIMARY, "TOKEN_ASSIGN_PRIMARY"},
-                         {TOKEN_DUPLICATE, "TOKEN_DUPLICATE"},
-                         {TOKEN_IMPERSONATE, "TOKEN_IMPERSONATE"},
-                         {TOKEN_QUERY, "TOKEN_QUERY"},
-                         {TOKEN_QUERY_SOURCE, "TOKEN_QUERY_SOURCE"},
-                         {TOKEN_ADJUST_PRIVILEGES, "TOKEN_ADJUST_PRIVILEGES"},
-                         {TOKEN_ADJUST_GROUPS, "TOKEN_ADJUST_GROUPS"},
-                         {TOKEN_ADJUST_DEFAULT, "TOKEN_ADJUST_DEFAULT"},
-                         {TOKEN_ADJUST_SESSIONID, "TOKEN_ADJUST_SESSIONID"},
-                     });
-    else if (Type.compare("Semaphore", Qt::CaseInsensitive) == 0)
-      Entries.insert(Entries.end(), {
-                                        {0x0001, "SEMAPHORE_QUERY_STATE"},
-                                        {0x0002, "SEMAPHORE_MODIFY_STATE"},
-                                    });
-    else if (Type.compare("Timer", Qt::CaseInsensitive) == 0)
-      Entries.insert(Entries.end(), {
-                                        {0x0001, "TIMER_QUERY_STATE"},
-                                        {0x0002, "TIMER_MODIFY_STATE"},
-                                    });
-    else if (Type.compare("Job", Qt::CaseInsensitive) == 0)
-      Entries.insert(
-          Entries.end(),
-          {
-              {JOB_OBJECT_ASSIGN_PROCESS, "JOB_OBJECT_ASSIGN_PROCESS"},
-              {JOB_OBJECT_SET_ATTRIBUTES, "JOB_OBJECT_SET_ATTRIBUTES"},
-              {JOB_OBJECT_QUERY, "JOB_OBJECT_QUERY"},
-              {JOB_OBJECT_TERMINATE, "JOB_OBJECT_TERMINATE"},
-              {JOB_OBJECT_SET_SECURITY_ATTRIBUTES,
-               "JOB_OBJECT_SET_SECURITY_ATTRIBUTES"},
-              {JOB_OBJECT_IMPERSONATE, "JOB_OBJECT_IMPERSONATE"},
-          });
-    return Entries;
-  }
-
-  static QString FormatAccessMask(
-      quint32 Mask,
-      std::initializer_list<std::pair<quint32, const char *>> Entries) {
-    QStringList Parts;
-    quint32 Remaining = Mask;
-    for (const auto &[Bit, Name] : Entries) {
-      if ((Mask & Bit) == Bit) {
-        Parts.append(QString::fromLatin1(Name));
-        Remaining &= ~Bit;
-      }
-    }
-    if (Remaining != 0)
-      Parts.append(QString("0x%1").arg(Remaining, 0, 16).toUpper());
-    return Parts.join(" | ");
-  }
-
-  static QString DescribeHandleAccess(const QString &TypeName, quint32 Mask) {
-    QStringList Parts;
-    const QString Generic = FormatAccessMask(
-        Mask, {
-                  {DELETE, "DELETE"},
-                  {READ_CONTROL, "READ_CONTROL"},
-                  {WRITE_DAC, "WRITE_DAC"},
-                  {WRITE_OWNER, "WRITE_OWNER"},
-                  {SYNCHRONIZE, "SYNCHRONIZE"},
-                  {ACCESS_SYSTEM_SECURITY, "ACCESS_SYSTEM_SECURITY"},
-                  {GENERIC_READ, "GENERIC_READ"},
-                  {GENERIC_WRITE, "GENERIC_WRITE"},
-                  {GENERIC_EXECUTE, "GENERIC_EXECUTE"},
-                  {GENERIC_ALL, "GENERIC_ALL"},
-              });
-    if (!Generic.isEmpty())
-      Parts.append(Generic);
-
-    const auto Type = TypeName.trimmed();
-    if (Type.compare("Process", Qt::CaseInsensitive) == 0) {
-      Parts.append(FormatAccessMask(
-          Mask, {
-                    {PROCESS_TERMINATE, "PROCESS_TERMINATE"},
-                    {PROCESS_CREATE_THREAD, "PROCESS_CREATE_THREAD"},
-                    {PROCESS_SET_SESSIONID, "PROCESS_SET_SESSIONID"},
-                    {PROCESS_VM_OPERATION, "PROCESS_VM_OPERATION"},
-                    {PROCESS_VM_READ, "PROCESS_VM_READ"},
-                    {PROCESS_VM_WRITE, "PROCESS_VM_WRITE"},
-                    {PROCESS_DUP_HANDLE, "PROCESS_DUP_HANDLE"},
-                    {PROCESS_CREATE_PROCESS, "PROCESS_CREATE_PROCESS"},
-                    {PROCESS_SET_QUOTA, "PROCESS_SET_QUOTA"},
-                    {PROCESS_SET_INFORMATION, "PROCESS_SET_INFORMATION"},
-                    {PROCESS_QUERY_INFORMATION, "PROCESS_QUERY_INFORMATION"},
-                    {PROCESS_SUSPEND_RESUME, "PROCESS_SUSPEND_RESUME"},
-                    {PROCESS_QUERY_LIMITED_INFORMATION,
-                     "PROCESS_QUERY_LIMITED_INFORMATION"},
-                }));
-    } else if (Type.compare("Thread", Qt::CaseInsensitive) == 0) {
-      Parts.append(FormatAccessMask(
-          Mask,
-          {
-              {THREAD_TERMINATE, "THREAD_TERMINATE"},
-              {THREAD_SUSPEND_RESUME, "THREAD_SUSPEND_RESUME"},
-              {THREAD_GET_CONTEXT, "THREAD_GET_CONTEXT"},
-              {THREAD_SET_CONTEXT, "THREAD_SET_CONTEXT"},
-              {THREAD_QUERY_INFORMATION, "THREAD_QUERY_INFORMATION"},
-              {THREAD_SET_INFORMATION, "THREAD_SET_INFORMATION"},
-              {THREAD_SET_THREAD_TOKEN, "THREAD_SET_THREAD_TOKEN"},
-              {THREAD_IMPERSONATE, "THREAD_IMPERSONATE"},
-              {THREAD_DIRECT_IMPERSONATION, "THREAD_DIRECT_IMPERSONATION"},
-              {THREAD_SET_LIMITED_INFORMATION,
-               "THREAD_SET_LIMITED_INFORMATION"},
-              {THREAD_QUERY_LIMITED_INFORMATION,
-               "THREAD_QUERY_LIMITED_INFORMATION"},
-          }));
-    } else if (Type.compare("File", Qt::CaseInsensitive) == 0) {
-      Parts.append(FormatAccessMask(
-          Mask, {
-                    {FILE_READ_DATA, "FILE_READ_DATA"},
-                    {FILE_WRITE_DATA, "FILE_WRITE_DATA"},
-                    {FILE_APPEND_DATA, "FILE_APPEND_DATA"},
-                    {FILE_READ_EA, "FILE_READ_EA"},
-                    {FILE_WRITE_EA, "FILE_WRITE_EA"},
-                    {FILE_EXECUTE, "FILE_EXECUTE"},
-                    {FILE_DELETE_CHILD, "FILE_DELETE_CHILD"},
-                    {FILE_READ_ATTRIBUTES, "FILE_READ_ATTRIBUTES"},
-                    {FILE_WRITE_ATTRIBUTES, "FILE_WRITE_ATTRIBUTES"},
-                }));
-    } else if (Type.compare("Key", Qt::CaseInsensitive) == 0) {
-      Parts.append(FormatAccessMask(
-          Mask, {
-                    {KEY_QUERY_VALUE, "KEY_QUERY_VALUE"},
-                    {KEY_SET_VALUE, "KEY_SET_VALUE"},
-                    {KEY_CREATE_SUB_KEY, "KEY_CREATE_SUB_KEY"},
-                    {KEY_ENUMERATE_SUB_KEYS, "KEY_ENUMERATE_SUB_KEYS"},
-                    {KEY_NOTIFY, "KEY_NOTIFY"},
-                    {KEY_CREATE_LINK, "KEY_CREATE_LINK"},
-                    {KEY_WOW64_32KEY, "KEY_WOW64_32KEY"},
-                    {KEY_WOW64_64KEY, "KEY_WOW64_64KEY"},
-                }));
-    } else if (Type.compare("Section", Qt::CaseInsensitive) == 0) {
-      Parts.append(FormatAccessMask(
-          Mask,
-          {
-              {SECTION_QUERY, "SECTION_QUERY"},
-              {SECTION_MAP_WRITE, "SECTION_MAP_WRITE"},
-              {SECTION_MAP_READ, "SECTION_MAP_READ"},
-              {SECTION_MAP_EXECUTE, "SECTION_MAP_EXECUTE"},
-              {SECTION_EXTEND_SIZE, "SECTION_EXTEND_SIZE"},
-              {SECTION_MAP_EXECUTE_EXPLICIT, "SECTION_MAP_EXECUTE_EXPLICIT"},
-          }));
-    } else if (Type.compare("Event", Qt::CaseInsensitive) == 0) {
-      Parts.append(
-          FormatAccessMask(Mask, {
-                                     {KEventQueryState, "EVENT_QUERY_STATE"},
-                                     {KEventModifyState, "EVENT_MODIFY_STATE"},
-                                 }));
-    } else if (Type.compare("Mutant", Qt::CaseInsensitive) == 0) {
-      Parts.append(
-          FormatAccessMask(Mask, {
-                                     {KMutantQueryState, "MUTANT_QUERY_STATE"},
-                                 }));
-    } else if (Type.compare("Token", Qt::CaseInsensitive) == 0) {
-      Parts.append(FormatAccessMask(
-          Mask, {
-                    {TOKEN_ASSIGN_PRIMARY, "TOKEN_ASSIGN_PRIMARY"},
-                    {TOKEN_DUPLICATE, "TOKEN_DUPLICATE"},
-                    {TOKEN_IMPERSONATE, "TOKEN_IMPERSONATE"},
-                    {TOKEN_QUERY, "TOKEN_QUERY"},
-                    {TOKEN_QUERY_SOURCE, "TOKEN_QUERY_SOURCE"},
-                    {TOKEN_ADJUST_PRIVILEGES, "TOKEN_ADJUST_PRIVILEGES"},
-                    {TOKEN_ADJUST_GROUPS, "TOKEN_ADJUST_GROUPS"},
-                    {TOKEN_ADJUST_DEFAULT, "TOKEN_ADJUST_DEFAULT"},
-                    {TOKEN_ADJUST_SESSIONID, "TOKEN_ADJUST_SESSIONID"},
-                }));
-    }
-
-    Parts.removeAll(QString());
-    Parts.removeDuplicates();
-    return Parts.join(" | ");
-  }
-
-  static QString FormatHandleAccessDisplay(const QString &TypeName,
-                                           quint32 Mask) {
-    const QString Decoded = DescribeHandleAccess(TypeName, Mask);
-    const QString Raw = QString("0x%1").arg(Mask, 0, 16).toUpper();
-    return Decoded.isEmpty() ? Raw : Raw + " | " + Decoded;
-  }
 
   bool PromptHandleAccessMask(QWidget *Parent, const QString &TypeName,
                               quint32 CurrentAccess, quint32 &SelectedMask,
@@ -792,7 +491,7 @@ private:
     AccessCombo->setPlaceholderText("Select handle permissions");
     AccessCombo->setMaxVisibleItems(12);
     AccessCombo->setMinimumHeight(36);
-    const auto Entries = HandleAccessEntriesForType(TypeName);
+    const auto Entries = HandleAccessData::PickerEntries(TypeName);
     for (const auto &Entry : Entries) {
       const int Index = AccessCombo->count();
       AccessCombo->addItem(QString::fromLatin1(Entry.Name),
@@ -809,7 +508,8 @@ private:
       quint32 Mask = 0;
       for (const QVariant &Data : AccessCombo->selectedDatas())
         Mask |= Data.toUInt();
-      Preview->setText("Access: " + FormatHandleAccessDisplay(TypeName, Mask));
+      Preview->setText("Access: " +
+                       HandleAccessData::FormatDisplay(TypeName, Mask));
     };
     QObject::connect(AccessCombo, &MultiViewComboBox::selectionChanged, &Dialog,
                      UpdatePreview);
@@ -4176,7 +3876,7 @@ private:
                   Add(Handles,
                       {QString("0x%1").arg(R.Value[0], 0, 16).toUpper(),
                        ObjectText, TypeText,
-                       FormatHandleAccessDisplay(
+                       HandleAccessData::FormatDisplay(
                            TypeText, static_cast<quint32>(R.Value[1])),
                        QString("0x%1").arg(R.Value[3], 0, 16).toUpper()});
                   PreparedRows[Handles].back().Roles = {
@@ -4203,7 +3903,8 @@ private:
                                                     .toUpper()
                                               : R.ObjectName,
                        R.TypeName.isEmpty() ? "Unknown" : R.TypeName,
-                       FormatHandleAccessDisplay(R.TypeName, R.GrantedAccess),
+                       HandleAccessData::FormatDisplay(R.TypeName,
+                                                       R.GrantedAccess),
                        QString("0x%1").arg(R.Attributes, 0, 16).toUpper()});
                   PreparedRows[Handles].back().Roles = {
                       QVariant::fromValue<quint32>(static_cast<quint32>(R.HandleValue)),

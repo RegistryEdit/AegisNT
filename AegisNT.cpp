@@ -110,6 +110,7 @@
 #include <QFluent/Menu/RoundMenu.h>
 #include <QFluent/MultiViewComboBox.h>
 #include <QFluent/Navigation/NavigationPanel.h>
+#include <QFluent/Navigation/NavigationWidget.h>
 #include <QFluent/Progress/IndeterminateProgressRing.h>
 #include <QFluent/PushButton.h>
 #include <QFluent/ScrollArea.h>
@@ -132,6 +133,7 @@
 #include <format>
 #include <winsock2.h>
 #include <windows.h>
+#include <wmistr.h>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <dwmapi.h>
@@ -165,12 +167,14 @@
 #include "Platform/UserProcessCtl.h"
 #include "Platform/UserSecurityInfo.h"
 #include "Source/AppContext.h"
+#include "Source/Core/Module/ModuleService.h"
 #include "Source/UI/Common/Base/PageBase.h"
 #include "Source/UI/Common/Widgets/RefreshControl.h"
 #include "Source/UI/Common/Widgets/DebouncedSearchEdit.h"
 #include "Source/UI/Common/Widgets/FluentCompatibility.h"
 #include "Source/UI/Common/Widgets/FluentTitleBar.h"
 #include "Source/UI/Pages/KernelResearch.h"
+#include "Source/UI/Pages/HandleAccessData.h"
 #include "Source/UI/Pages/PageFactory.h"
 #include "Source/UI/Pages/PageRegistry.h"
 #include <openssl/applink.c>
@@ -178,9 +182,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <clocale>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -188,6 +195,8 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -196,6 +205,17 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+
+// 控制台前端头文件：必须在全局作用域包含（系统头不能落进匿名 namespace，
+// 否则 <span> 那类模板实例化会编译失败）。
+// 实现在 Source/Tui/*.cpp，由本文件在匿名 namespace 关闭之后 unity 包含，
+// 因此这里只拿到声明，main() / AegisNTWindow / .inc 助手可以提前调用。
+#include "Source/Tui/TuiAsync.h"
+#include "Source/Tui/TuiConsole.h"
+#include "Source/Tui/TuiCore.h"
+#include "Source/Tui/TuiPages.h"
+#include "Source/Tui/TuiSync.h"
+#include "Source/Tui/TuiWidgets.h"
 
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "Dwmapi.lib")
@@ -2948,6 +2968,19 @@ QWidget *CreatePageBody(int Index) {
   }
 }
 
+// 需要已验证账号会话的页面：Account 与 Chat。按注册表标题解析，
+// 避免与 CreatePageBody 的索引硬编码重复。
+static bool PageRequiresAccountSession(int Index) {
+  const auto &Pages = AegisNT::PageDefinitions();
+  if (Index < 0 || Index >= static_cast<int>(Pages.size()))
+    return false;
+  const QLatin1String Title(Pages[Index].Title);
+  return Title == QLatin1String("Account") || Title == QLatin1String("Chat");
+}
+
+// 会话未通过验证（登录对话框 Skip、登出后关闭登录框）时，账号页与聊天页不可用。
+static bool AccountPagesUnavailable() { return !Account.IsLoggedIn; }
+
 // 全局热键的 WM_HOTKEY 接收器。RegisterHotKey 将消息投递到 GUI 线程，
 // 由 Qt 原生事件过滤器截获，不依赖主窗口 HWND 的生命周期。
 // AegisNTWindow 创建时登记自己的热键回调。
@@ -3095,6 +3128,23 @@ public:
       ShowTrayMessage(HotkeyError);
     }
     G_HotkeyReapplier = [this] { return ApplyToggleHotkey(); };
+    // 控制台前端：设置页通过该钩子显隐控制台窗口。
+    AegisNT::Tui::G_ConsoleVisibilityApplier = [] {
+      AegisNT::Tui::ApplyConsoleVisibilityFromConfig();
+    };
+    // 集成 TUI 跑在独立子进程里。关闭它只会结束子进程，主 GUI 继续运行。
+    AegisNT::Tui::ApplyConsoleVisibilityFromConfig();
+    // 登录对话框 Skip 后的受限模式：账号页/聊天页导航项置灰；
+    // 后续真实登录成功会清掉标记并重新启用（监听器由会话变化驱动）。
+    ApplyAccountPageAvailability();
+    const QPointer<AegisNTWindow> WindowGuard(this);
+    AegisNT::ApplicationContext().AccountSessionListeners.push_back(
+        [WindowGuard]() -> bool {
+          if (!WindowGuard)
+            return false;
+          WindowGuard->ApplyAccountPageAvailability();
+          return true;
+        });
     QTimer::singleShot(0, this, [this] {
       SelectPage(0, false);
       PageStack->setAnimationEnabled(true);
@@ -3108,6 +3158,7 @@ public:
   ~AegisNTWindow() override {
     UnregisterToggleHotkey();
     G_HotkeyReapplier = nullptr;
+    AegisNT::Tui::G_ConsoleVisibilityApplier = nullptr;
     qApp->removeNativeEventFilter(&G_HotkeyFilter);
     G_HotkeyFilter.SetHandler(nullptr);
     if (TrayIcon) {
@@ -3137,6 +3188,26 @@ public:
       HideToTray();
     else
       RestoreFromTray();
+  }
+
+  // 未经账号验证时置灰账号页/聊天页的导航项：
+  // NavigationPanel 按 routeKey 索引，页面索引即路由键。
+  // 若当前正停在受限页面(例如账号页里登出后跳过登录)，退回首页。
+  void ApplyAccountPageAvailability() {
+    if (!NavigationPanelWidget)
+      return;
+    const bool Enabled = !AccountPagesUnavailable();
+    const auto &Pages = AegisNT::PageDefinitions();
+    for (int Index = 0; Index < static_cast<int>(Pages.size()); ++Index) {
+      if (!PageRequiresAccountSession(Index))
+        continue;
+      NavigationWidget *Item =
+          NavigationPanelWidget->widget(QString::number(Index));
+      if (Item)
+        Item->setEnabled(Enabled);
+    }
+    if (!Enabled && PageRequiresAccountSession(PageStack->currentIndex()))
+      SelectPage(0, false, true);
   }
 
 protected:
@@ -3431,12 +3502,24 @@ private:
     return Content;
   }
 
-  void SelectPage(int Index, bool Animate = true) {
+  void SelectPage(int Index, bool Animate = true, bool Force = false) {
     // 切换侧边栏页面：懒加载目标页、同步标题/副标题并做运行时翻译，
     // 最后切换 QStackedWidget（首次加载不做动画，避免闪跳）。
     if (Index < 0 ||
         Index >= static_cast<int>(AegisNT::PageDefinitions().size()))
       return;
+    // 未通过账号验证时(登录对话框 Skip 进入，或登出后关闭登录框)，
+    // 账号页与聊天页依赖已验证会话，禁止进入；导航项同时置灰，
+    // 这里的判断也拦住程序化跳转。Force 仅供内部跳转(离开受限页面)使用。
+    if (!Force && PageRequiresAccountSession(Index) &&
+        AccountPagesUnavailable()) {
+      AppendConsoleOutput("[!] Account: sign in is required for this page.\n");
+      ShowWarningNotice(
+          this, "Account",
+          "Sign in is required to use the Account and Chat pages.");
+      NavigationPanelWidget->setCurrentItem(QString::number(PageStack->currentIndex()));
+      return;
+    }
     const bool WasLoaded = PageLoaded[Index];
     EnsurePageLoaded(Index);
     NavigationPanelWidget->setCurrentItem(QString::number(Index));
@@ -3614,13 +3697,81 @@ private:
 // 不再弹「already running」提示框。
 static const char *KSingleInstanceChannel = "AegisNT_SingleInstance_IPC";
 
+// 大小写不敏感地匹配完整开关名（不做前缀匹配）。
+// 必须在 QApplication 构造前调用：Qt 会移除自己认识的参数。
+static bool HasCommandLineSwitch(int Argc, char *Argv[], const char *Name) {
+  for (int Index = 1; Index < Argc; ++Index) {
+    if (Argv[Index] != nullptr && lstrcmpiA(Argv[Index], Name) == 0)
+      return true;
+  }
+  return false;
+}
+
+// 确保 Ring0Core 驱动服务已加载，供 --vmxon 使用。
+// 先直接试（驱动可能已由 UI 扫描路径加载）；失败才触发模块扫描并显式加载，
+// 避免无条件 ScanRuntimeModules 把 ./Drivers 下所有驱动都拉起来。
+static bool EnsureRing0CoreLoaded(QString *Error) {
+  VT_STATUS_OUTPUT Probe{};
+  if (EnableVt(&Probe))
+    return true;   // 设备已可打开，驱动已在运行
+
+  AegisNT::ModuleService &Service = AegisNT::GlobalModuleService();
+  Service.EnsureModulesScanned();
+  for (AegisNT::ModuleEntry &Driver : Service.GetDriverModules()) {
+    if (QString::fromStdString(Driver.Name).compare(
+            QLatin1String("Ring0Core"), Qt::CaseInsensitive) != 0)
+      continue;
+    if (Driver.Loaded)
+      return true;
+    if (!Service.SetDriverLoaded(Driver, true, Error))
+      return false;
+    return Driver.Loaded;
+  }
+  if (Error)
+    *Error = QStringLiteral("Ring0Core.sys not found in configured Drivers paths");
+  return false;
+}
+
+// ============================================================
+// 控制台前端（unity 包含）
+// ------------------------------------------------------------
+// 必须在匿名 namespace 关闭之后、main() 之前：这些实现要引用页面作用域
+// 的符号（MonitorSharedState、HotKeyFormat 等）。不能放进匿名 namespace
+// ——它们的 namespace AegisNT::Tui 会变成 {anon}::AegisNT::Tui，与
+// TuiCore.h 里的声明不一致。
+// ============================================================
+#include "Source/Tui/TuiWidgets.cpp"
+#include "Source/Tui/TuiAsync.cpp"
+#include "Source/Tui/TuiSync.cpp"
+#include "Source/Tui/TuiConsole.cpp"
+#include "Source/Tui/TuiSession.cpp"
+#include "Source/Tui/TuiPagesInfo.cpp"
+#include "Source/Tui/TuiPagesTask.cpp"
+#include "Source/Tui/TuiPagesStorage.cpp"
+#include "Source/Tui/TuiPagesKernel.cpp"
+#include "Source/Tui/TuiPagesModules.cpp"
+#include "Source/Tui/TuiPagesMisc.cpp"
+#include "Source/Tui/TuiCore.cpp"
+
 int main(int Argc, char *Argv[]) {
+  // 控制台模式：--console 时只跑控制台前端，完全不创建窗口。
+  const bool ConsoleOnly = HasCommandLineSwitch(Argc, Argv, "--console");
+  const bool ConsoleChild = HasCommandLineSwitch(Argc, Argv, "--console-child");
+
   // 单实例：已在运行则静默唤起它（含双击关联文件等场景），本进程直接退出。
   // 不再弹「already running」提示框。
-  {
+  if (!ConsoleChild) {
     QLocalSocket Probe;
     Probe.connectToServer(QLatin1String(KSingleInstanceChannel));
     if (Probe.waitForConnected(300)) {
+      if (ConsoleOnly) {
+        // 控制台模式无法与已运行实例共享状态：明确提示后退出。
+        fprintf(stderr,
+                "AegisNT is already running (single instance).\n"
+                "Open Settings > Console in the running window to show its "
+                "console.\n");
+        return 2;
+      }
       Probe.write("restore\n");
       Probe.flush();
       Probe.waitForBytesWritten(300);
@@ -3628,6 +3779,15 @@ int main(int Argc, char *Argv[]) {
       return 0;
     }
   }
+
+  if (ConsoleOnly)
+    return AegisNT::Tui::RunConsoleMode(Argc, Argv);
+
+  // GUI logs are captured through pipes. The interactive terminal owns its
+  // console in a child process; no hidden console or CRT rebinding is needed.
+
+  // 只有显式 --vmxon 才启用 VT-x/EPT；缺省保持驱动空闲，不执行 VMLAUNCH。
+  const bool VmRequested = HasCommandLineSwitch(Argc, Argv, "--vmxon");
 
   QGuiApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
   QApplication Application(Argc, Argv);
@@ -3666,6 +3826,30 @@ int main(int Argc, char *Argv[]) {
                    [] { CleanupManagedDriversOnExit(); });
 EnsureThemeConfiguration();
   ApplyConfiguredAppearance(nullptr);
+
+  if (VmRequested) {
+    QString LoadError;
+    if (!EnsureRing0CoreLoaded(&LoadError)) {
+      AppendConsoleOutput("[!] --vmxon: Ring0Core unavailable: " + LoadError +
+                          "\n");
+    } else {
+      VT_STATUS_OUTPUT VtStatus{};
+      if (EnableVt(&VtStatus)) {
+        AppendConsoleOutput(
+            QString("[*] --vmxon: virtualization enabled on %1/%2 CPUs "
+                    "(EPTP=0x%3).\n")
+                .arg(VtStatus.ActiveCpuCount)
+                .arg(VtStatus.CpuCount)
+                .arg(VtStatus.EptPointer, 0, 16));
+      } else {
+        AppendConsoleOutput(
+            QString("[!] --vmxon: VT/EPT enable failed (status 0x%1, "
+                    "ActiveCpuCount=%2).\n")
+                .arg(static_cast<uint>(VtStatus.LastStatus), 0, 16)
+                .arg(VtStatus.ActiveCpuCount));
+      }
+    }
+  }
 
   int Result = 0;
   {

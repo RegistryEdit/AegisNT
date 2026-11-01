@@ -405,6 +405,44 @@ typedef struct _HOOK_ENUM_OUTPUT {
   HOOK_RECORD Records[1];
 } HOOK_ENUM_OUTPUT, *PHOOK_ENUM_OUTPUT;
 
+// ===== Vt.h =====
+#define IOCTL_VT_QUERY_STATUS                                                  \
+  CTL_CODE(0x8000, 0x897, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VT_SELFTEST                                                      \
+  CTL_CODE(0x8000, 0x898, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VT_ENABLE                                                        \
+  CTL_CODE(0x8000, 0x899, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VT_DISABLE                                                       \
+  CTL_CODE(0x8000, 0x89A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define VT_PROTOCOL_VERSION 1u
+#define VT_MAX_CPUS 64
+#define VT_CPU_OFF 0u
+#define VT_CPU_ACTIVE 1u
+#define VT_CPU_FAILED 2u
+
+typedef struct _VT_STATUS_OUTPUT {
+  ULONG Size;
+  ULONG Version;
+  ULONG CpuCount;
+  ULONG ActiveCpuCount;
+  ULONG VmxSupported;
+  ULONG EptEnabled;
+  ULONG EptHookCount;
+  ULONG Reserved1;
+  ULONG64 EptPointer;
+  ULONG64 EptViolationCount;
+  ULONG64 EptFlipCount;
+  ULONG64 VmExitCount;
+  ULONG64 CpuidExitCount;
+  NTSTATUS LastStatus;
+  ULONG Reserved2;
+  ULONG CpuState[VT_MAX_CPUS];
+  NTSTATUS CpuStatus[VT_MAX_CPUS];
+} VT_STATUS_OUTPUT, *PVT_STATUS_OUTPUT;
+
+static_assert(sizeof(VT_STATUS_OUTPUT) == 592, "VT_STATUS_OUTPUT ABI mismatch");
+
 #define ADVANCED_KIND_PTE 1u
 #define ADVANCED_KIND_VAD 2u
 #define ADVANCED_KIND_THREAD_STACK 3u
@@ -3739,6 +3777,29 @@ inline bool OperateHook(HOOK_REQUEST Request, HOOK_RECORD *Result = nullptr) {
     *Result = Output;
   G_LastAegisCoreError = AegisCoreNtStatusToWin32(Output.Status);
   return Output.Status >= 0;
+}
+
+// ---- VT-x / EPT 状态 ----
+inline BOOLEAN QueryVtStatus(VT_STATUS_OUTPUT *Out) {
+  DWORD N = 0;
+  return SendIoctlWithOutput(IOCTL_VT_QUERY_STATUS, nullptr, 0, Out,
+                             sizeof(*Out), &N);
+}
+
+inline BOOLEAN RunVtSelfTest(VT_STATUS_OUTPUT *Out) {
+  DWORD N = 0;
+  return SendIoctlWithOutput(IOCTL_VT_SELFTEST, nullptr, 0, Out,
+                             sizeof(*Out), &N);
+}
+
+inline BOOLEAN EnableVt(VT_STATUS_OUTPUT *Out) {
+  DWORD N = 0;
+  return SendIoctlWithOutput(IOCTL_VT_ENABLE, nullptr, 0, Out, sizeof(*Out), &N);
+}
+
+inline BOOLEAN DisableVt(VT_STATUS_OUTPUT *Out) {
+  DWORD N = 0;
+  return SendIoctlWithOutput(IOCTL_VT_DISABLE, nullptr, 0, Out, sizeof(*Out), &N);
 }
 
 inline bool OperateHookById(DWORD Ioctl, ULONG Operation, ULONG HookId,

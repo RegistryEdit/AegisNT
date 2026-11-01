@@ -130,12 +130,11 @@ const auto UpdateStatusUI = [=](bool IsLoggedIn, const QString &Username,
   // 登录/登出会话逻辑已提取至 Source/Core/Auth/AuthHelpers.inc,由启动登录
   // 流程(LoginDialog)与 AccountSessionListeners 驱动页面状态刷新。
 
-  // 退出登录:清空会话后立即弹出 Login Dialog;用户关闭登录框则退出程序。
-
-const auto HandleLogoutClicked = [=]() {
+  // 退出登录:清空会话后立即弹出 Login Dialog(不再走静默自动登录,
+  // 否则保存的凭证会让这次登出毫无效果);用户关闭登录框则退出程序。
+  const auto HandleLogoutClicked = [=]() {
     HandleLogout();
-    UpdateStatusUI(false, "", 0);
-    if (!RunLoginFlow(Page)) {
+    if (!RunLoginFlow(Page, {}, /*AllowAutoLogin=*/false)) {
       QCoreApplication::quit();
     }
   };
@@ -143,26 +142,29 @@ const auto HandleLogoutClicked = [=]() {
   QObject::connect(LogoutButton, &QPushButton::clicked, Page,
                    HandleLogoutClicked);
 
+  // 会话状态刷新：状态标签、Logout 可用性与管理员面板都由当前会话决定。
+  // 页面是按需懒加载的，多数情况下创建时登录早已完成且不会再有会话通知，
+  // 因此初始化时也要主动执行一次，否则 Logout 会一直停在创建时的禁用态。
   const QPointer<QWidget> StatusPageGuard(Page);
   auto LastListenerUser = std::make_shared<QString>();
+  const auto RefreshSessionState = [=]() -> bool {
+    if (!StatusPageGuard)
+      return false;
+    UpdateStatusUI(Account.IsLoggedIn, Account.UserName, Account.UserType);
+    LogoutButton->setEnabled(Account.IsLoggedIn);
+    // 会话用户变化时(登录/重新登录)向服务器核对最新的用户类型与 Title;
+    // 以用户名去重,避免 RefreshUserType 内部再次通知造成循环刷新。
+    if (Account.IsLoggedIn && !Account.Token.isEmpty() &&
+        *LastListenerUser != Account.UserName) {
+      *LastListenerUser = Account.UserName;
+      RefreshUserType();
+    }
+    if (!Account.IsLoggedIn)
+      LastListenerUser->clear();
+    return true;
+  };
   AegisNT::ApplicationContext().AccountSessionListeners.push_back(
-      [=]() -> bool {
-        if (!StatusPageGuard)
-          return false;
-        UpdateStatusUI(Account.IsLoggedIn, Account.UserName, Account.UserType);
-        LogoutButton->setEnabled(Account.IsLoggedIn);
-        // 会话用户变化时(登录/重新登录)向服务器核对最新的用户类型与 Title;
-        // 以用户名去重,避免 RefreshUserType 内部再次通知造成循环刷新。
-
-if (Account.IsLoggedIn && !Account.Token.isEmpty() &&
-            *LastListenerUser != Account.UserName) {
-          *LastListenerUser = Account.UserName;
-          RefreshUserType();
-        }
-        if (!Account.IsLoggedIn)
-          LastListenerUser->clear();
-        return true;
-      });
+      RefreshSessionState);
 
   // ========== 注册区 ==========
   auto *RegisterLayout = new QVBoxLayout;
@@ -551,7 +553,7 @@ QString CurrentUser =
                    SendChangeUserTypeRequest);
 
   // ========== 初始化:会话由启动时的 Login Dialog / 自动登录建立 ==========
-  UpdateStatusUI(Account.IsLoggedIn, Account.UserName, Account.UserType);
+  RefreshSessionState();
   AdminPanel->setVisible(Account.IsLoggedIn && Account.UserType == 1);
 
   // 包装到滚动区域
